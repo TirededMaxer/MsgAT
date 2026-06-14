@@ -65,10 +65,19 @@ class NettyClient(
                     }
                 })
 
-            val future = bootstrap.connect(ip, port).sync()
-            channel = future.channel()
+            bootstrap.connect(ip, port).addListener { future ->
+                if (future.isSuccess) {
+                    android.util.Log.i("MsgAT_Netty", "Connected successfully to $ip:$port")
+                    channel = (future as io.netty.channel.ChannelFuture).channel()
+                } else {
+                    android.util.Log.e("MsgAT_Netty", "Connection failed to $ip:$port", future.cause())
+                    _connectionState.value = SyncState.DISCONNECTED
+                    workerGroup?.shutdownGracefully()
+                }
+            }
 
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.e("MsgAT_Netty", "Exception in connect()", e)
             _connectionState.value = SyncState.DISCONNECTED
             workerGroup?.shutdownGracefully()
         }

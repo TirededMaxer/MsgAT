@@ -4,21 +4,33 @@ import io.netty.buffer.ByteBuf
 import io.netty.channel.ChannelHandlerContext
 import io.netty.handler.codec.ByteToMessageCodec
 import org.msgat.model.GhostPacket
-import java.security.SecureRandom
+import java.util.concurrent.ThreadLocalRandom
 
 class GhostPacketCodec : ByteToMessageCodec<GhostPacket>() {
-    private val secureRandom = SecureRandom()
+    // Calculates the dynamic byte boundary size used for packet framing.
+    private fun getBoundarySize(actualSize: Int): Int {
+        val boundaries = intArrayOf(4096)
+        for (b in boundaries) {
+            if (actualSize <= b) return b
+        }
+        return actualSize
+    }
 
+    // Serializes a GhostPacket into a structured byte buffer for network transmission.
     override fun encode(ctx: ChannelHandlerContext, msg: GhostPacket, out: ByteBuf) {
-        val startIdx = out.writerIndex()
+        val payloadLen = msg.payloadLen
+        val actualSize = 4 + 1 + 64 + 16 + 4 + payloadLen + 16
+        val paddedSize = getBoundarySize(actualSize)
+
+        out.writeInt(paddedSize)
 
         out.writeByte(msg.type.toInt())
 
         val mailboxBytes = msg.targetMailboxId?.toByteArray(Charsets.UTF_8) ?: ByteArray(64)
-        out.writeBytes(mailboxBytes.copyOf(64)) // 确保严格 64 字节
+        out.writeBytes(mailboxBytes.copyOf(64))
 
         out.writeBytes(msg.nonceOrIv ?: ByteArray(16))
-        out.writeInt(msg.payloadLen)
+        out.writeInt(payloadLen)
 
         if (msg.encryptedData != null) {
             out.writeBytes(msg.encryptedData)
@@ -26,21 +38,31 @@ class GhostPacketCodec : ByteToMessageCodec<GhostPacket>() {
 
         if (msg.authTag != null) {
             out.writeBytes(msg.authTag)
+        } else {
+            out.writeZero(16)
         }
 
-        val writtenSoFar = out.writerIndex() - startIdx
-        val paddingSize = GhostPacket.PACKET_SIZE - writtenSoFar
+        val paddingSize = paddedSize - actualSize
 
         if (paddingSize > 0) {
             val padding = ByteArray(paddingSize)
-            secureRandom.nextBytes(padding)
+            ThreadLocalRandom.current().nextBytes(padding)
             out.writeBytes(padding)
+        } else if (paddingSize < 0) {
+            ctx.close()
         }
     }
 
+    // Parses an incoming byte stream to reconstruct a valid GhostPacket object.
     override fun decode(ctx: ChannelHandlerContext, `in`: ByteBuf, out: MutableList<Any>) {
-        if (`in`.readableBytes() < GhostPacket.PACKET_SIZE) {
-            return // 等待 Netty 攒够 500KB
+        `in`.markReaderIndex()
+        if (`in`.readableBytes() < 4) {
+            return
+        }
+        val totalLen = `in`.readInt()
+        if (`in`.readableBytes() < totalLen - 4) {
+            `in`.resetReaderIndex()
+            return
         }
 
         val type = `in`.readByte()
@@ -53,8 +75,8 @@ class GhostPacketCodec : ByteToMessageCodec<GhostPacket>() {
         `in`.readBytes(nonceOrIv)
 
         val payloadLen = `in`.readInt()
-        if (payloadLen > GhostPacket.PACKET_SIZE - 100 || payloadLen < 0) {
-            ctx.close() // 抛弃畸形包
+        if (payloadLen > totalLen - 105 || payloadLen < 0) {
+            ctx.close()
             return
         }
 
@@ -64,10 +86,10 @@ class GhostPacketCodec : ByteToMessageCodec<GhostPacket>() {
         val authTag = ByteArray(16)
         `in`.readBytes(authTag)
 
-        // 丢弃剩余的噪音
-        val remaining = GhostPacket.PACKET_SIZE - (1 + 64 + 16 + 4 + payloadLen + 16)
-        if (remaining > 0) {
-            `in`.skipBytes(remaining)
+        val actualSize = 4 + 1 + 64 + 16 + 4 + payloadLen + 16
+        val paddingSize = totalLen - actualSize
+        if (paddingSize > 0) {
+            `in`.skipBytes(paddingSize)
         }
 
         out.add(GhostPacket(type, targetMailboxId, nonceOrIv, encryptedData, authTag))

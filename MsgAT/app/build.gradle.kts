@@ -82,13 +82,24 @@ dependencies {
     // Gson 用于 JSON 序列化
     implementation("com.google.code.gson:gson:2.10.1")
     // AndroidX 安全增强存储
+    implementation("androidx.compose.material:material-icons-extended:1.5.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     // Room 数据库
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
+    implementation("androidx.room:room-paging:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
     // SQLCipher 数据库加密引擎
     implementation("net.zetetic:android-database-sqlcipher:4.5.4")
     // 生命周期监控 (用于前后台切换)
     implementation("androidx.lifecycle:lifecycle-process:2.7.0")
+    // 图片加载
+    implementation("io.coil-kt:coil-compose:2.6.0")
+    // 图片裁剪
+    implementation("com.github.yalantis:ucrop:2.2.8")
+    // WebRTC Engine for Voice Calls
+    implementation("io.github.webrtc-sdk:android:144.7559.09")
+    // Paging 3
+    implementation("androidx.paging:paging-runtime-ktx:3.3.0")
+    implementation("androidx.paging:paging-compose:3.3.0")
 }

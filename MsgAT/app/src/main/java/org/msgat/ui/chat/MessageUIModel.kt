@@ -5,5 +5,6 @@ data class MessageUIModel(
     val isMine: Boolean,
     val content: String,
     val ext: String,
-    val timestamp: Long
+    val timestamp: Long,
+    val senderAvatar: String = ""
 )

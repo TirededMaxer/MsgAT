@@ -32,6 +32,13 @@ class SecurePrefs(context: Context) {
             return sha256(pubBytes)
         }
 
+    val myX25519PublicKeyBase64: String
+        get() {
+            val priv = getX25519PrivateKey()
+            val pubBytes = priv.generatePublicKey().encoded
+            return Base64.encodeToString(pubBytes, Base64.NO_WRAP)
+        }
+
     var serverIp: String?
         get() = sharedPreferences.getString("server_ip", null)
         set(value) = sharedPreferences.edit { putString("server_ip", value) }
@@ -40,41 +47,54 @@ class SecurePrefs(context: Context) {
         get() = sharedPreferences.getInt("server_port", 0)
         set(value) = sharedPreferences.edit { putInt("server_port", value) }
 
+    var myNickname: String?
+        get() = sharedPreferences.getString("my_nickname", null)
+        set(value) = sharedPreferences.edit { putString("my_nickname", value) }
+
+    var myAvatarPath: String?
+        get() = sharedPreferences.getString("my_avatar_path", null)
+        set(value) = sharedPreferences.edit { putString("my_avatar_path", value) }
+
+    // Checks if the required server settings and local identity have been established.
     fun isConfigured(): Boolean = myUuid.isNotEmpty() && !serverIp.isNullOrEmpty() && serverPort > 0
 
-    fun getOrCreatePrivateKey(): Ed25519PrivateKeyParameters {
+    private fun getSeed(): ByteArray {
         val savedSeedBase64 = sharedPreferences.getString(privateKey, null)
         return if (savedSeedBase64 != null) {
-            // 从存储中恢复
-            val seed = Base64.decode(savedSeedBase64, Base64.NO_WRAP)
-            Ed25519PrivateKeyParameters(seed, 0)
+            Base64.decode(savedSeedBase64, Base64.NO_WRAP)
         } else {
-            // 首次启动：生成 32 字节高强度随机种子
             val secureRandom = java.security.SecureRandom()
             val seed = ByteArray(32)
             secureRandom.nextBytes(seed)
-
-            // 立即存入 EncryptedSharedPreferences
             val seedBase64 = Base64.encodeToString(seed, Base64.NO_WRAP)
             sharedPreferences.edit { putString(privateKey, seedBase64) }
-
-            Ed25519PrivateKeyParameters(seed, 0)
+            seed
         }
     }
 
+    // Retrieves the existing Ed25519 private key from the Android Keystore or generates a new one.
+    fun getOrCreatePrivateKey(): Ed25519PrivateKeyParameters {
+        return Ed25519PrivateKeyParameters(getSeed(), 0)
+    }
+
+    fun getX25519PrivateKey(): org.bouncycastle.crypto.params.X25519PrivateKeyParameters {
+        return org.bouncycastle.crypto.params.X25519PrivateKeyParameters(getSeed(), 0)
+    }
+
+    // Irreversibly deletes the current identity and generates a fresh cryptographic keypair.
     fun burnIdentityAndGenerateNew() {
-        // 1. 生成全新的 32 字节高强度随机种子
+
         val secureRandom = java.security.SecureRandom()
         val newSeed = ByteArray(32)
         secureRandom.nextBytes(newSeed)
 
-        // 2. 覆盖写入 EncryptedSharedPreferences。
         val newSeedBase64 = Base64.encodeToString(newSeed, Base64.NO_WRAP)
         sharedPreferences.edit {
             putString(privateKey, newSeedBase64)
         }
     }
 
+    // Computes the SHA-256 hash of the provided byte array.
     private fun sha256(bytes: ByteArray): String {
         val digest = MessageDigest.getInstance("SHA-256")
         val hash = digest.digest(bytes)

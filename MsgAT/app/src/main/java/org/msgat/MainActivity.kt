@@ -11,36 +11,66 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import org.msgat.app.ConnectionManager
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.PowerManager
+import android.provider.Settings
 import org.msgat.core.network.NettyClient
 import org.msgat.core.crypto.securestorage.SecurePrefs
-import org.msgat.data.db.AppDatabase // 你的 Room Database 类
+import org.msgat.data.db.AppDatabase 
 import org.msgat.ui.chat.ChatScreen
 import org.msgat.ui.chat.ChatViewModel
 import org.msgat.ui.sessionlist.SessionListScreen
 import org.msgat.ui.sessionlist.SessionListViewModel
 import org.msgat.ui.theme.MsgAtTheme
+import org.msgat.ui.call.CallOverlay
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Box
+import androidx.paging.compose.collectAsLazyPagingItems
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var securePrefs: SecurePrefs
-
     private lateinit var db: AppDatabase
-
     private lateinit var nettyClient: NettyClient
 
+    // Initializes the main activity, sets up navigation routing, and applies the Compose theme.
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
 
-        securePrefs = SecurePrefs(applicationContext)
-        // 注意：这里的 AppDatabase 需要你利用 Room.databaseBuilder 构建，并配置 SQLCipher
-        // db = AppDatabase.getDatabase(applicationContext, getDbPassword())
-        db = AppDatabase.getInstance(applicationContext)
+        val app = MsgATApp.instance
+        securePrefs = app.securePrefs
+        db = app.db
+        nettyClient = app.nettyClient
 
-        nettyClient = NettyClient(securePrefs, db.msgDao())
-        ProcessLifecycleOwner.get().lifecycle.addObserver(ConnectionManager(nettyClient))
+        val permissionsToRequest = mutableListOf<String>()
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+        permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
+        
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && permissionsToRequest.isNotEmpty()) {
+            requestPermissions(permissionsToRequest.toTypedArray(), 1001)
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
+                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                }
+                startActivity(intent)
+            }
+        }
+
+        val serviceIntent = android.content.Intent(this, org.msgat.core.network.MsgATService::class.java)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            startForegroundService(serviceIntent)
+        } else {
+            startService(serviceIntent)
+        }
 
         val viewModelFactory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -56,62 +86,82 @@ class MainActivity : ComponentActivity() {
             MsgAtTheme {
                 val navController = rememberNavController()
 
-                NavHost(navController = navController, startDestination = "session_list") {
+                Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
+                    NavHost(navController = navController, startDestination = "session_list") {
 
-                    composable("session_list") {
-                        // 使用我们自定义的工厂获取 ViewModel
-                        val viewModel: SessionListViewModel = viewModel(factory = viewModelFactory)
+                        composable("session_list") {
 
-                        // 收集状态流
-                        val syncState = viewModel.connectionState.collectAsState().value
-                        val conversations = viewModel.conversations.collectAsState().value
+                            val viewModel: SessionListViewModel = viewModel(factory = viewModelFactory)
 
-                        SessionListScreen(
-                            syncState = syncState,
-                            conversations = conversations,
-                            initialIp = viewModel.currentIp,
-                            initialPort = viewModel.currentPort,
-                            initialUuid = viewModel.currentUuid,
-                            onNavigateToChat = { uuid -> navController.navigate("chat/$uuid") },
-                            onAddConversation = viewModel::addConversation,
-                            onSaveSettings = viewModel::saveSettings,
-                            onDeleteConversation = viewModel::deleteConversation,
-                            onClearMessages = viewModel::clearMessages,
-                            onResetIdentity = viewModel::resetIdentity,
-                            onUpdateAlias = viewModel::updateAlias
-                        )
-                    }
-
-                    composable("chat/{uuid}") { backStackEntry ->
-                        val targetUuid = backStackEntry.arguments?.getString("uuid") ?: ""
-
-                        // 为每个聊天界面动态创建一个 ChatViewModel
-                        val chatViewModelFactory = object : ViewModelProvider.Factory {
-                            override fun <T : ViewModel> create(modelClass: Class<T>): T {
-                                @Suppress("UNCHECKED_CAST")
-                                return ChatViewModel(targetUuid, db.msgDao(), nettyClient, securePrefs) as T
-                            }
+                            val syncState = viewModel.connectionState.collectAsState().value
+                            val conversations = viewModel.conversations.collectAsState().value
+                            val friendRequests = viewModel.friendRequests.collectAsState().value
+                            SessionListScreen(
+                                syncState = syncState,
+                                conversations = conversations,
+                                friendRequests = friendRequests,
+                                initialIp = viewModel.currentIp,
+                                initialPort = viewModel.currentPort,
+                                initialUuid = viewModel.currentUuid,
+                                initialAvatarPath = viewModel.currentAvatarPath.collectAsState().value,
+                                initialNickname = viewModel.currentNickname.collectAsState().value,
+                                isIdentityMissing = viewModel.isIdentityMissing,
+                                onNavigateToChat = { uuid -> navController.navigate("chat/$uuid") },
+                                onAddConversation = viewModel::addConversation,
+                                onSaveSettings = viewModel::saveSettings,
+                                onDeleteConversation = viewModel::deleteConversation,
+                                onClearMessages = viewModel::clearMessages,
+                                onResetIdentity = { 
+                                    viewModel.resetIdentity(onFail = { 
+                                        android.widget.Toast.makeText(this@MainActivity, "Must be online to reset", android.widget.Toast.LENGTH_SHORT).show() 
+                                    }) 
+                                },
+                                onSaveIdentity = viewModel::saveIdentity,
+                                onAcceptFriendRequest = viewModel::acceptFriendRequest,
+                                onDeclineFriendRequest = viewModel::declineFriendRequest
+                            )
                         }
-                        val chatViewModel: ChatViewModel = viewModel(factory = chatViewModelFactory)
 
-                        val syncState = chatViewModel.syncState.collectAsState().value
-                        val messages = chatViewModel.messages.collectAsState().value
-                        val alias = chatViewModel.alias.collectAsState().value
-                        val context = androidx.compose.ui.platform.LocalContext.current
+                        composable("chat/{uuid}") { backStackEntry ->
+                            val targetUuid = backStackEntry.arguments?.getString("uuid") ?: ""
 
-                        ChatScreen(
-                            alias = alias,
-                            syncState = syncState,
-                            messages = messages,
-                            onBack = { navController.popBackStack() },
-                            onSendMessage = { text, onFail ->
-                                chatViewModel.sendMessage(text, onFail)
-                            },
-                            onSelectMedia = { uri, onFail ->
-                                chatViewModel.sendMedia(context, uri, onFail)
+                            val chatViewModelFactory = object : ViewModelProvider.Factory {
+                                override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                                    @Suppress("UNCHECKED_CAST")
+                                    return ChatViewModel(targetUuid, db.msgDao(), nettyClient, securePrefs) as T
+                                }
                             }
-                        )
+                            val chatViewModel: ChatViewModel = viewModel(factory = chatViewModelFactory)
+
+                            val syncState = chatViewModel.syncState.collectAsState().value
+                            val messages = chatViewModel.messagesPagingData.collectAsLazyPagingItems()
+                            val alias = chatViewModel.alias.collectAsState().value
+                            val context = androidx.compose.ui.platform.LocalContext.current
+
+                            ChatScreen(
+                                alias = alias,
+                                syncState = syncState,
+                                messages = messages,
+                                onBack = { navController.popBackStack() },
+                                onSendMessage = { text, onFail ->
+                                    chatViewModel.sendMessage(text, onFail)
+                                },
+                                onSelectMedia = { uri, onFail ->
+                                    chatViewModel.sendMedia(context, uri, onFail)
+                                },
+                                onStartCall = {
+                                    if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                        org.msgat.core.call.CallSignalingHandler.getInstance()
+                                        org.msgat.core.call.CallManager.getInstance().startOutgoingCall(targetUuid)
+                                    } else {
+                                        android.widget.Toast.makeText(this@MainActivity, "需要麦克风权限才能进行语音通话", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            )
+                        }
                     }
+                    
+                    CallOverlay()
                 }
             }
         }

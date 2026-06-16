@@ -14,6 +14,8 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import androidx.paging.cachedIn
+import androidx.paging.map
 import org.msgat.core.crypto.CryptoManager
 import org.msgat.core.network.NettyClient
 import org.msgat.core.crypto.securestorage.SecurePrefs
@@ -33,31 +35,50 @@ class ChatViewModel(
     private val securePrefs: SecurePrefs
 ) : ViewModel() {
 
-    // 监听全局网络同步状态
     val syncState = nettyClient.connectionState
 
-    // 监听当前会话的聊天记录
-    val messages: StateFlow<List<MessageUIModel>> = msgDao.getMessages(targetUuid)
-        .map { list ->
-            list.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp) }
-        }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    val messagesPagingData: kotlinx.coroutines.flow.Flow<androidx.paging.PagingData<MessageUIModel>> = 
+        androidx.paging.Pager(
+            config = androidx.paging.PagingConfig(pageSize = 50, enablePlaceholders = false),
+            pagingSourceFactory = { msgDao.getPagingMessages(targetUuid) }
+        ).flow.map { pagingData ->
+            val myAvatar = securePrefs.myAvatarPath ?: ""
+            val targetAvatar = msgDao.getConversationByUuid(targetUuid)?.avatarPath ?: ""
+            pagingData.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp, if (it.isMine) myAvatar else targetAvatar) }
+        }.cachedIn(viewModelScope)
 
-    // 发送消息的终极战术逻辑
+    private val _alias = MutableStateFlow(targetUuid)
+    val alias: StateFlow<String> = _alias.asStateFlow()
+
+    init {
+        viewModelScope.launch {
+            val convo = msgDao.getConversationByUuid(targetUuid)
+            if (convo != null) {
+                _alias.value = convo.alias
+            }
+        }
+    }
+
+    // Packages and encrypts a text message payload, then sends it via the network client.
     fun sendMessage(text: String, onFail: () -> Unit) {
         val myUuid = securePrefs.myUuid
         if (text.isBlank()) return
 
         viewModelScope.launch(Dispatchers.IO) {
+            val convo = msgDao.getConversationByUuid(targetUuid)
+            val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
+            if (peerPublicKeyBase64.isEmpty()) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
+                return@launch
+            }
+
             try {
-                // 1. 生成唯一消息 ID
+
                 val msgId = UUID.randomUUID().toString()
 
-                // 2. 本地落库 (呈现给 UI)
                 val chatMsg = ChatMessage(msgId, targetUuid, true, text, "txt", System.currentTimeMillis())
                 msgDao.insertMessage(chatMsg)
 
-                // 3. 构造业务负载 JSON
                 val payload = MessagePayload(
                     senderUuid = myUuid,
                     fileId = msgId,
@@ -69,17 +90,28 @@ class ChatViewModel(
                 )
                 val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
 
-                // 4. 生成 16 字节的安全随机 IV
                 val iv = ByteArray(16)
                 SecureRandom().nextBytes(iv)
 
-                // 5. 端到端 AES-GCM 加密 (使用你们俩的 UUID 计算出的共享密钥)
-                val (cipherText, authTag) = CryptoManager.encryptPayload(myUuid, targetUuid, iv, jsonBytes)
+                val cipherText: ByteArray
+                val authTag: ByteArray
+                
+                val convo = msgDao.getConversationByUuid(targetUuid)
+                val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
+                
+                if (peerPublicKeyBase64.isNotEmpty()) {
+                    val myPrivateKey = securePrefs.getX25519PrivateKey()
+                    val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                    cipherText = pair.first
+                    authTag = pair.second
+                } else {
+                    val pair = CryptoManager.encryptPayloadFallback(myUuid, targetUuid, iv, jsonBytes)
+                    cipherText = pair.first
+                    authTag = pair.second
+                }
 
-                // 6. 计算目标的盲路由地址 (Balke2b Hash)
                 val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
 
-                // 7. 组装成幽灵数据包！
                 val packet = GhostPacket(
                     type = GhostPacket.TYPE_MESSAGE,
                     targetMailboxId = targetMailboxId,
@@ -88,10 +120,9 @@ class ChatViewModel(
                     authTag = authTag
                 )
 
-                // 8. 压入 Netty 流水线 (底层的 GhostPacketCodec 会自动用随机数把它塞满 500KB)
                 val success = nettyClient.sendPacket(packet)
                 if (!success) {
-                    // 发送失败：删掉数据库里的泡泡，并在主线程通知 UI
+
                     msgDao.deleteMessageById(msgId)
                     kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
                 }
@@ -102,40 +133,42 @@ class ChatViewModel(
         }
     }
 
-    private val _alias = MutableStateFlow(targetUuid)
-    val alias: StateFlow<String> = _alias.asStateFlow()
-
-    init {
-        // 初始化时去数据库查真实的备注名
-        viewModelScope.launch(Dispatchers.IO) {
-            val convo = msgDao.getConversationByUuid(targetUuid)
-            if (convo != null) {
-                _alias.value = convo.alias
-            }
-        }
-    }
-
+    // Processes, encrypts, and transmits media files (such as images) as base64 payloads.
     fun sendMedia(context: Context, uri: Uri, onFail: () -> Unit) {
         val myUuid = securePrefs.myUuid
 
         viewModelScope.launch(Dispatchers.IO) {
+            val convo = msgDao.getConversationByUuid(targetUuid)
+            val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
+            if (peerPublicKeyBase64.isEmpty()) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
+                return@launch
+            }
+
             val msgId = UUID.randomUUID().toString()
 
             try {
-                // 1. 自动识别文件真实后缀名 (图片或视频)
+
+                val fileSize = org.msgat.utils.MediaHelper.getFileSize(context, uri)
+                if (fileSize > 100L * 1024 * 1024) {
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { 
+                        android.widget.Toast.makeText(context, "文件大小不能超过100MB", android.widget.Toast.LENGTH_SHORT).show()
+                        onFail() 
+                    }
+                    return@launch
+                }
+
                 val ext = getExtensionFromUri(context, uri)
-                // 2. 将大文件切成多个 250KB 的碎片
+
                 val chunks = uriToBase64Chunks(context, uri)
 
                 if (chunks.isEmpty()) return@launch
                 val total = chunks.size
 
-                // 3. 将完整数据拼接落库，用于本地 UI 立即显示
                 val localContent = chunks.joinToString("")
                 val chatMsg = ChatMessage(msgId, targetUuid, true, localContent, ext, System.currentTimeMillis())
                 msgDao.insertMessage(chatMsg)
 
-                // 4. 循环发送所有分片
                 chunks.forEachIndexed { index, chunkData ->
                     val payload = MessagePayload(
                         senderUuid = myUuid,
@@ -150,7 +183,24 @@ class ChatViewModel(
 
                     val iv = ByteArray(16)
                     SecureRandom().nextBytes(iv)
-                    val (cipherText, authTag) = CryptoManager.encryptPayload(myUuid, targetUuid, iv, jsonBytes)
+                    
+                    val convo = msgDao.getConversationByUuid(targetUuid)
+                    val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
+                    
+                    val cipherText: ByteArray
+                    val authTag: ByteArray
+                    
+                    if (peerPublicKeyBase64.isNotEmpty()) {
+                        val myPrivateKey = securePrefs.getX25519PrivateKey()
+                        val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                        cipherText = pair.first
+                        authTag = pair.second
+                    } else {
+                        val pair = CryptoManager.encryptPayloadFallback(myUuid, targetUuid, iv, jsonBytes)
+                        cipherText = pair.first
+                        authTag = pair.second
+                    }
+                    
                     val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
 
                     val packet =
@@ -161,7 +211,6 @@ class ChatViewModel(
                         throw Exception("Chunk $index 发送失败")
                     }
 
-                    // 稍微停顿，防止超大文件瞬间把 Netty 流水线和手机内存撑爆
                     kotlinx.coroutines.delay(50)
                 }
             } catch (e: Exception) {

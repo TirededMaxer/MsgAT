@@ -9,9 +9,13 @@ import io.netty.channel.socket.SocketChannel
 import io.netty.channel.socket.nio.NioSocketChannel
 import io.netty.handler.ssl.SslContextBuilder
 import io.netty.handler.ssl.util.InsecureTrustManagerFactory
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.msgat.core.crypto.securestorage.SecurePrefs
 import org.msgat.data.db.MsgDao
 import org.msgat.model.GhostPacket
@@ -21,17 +25,23 @@ class NettyClient(
     private val prefs: SecurePrefs,
     private val msgDao: MsgDao
 ) {
-    // 暴露给 ViewModel 和 UI 层监听的状态流
+    private var currentChannel: Channel? = null
+
     private val _connectionState = MutableStateFlow(SyncState.DISCONNECTED)
     val connectionState: StateFlow<SyncState> = _connectionState.asStateFlow()
 
     private var workerGroup: NioEventLoopGroup? = null
     private var channel: Channel? = null
 
+    private var isManualDisconnect = false
+
+    // Checks whether the client possesses the necessary configuration to initiate a connection.
     fun isConfigured(): Boolean = prefs.isConfigured()
 
+    // Bootstraps and establishes an asynchronous Netty TCP connection to the relay server.
     fun connect() {
         if (!isConfigured() || channel?.isActive == true) return
+        isManualDisconnect = false
 
         val ip = prefs.serverIp!!
         val port = prefs.serverPort
@@ -41,7 +51,7 @@ class NettyClient(
         val bootstrap = Bootstrap()
 
         try {
-            // 客户端必须盲信任所有证书
+
             val sslCtx = SslContextBuilder.forClient()
                 .trustManager(InsecureTrustManagerFactory.INSTANCE)
                 .build()
@@ -50,18 +60,20 @@ class NettyClient(
                 .channel(NioSocketChannel::class.java)
                 .option(ChannelOption.SO_KEEPALIVE, true)
                 .handler(object : ChannelInitializer<SocketChannel>() {
+                    // Configures the Netty channel pipeline with encoders, decoders, and handlers.
                     override fun initChannel(ch: SocketChannel) {
                         val p = ch.pipeline()
 
-                        // 1. TLS 解密层
                         p.addLast(sslCtx.newHandler(ch.alloc(), ip, port))
-                        // 2. 500KB 破甲层
+
                         p.addLast(GhostPacketCodec())
-                        // 3. 业务处理层
-                        p.addLast(GhostClientHandler(myUuid, prefs.getOrCreatePrivateKey(), msgDao) { newState ->
-                            // 收到状态更新，推送到 Flow 让 UI 刷新
-                            _connectionState.value = newState
-                        })
+
+                        p.addLast(GhostClientHandler(prefs, msgDao,
+                            onStateChange = { newState ->
+
+                                _connectionState.value = newState
+                            }
+                        ))
                     }
                 })
 
@@ -69,10 +81,26 @@ class NettyClient(
                 if (future.isSuccess) {
                     android.util.Log.i("MsgAT_Netty", "Connected successfully to $ip:$port")
                     channel = (future as io.netty.channel.ChannelFuture).channel()
+                    channel?.closeFuture()?.addListener {
+                        if (!isManualDisconnect) {
+                            android.util.Log.i("MsgAT_Netty", "Connection lost, attempting reconnect in 3s")
+                            _connectionState.value = SyncState.DISCONNECTED
+                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                                kotlinx.coroutines.delay(3000)
+                                connect()
+                            }
+                        }
+                    }
                 } else {
                     android.util.Log.e("MsgAT_Netty", "Connection failed to $ip:$port", future.cause())
                     _connectionState.value = SyncState.DISCONNECTED
                     workerGroup?.shutdownGracefully()
+                    if (!isManualDisconnect) {
+                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+                            kotlinx.coroutines.delay(5000)
+                            connect()
+                        }
+                    }
                 }
             }
 
@@ -83,12 +111,15 @@ class NettyClient(
         }
     }
 
+    // Gracefully closes the active Netty channel and shuts down the event loop group.
     fun disconnect() {
+        isManualDisconnect = true
         channel?.close()
         workerGroup?.shutdownGracefully()
         _connectionState.value = SyncState.DISCONNECTED
     }
 
+    // Asynchronously flushes a GhostPacket through the pipeline to the server.
     fun sendPacket(packet: GhostPacket): Boolean {
         return if (channel?.isActive == true) {
             channel?.writeAndFlush(packet)

@@ -8,20 +8,16 @@ import org.msgat.console.routing.BlindRoutingTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeUnit;
-
-/**
- * 幽灵中转器：负责消息的延迟投递、暂存和阅后即焚机制
- */
 public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
     private static final Logger log = LoggerFactory.getLogger(RelayHandler.class);
     private final BlindRoutingTable routingTable;
 
+    // Constructor to initialize the RelayHandler with a routing table instance.
     public RelayHandler(BlindRoutingTable routingTable) {
         this.routingTable = routingTable;
     }
 
+    // Handles incoming GhostPackets and routes them to appropriate handler methods based on packet type.
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, GhostPacket packet) {
         switch (packet.getType()) {
@@ -34,63 +30,158 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
             case GhostPacket.TYPE_ACK:
                 handleAck(packet);
                 break;
+            case GhostPacket.TYPE_SEARCH_USER:
+                handleSearchUser(ctx, packet);
+                break;
+            case GhostPacket.TYPE_UPDATE_PROFILE:
+                handleUpdateProfile(ctx, packet);
+                break;
+            case GhostPacket.TYPE_GET_PROFILE:
+                handleGetProfile(ctx, packet);
+                break;
+            case GhostPacket.TYPE_FRIEND_ACCEPTED:
+            case GhostPacket.TYPE_FRIEND_DELETED:
+            case GhostPacket.TYPE_REQUEST_REVOKED:
+            case GhostPacket.TYPE_ACCOUNT_RESET:
+                deliverOrStore(packet.getTargetMailboxId(), packet);
+                break;
+            case GhostPacket.TYPE_CALL_OFFER:
+            case GhostPacket.TYPE_CALL_ANSWER:
+            case GhostPacket.TYPE_CALL_ICE:
+            case GhostPacket.TYPE_CALL_REJECT:
+            case GhostPacket.TYPE_CALL_END:
+            case GhostPacket.TYPE_CALL_BUSY:
+                deliverOnly(packet.getTargetMailboxId(), packet);
+                break;
+            case GhostPacket.TYPE_DELETE_ACCOUNT:
+                handleDeleteAccount(ctx, packet);
+                break;
             default:
-                log.debug("[RELAY] 忽略未知的业务包类型: {}", packet.getType());
+                log.debug("[RELAY] Ignored unknown packet type: {}", packet.getType());
                 break;
         }
     }
 
-    /**
-     * 处理真正的加密聊天消息
-     */
-    private void handleIncomingMessage(ChannelHandlerContext ctx, GhostPacket packet) {
-        String targetMailbox = packet.getTargetMailboxId();
-        Channel targetChannel = routingTable.getChannel(targetMailbox);
+    // Handles channel deactivation event.
+    @Override
+    public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        super.channelInactive(ctx);
+    }
 
-        // 1. 生成 1000ms ~ 3000ms 的随机延迟
-        int delayMs = ThreadLocalRandom.current().nextInt(1000, 3001);
-
-        if (targetChannel != null && targetChannel.isActive()) {
-            // [目标在线] -> 执行延迟投递
-            log.debug("[RELAY] 目标在线，生成随机延迟 {} ms 后投递", delayMs);
-
-            // 使用 Netty 的 EventLoop 定时器，绝对不会阻塞线程
-            ctx.executor().schedule(() -> {
-                targetChannel.writeAndFlush(packet).addListener(future -> {
-                    if (future.isSuccess()) {
-                        log.debug("[RELAY] 延迟投递成功");
-                        // 注意：这里投递成功不代表对方已读，真正的抹除在收到 ACK 后进行
-                    }
-                });
-            }, delayMs, TimeUnit.MILLISECONDS);
-
+    @Override
+    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) {
+        if (cause instanceof java.io.IOException) {
+            log.debug("[RELAY] Client network dropped: {}", cause.getMessage());
         } else {
-            // [目标离线] -> 暂存到纯内存中
-            log.debug("[RELAY] 目标离线，消息已进入内存潜伏池");
-            routingTable.storeOfflineMessage(targetMailbox, packet);
+            log.error("[RELAY] Exception caught in pipeline", cause);
+        }
+        ctx.close();
+    }
+
+    // Handles search user request by verifying target existence before delivery.
+    private void handleSearchUser(ChannelHandlerContext ctx, GhostPacket packet) {
+        String targetMailbox = packet.getTargetMailboxId();
+        if (!org.msgat.console.db.DatabaseManager.doesMailboxExist(targetMailbox)) {
+            log.warn("[RELAY] Intercepted invalid target mailbox: {}", targetMailbox);
+            return;
+        }
+        deliverOrStore(targetMailbox, packet);
+    }
+
+    // Handles profile update requests by saving user details to the database.
+    private void handleUpdateProfile(ChannelHandlerContext ctx, GhostPacket packet) {
+        try {
+            String json = new String(packet.getEncryptedData(), java.nio.charset.StandardCharsets.UTF_8);
+            com.google.gson.JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            String uuid = obj.get("uuid").getAsString();
+            String mailboxId = CryptoUtils.calculateMailboxId(uuid);
+            String nickname = obj.get("nickname").getAsString();
+            String avatarPath = obj.has("avatarPath") ? obj.get("avatarPath").getAsString() : "";
+            String avatarData = obj.has("avatarData") ? obj.get("avatarData").getAsString() : "";
+            
+            org.msgat.console.db.DatabaseManager.saveUser(uuid, mailboxId, nickname, avatarPath, avatarData);
+        } catch (Exception e) {
+            log.error("[PROFILE] Update profile parse failed", e);
         }
     }
 
-    /**
-     * 处理噪音/心跳包
-     */
-    private void handleHeartbeat(ChannelHandlerContext ctx, GhostPacket packet) {
-        // 心跳包同样进行 1~3 秒的随机延迟反射，彻底打乱流量特征
-        int delayMs = ThreadLocalRandom.current().nextInt(1000, 3001);
-        ctx.executor().schedule(() -> {
-            ctx.writeAndFlush(packet); // 原样把 500KB 的废包弹回去
-        }, delayMs, TimeUnit.MILLISECONDS);
+    // Retrieves user profile from the database and sends it back to the client.
+    private void handleGetProfile(ChannelHandlerContext ctx, GhostPacket packet) {
+        try {
+            String json = new String(packet.getEncryptedData(), java.nio.charset.StandardCharsets.UTF_8);
+            com.google.gson.JsonObject obj = com.google.gson.JsonParser.parseString(json).getAsJsonObject();
+            String targetUuid = obj.get("targetUuid").getAsString();
+            String senderMailbox = ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).get();
+            
+            org.msgat.console.db.DatabaseManager.UserProfile profile = org.msgat.console.db.DatabaseManager.getUser(targetUuid);
+            if (profile != null) {
+                com.google.gson.JsonObject respJson = new com.google.gson.JsonObject();
+                respJson.addProperty("uuid", profile.uuid);
+                respJson.addProperty("nickname", profile.nickname);
+                respJson.addProperty("avatarPath", profile.avatarPath);
+                if (profile.avatarData != null) {
+                    respJson.addProperty("avatarData", profile.avatarData);
+                }
+                
+                byte[] payload = respJson.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+                GhostPacket resp = new GhostPacket(GhostPacket.TYPE_PROFILE_RESP, senderMailbox, new byte[16], payload, new byte[16]);
+                ctx.writeAndFlush(resp);
+            }
+        } catch (Exception e) {
+            log.error("[PROFILE] Get profile parse failed", e);
+        }
     }
 
-    /**
-     * 处理阅后即焚确认 (ACK)
-     */
-    private void handleAck(GhostPacket packet) {
-        // 收到客户端发来的 ACK，意味着消息已在对方屏幕上渲染完毕
-        String mailbox = packet.getTargetMailboxId();
-        log.info("[ACK] 收到销毁指令，开始物理抹除信箱 {} 的暂存记录...", mailbox.substring(0, 8));
+    // Routes incoming chat messages directly to a single recipient.
+    private void handleIncomingMessage(ChannelHandlerContext ctx, GhostPacket packet) {
+        String targetMailbox = packet.getTargetMailboxId();
+        deliverOrStore(targetMailbox, packet);
+    }
 
-        // 彻底清空该信箱在内存中的所有离线消息，并覆写 0
+    // Attempts real-time delivery if target is online, otherwise stores the message for later retrieval.
+    private void deliverOrStore(String targetMailbox, GhostPacket packet) {
+        Channel targetChannel = routingTable.getChannel(targetMailbox);
+
+        if (targetChannel != null && targetChannel.isActive()) {
+            GhostPacket packetCopy = new GhostPacket(packet.getType(), packet.getTargetMailboxId(), packet.getNonceOrIv(), packet.getEncryptedData(), packet.getAuthTag());
+            targetChannel.writeAndFlush(packetCopy);
+        } else {
+            GhostPacket packetCopy = new GhostPacket(packet.getType(), packet.getTargetMailboxId(), packet.getNonceOrIv(), packet.getEncryptedData(), packet.getAuthTag());
+            routingTable.storeOfflineMessage(targetMailbox, packetCopy);
+        }
+    }
+
+    // Attempts real-time delivery if target is online, otherwise drops the packet (used for voice calls).
+    private void deliverOnly(String targetMailbox, GhostPacket packet) {
+        Channel targetChannel = routingTable.getChannel(targetMailbox);
+        if (targetChannel != null && targetChannel.isActive()) {
+            GhostPacket packetCopy = new GhostPacket(packet.getType(), packet.getTargetMailboxId(), packet.getNonceOrIv(), packet.getEncryptedData(), packet.getAuthTag());
+            targetChannel.writeAndFlush(packetCopy);
+        } else {
+            log.debug("[RELAY] Target offline, dropping real-time packet type: {}", packet.getType());
+        }
+    }
+
+    // Echoes heartbeat packets back to the client.
+    private void handleHeartbeat(ChannelHandlerContext ctx, GhostPacket packet) {
+        ctx.writeAndFlush(packet);
+    }
+
+    // Handles message acknowledgement by clearing stored offline messages for the given mailbox.
+    private void handleAck(GhostPacket packet) {
+        String mailbox = packet.getTargetMailboxId();
         routingTable.clearAndWipeOfflineMessages(mailbox);
     }
+
+    // Handles account deletion request by wiping all data associated with the authenticated user.
+    private void handleDeleteAccount(ChannelHandlerContext ctx, GhostPacket packet) {
+        String senderMailbox = ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).get();
+        if (senderMailbox != null) {
+            org.msgat.console.db.DatabaseManager.deleteUserAndData(senderMailbox);
+            routingTable.remove(senderMailbox);
+        }
+        ctx.close();
+    }
+
+
 }

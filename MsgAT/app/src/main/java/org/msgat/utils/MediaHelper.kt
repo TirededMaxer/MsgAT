@@ -9,12 +9,9 @@ import android.util.Base64
 
 object MediaHelper {
 
-    // 为了适应 500KB 的总包大小，我们将单个 Base64 字符串的实际载荷控制在 250KB 左右
-    private const val CHUNK_SIZE = 255999
+    private const val CHUNK_SIZE = 45000
 
-    /**
-     * 将选中的图片 Uri 转换为 Base64 分片列表 (处理发送)
-     */
+    // Reads a file from a Uri and splits it into manageable Base64 encoded chunks.
     fun uriToBase64Chunks(context: Context, uri: Uri): List<String> {
         val chunks = mutableListOf<String>()
         try {
@@ -22,7 +19,6 @@ object MediaHelper {
             val bytes = inputStream.readBytes()
             inputStream.close()
 
-            // 计算需要切多少片
             var offset = 0
             while (offset < bytes.size) {
                 val length = CHUNK_SIZE.coerceAtMost(bytes.size - offset)
@@ -36,19 +32,34 @@ object MediaHelper {
         return chunks
     }
 
-    /**
-     * 自动识别文件后缀
-     */
+    // Determines the total byte size of a file referenced by a Uri.
+    fun getFileSize(context: Context, uri: Uri): Long {
+        try {
+            context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+                val sizeIndex = cursor.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (sizeIndex != -1 && cursor.moveToFirst()) {
+                    return cursor.getLong(sizeIndex)
+                }
+            }
+
+            context.contentResolver.openFileDescriptor(uri, "r")?.use {
+                return it.statSize
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return 0L
+    }
+
+    // Extracts the MIME type or file extension from a given Uri.
     fun getExtensionFromUri(context: Context, uri: Uri): String {
         return android.webkit.MimeTypeMap.getSingleton().getExtensionFromMimeType(
             context.contentResolver.getType(uri)
         ) ?: "bin"
     }
 
-    /**
-     * 将 Base64 数据保存到系统相册 (处理接收并点击保存)
-     */
-    fun saveBase64ToGallery(context: Context, base64Data: String, ext: String): Boolean {
+    // Decodes Base64 data and saves it as a media file in the device gallery.
+    fun saveBase64ToGallery(context: Context, base64Data: String, ext: String): Uri? {
         return try {
 
             var cleanBase64 = base64Data.replace(Regex("\\s+"), "")
@@ -89,13 +100,13 @@ object MediaHelper {
                 contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
                 resolver.update(uri, contentValues, null, null)
 
-                true
+                uri
             } else {
-                false
+                null
             }
         } catch (e: Exception) {
             android.util.Log.e("MediaHelper", "FATAL", e)
-            false
+            null
         }
     }
 }

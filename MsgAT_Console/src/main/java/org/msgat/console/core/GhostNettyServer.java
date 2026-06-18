@@ -35,6 +35,8 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
                         public void initChannel(SocketChannel ch) {
                             ChannelPipeline p = ch.pipeline();
 
+                            // 5 minutes (300 seconds) read timeout to reap zombie connections.
+                            p.addLast(new io.netty.handler.timeout.ReadTimeoutHandler(300));
                             p.addLast(sslCtx.newHandler(ch.alloc()));
                             p.addLast(new GhostPacketCodec());
                             p.addLast(new AuthChallengeHandler(routingTable));

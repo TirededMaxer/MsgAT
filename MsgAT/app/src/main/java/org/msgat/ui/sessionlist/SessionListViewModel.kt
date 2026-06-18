@@ -36,9 +36,9 @@ class SessionListViewModel(
 
     val connectionState = nettyClient.connectionState
 
-    val conversations: StateFlow<List<ConversationUIModel>> = msgDao.getAllConversations()
-        .map { list -> list.map { ConversationUIModel(it.uuid, it.alias, it.avatarPath) } }
-        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+    val conversations: StateFlow<List<ConversationUIModel>> = msgDao.getAllConversationsWithUnread()
+        .map { list -> list.map { ConversationUIModel(it.conversation.uuid, it.conversation.alias, it.conversation.avatarPath, it.unreadCount > 0) } }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val friendRequests: StateFlow<List<org.msgat.data.db.FriendRequest>> = msgDao.getAllFriendRequests()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())

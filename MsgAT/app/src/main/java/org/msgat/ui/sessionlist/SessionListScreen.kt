@@ -145,22 +145,33 @@ fun ConversationItem(
         detectTapGestures(onLongPress = { showActionMenu = true }, onTap = { onClick() })
     }.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Surface(
-                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
-                color = Color(0xFF333333),
-                modifier = Modifier.size(48.dp)
-            ) {
-                if (convo.avatarPath.isNotEmpty()) {
-                    androidx.compose.foundation.Image(
-                        painter = coil.compose.rememberAsyncImagePainter(convo.avatarPath),
-                        contentDescription = null,
-                        contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Box(contentAlignment = Alignment.Center) {
-                        Text(convo.alias.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+            Box {
+                Surface(
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+                    color = Color(0xFF333333),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    if (convo.avatarPath.isNotEmpty()) {
+                        androidx.compose.foundation.Image(
+                            painter = coil.compose.rememberAsyncImagePainter(convo.avatarPath),
+                            contentDescription = null,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    } else {
+                        Box(contentAlignment = Alignment.Center) {
+                            Text(convo.alias.take(1).uppercase(), color = Color.White, fontSize = 20.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Bold)
+                        }
                     }
+                }
+                if (convo.hasUnread) {
+                    Box(
+                        modifier = Modifier
+                            .size(10.dp)
+                            .align(Alignment.TopEnd)
+                            .offset(x = 2.dp, y = (-2).dp)
+                            .background(Color.Red, CircleShape)
+                    )
                 }
             }
             Spacer(modifier = Modifier.width(16.dp))

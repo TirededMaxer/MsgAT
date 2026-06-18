@@ -65,6 +65,9 @@ class NettyClient(
                         val p = ch.pipeline()
 
                         p.addLast(sslCtx.newHandler(ch.alloc(), ip, port))
+                        
+                        // Added IdleStateHandler for 3-minute writer idle
+                        p.addLast(io.netty.handler.timeout.IdleStateHandler(0, 180, 0, java.util.concurrent.TimeUnit.SECONDS))
 
                         p.addLast(GhostPacketCodec())
 

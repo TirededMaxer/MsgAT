@@ -3,11 +3,26 @@ package org.msgat.data.db
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
+data class ConversationWithUnreadCount(
+    @Embedded val conversation: Conversation,
+    val unreadCount: Int
+)
+
 @Dao
 interface MsgDao {
     @Query("SELECT * FROM conversations")
     // Retrieves an observable flow of all saved conversations.
     fun getAllConversations(): Flow<List<Conversation>>
+
+    @Query("""
+        SELECT c.*, 
+        (SELECT COUNT(*) FROM messages m WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0) as unreadCount 
+        FROM conversations c
+    """)
+    fun getAllConversationsWithUnread(): Flow<List<ConversationWithUnreadCount>>
+
+    @Query("UPDATE messages SET isRead = 1 WHERE conversationUuid = :uuid AND isMine = 0")
+    suspend fun markMessagesAsRead(uuid: String)
 
     @Query("SELECT * FROM conversations WHERE uuid = :uuid LIMIT 1")
     // Fetches a specific conversation from the database by its UUID.

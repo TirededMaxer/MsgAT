@@ -35,6 +35,17 @@ class GhostClientHandler(
         ctx.writeAndFlush(GhostPacket(GhostPacket.TYPE_AUTH_REQ, myMailboxId, ByteArray(16), ByteArray(0), ByteArray(16)))
     }
 
+    override fun userEventTriggered(ctx: ChannelHandlerContext, evt: Any) {
+        if (evt is io.netty.handler.timeout.IdleStateEvent) {
+            if (evt.state() == io.netty.handler.timeout.IdleState.WRITER_IDLE) {
+                // Send a lightweight heartbeat to keep the NAT router and server connection alive
+                val heartbeatPacket = GhostPacket(GhostPacket.TYPE_HEARTBEAT, null, ByteArray(16), ByteArray(0), ByteArray(16))
+                ctx.writeAndFlush(heartbeatPacket)
+            }
+        }
+        super.userEventTriggered(ctx, evt)
+    }
+
     // Receives and routes an incoming GhostPacket based on its packet type.
     override fun channelRead0(ctx: ChannelHandlerContext, msg: GhostPacket) {
         when (msg.type) {
@@ -101,7 +112,7 @@ class GhostClientHandler(
                 handleAccountReset(ctx, msg)
             }
             GhostPacket.TYPE_HEARTBEAT -> {
-                // Do nothing
+                // Ignore the echoed heartbeat to silently keep the connection alive
             }
             GhostPacket.TYPE_CALL_OFFER,
             GhostPacket.TYPE_CALL_ANSWER,

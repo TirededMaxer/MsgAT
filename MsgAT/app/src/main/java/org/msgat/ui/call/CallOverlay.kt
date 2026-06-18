@@ -130,6 +130,11 @@ fun IncomingCallScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(Color(0xFF2C2C2C))
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -219,6 +224,11 @@ fun CallScreen(
             .fillMaxSize()
             .background(Color(0xFF2C2C2C))
             .statusBarsPadding()
+            .clickable(
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() },
+                indication = null,
+                onClick = {}
+            )
     ) {
         IconButton(
             onClick = onMinimize,

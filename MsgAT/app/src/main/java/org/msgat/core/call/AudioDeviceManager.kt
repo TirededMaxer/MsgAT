@@ -12,6 +12,9 @@ import org.msgat.MsgATApp
 
 class AudioDeviceManager private constructor(context: Context) {
     private val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+    private val powerManager = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+    private var proximityWakeLock: android.os.PowerManager.WakeLock? = null
+    private var inCallMode = false
 
     private val _availableDevices = MutableStateFlow<List<AudioDeviceInfo>>(emptyList())
     val availableDevices: StateFlow<List<AudioDeviceInfo>> = _availableDevices.asStateFlow()
@@ -37,6 +40,12 @@ class AudioDeviceManager private constructor(context: Context) {
 
     init {
         audioManager.registerAudioDeviceCallback(audioDeviceCallback, null)
+        if (powerManager.isWakeLockLevelSupported(android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK)) {
+            proximityWakeLock = powerManager.newWakeLock(
+                android.os.PowerManager.PROXIMITY_SCREEN_OFF_WAKE_LOCK,
+                "MsgAT:ProximityLock"
+            )
+        }
         updateAvailableDevices()
     }
 
@@ -72,6 +81,17 @@ class AudioDeviceManager private constructor(context: Context) {
         }
     }
 
+    private fun updateProximityWakeLock() {
+        val deviceType = _selectedDevice.value?.type
+        val shouldHold = inCallMode && deviceType == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+        
+        if (shouldHold && proximityWakeLock?.isHeld == false) {
+            proximityWakeLock?.acquire()
+        } else if (!shouldHold && proximityWakeLock?.isHeld == true) {
+            proximityWakeLock?.release()
+        }
+    }
+
     fun selectDevice(device: AudioDeviceInfo?) {
         if (device == null) return
         
@@ -99,6 +119,7 @@ class AudioDeviceManager private constructor(context: Context) {
         }
         _selectedDevice.value = device
         _isSpeakerphoneOn.value = device.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        updateProximityWakeLock()
     }
 
     fun toggleSpeakerphone() {
@@ -120,6 +141,7 @@ class AudioDeviceManager private constructor(context: Context) {
     }
 
     fun startCallMode() {
+        inCallMode = true
         audioManager.mode = AudioManager.MODE_IN_COMMUNICATION
         audioManager.isMicrophoneMute = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -136,9 +158,11 @@ class AudioDeviceManager private constructor(context: Context) {
             audioManager.requestAudioFocus(null, AudioManager.STREAM_VOICE_CALL, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_EXCLUSIVE)
         }
         updateAvailableDevices()
+        updateProximityWakeLock()
     }
 
     fun endCallMode() {
+        inCallMode = false
         audioManager.mode = AudioManager.MODE_NORMAL
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.clearCommunicationDevice()
@@ -147,6 +171,7 @@ class AudioDeviceManager private constructor(context: Context) {
             audioManager.stopBluetoothSco()
         }
         _isSpeakerphoneOn.value = false // Fix UI out-of-sync
+        updateProximityWakeLock()
     }
 
     fun getDeviceName(device: AudioDeviceInfo): String {

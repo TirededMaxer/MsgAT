@@ -9,7 +9,7 @@ import org.bouncycastle.crypto.params.Ed25519PrivateKeyParameters
 import java.security.MessageDigest
 import kotlin.collections.take
 
-class SecurePrefs(context: Context) {
+class SecurePrefs(private val context: Context) {
 
     private val privateKey = "PRIVATE_KEY"
 
@@ -83,7 +83,8 @@ class SecurePrefs(context: Context) {
 
     // Irreversibly deletes the current identity and generates a fresh cryptographic keypair.
     fun burnIdentityAndGenerateNew() {
-
+        context.deleteDatabase("msgat_vault.db")
+        
         val secureRandom = java.security.SecureRandom()
         val newSeed = ByteArray(32)
         secureRandom.nextBytes(newSeed)
@@ -92,6 +93,17 @@ class SecurePrefs(context: Context) {
         sharedPreferences.edit {
             putString(privateKey, newSeedBase64)
         }
+    }
+
+    fun getDatabasePassphrase(): ByteArray {
+        val encoded = sharedPreferences.getString("DB_PASSPHRASE", null)
+        if (encoded != null) {
+            return Base64.decode(encoded, Base64.DEFAULT)
+        }
+        val newKey = ByteArray(32)
+        java.security.SecureRandom().nextBytes(newKey)
+        sharedPreferences.edit { putString("DB_PASSPHRASE", Base64.encodeToString(newKey, Base64.DEFAULT)) }
+        return newKey
     }
 
     // Computes the SHA-256 hash of the provided byte array.

@@ -12,7 +12,7 @@ import java.security.KeyStore
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
-@Database(entities = [Conversation::class, ChatMessage::class, FriendRequest::class], version = 6, exportSchema = false)
+@Database(entities = [Conversation::class, ChatMessage::class, FriendRequest::class], version = 7, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     // Provides access to the data access object for database operations.
@@ -35,7 +35,7 @@ abstract class AppDatabase : RoomDatabase() {
         private fun buildDatabase(context: Context): AppDatabase {
             SQLiteDatabase.loadLibs(context)
 
-            val passphrase = getSecureDbKey()
+            val passphrase = getSecureDbKey(context)
 
             val factory = SupportFactory(passphrase)
 
@@ -50,23 +50,8 @@ abstract class AppDatabase : RoomDatabase() {
         }
 
         // Retrieves or generates the secure 256-bit key used for SQLCipher encryption.
-        private fun getSecureDbKey(): ByteArray {
-            val alias = "MSGAT_SQLCIPHER_KEY"
-            val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-
-            if (!keyStore.containsAlias(alias)) {
-                val keyGenerator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-                val spec = KeyGenParameterSpec.Builder(
-                    alias,
-                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
-                ).setKeySize(256).build()
-                keyGenerator.init(spec)
-                keyGenerator.generateKey()
-            }
-
-            val secretKey = keyStore.getKey(alias, null) as SecretKey
-
-            return secretKey.encoded ?: ByteArray(32) { 0x07 }
+        private fun getSecureDbKey(context: Context): ByteArray {
+            return org.msgat.core.crypto.securestorage.SecurePrefs(context).getDatabasePassphrase()
         }
     }
 }

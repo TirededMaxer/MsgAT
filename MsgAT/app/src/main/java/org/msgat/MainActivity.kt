@@ -135,6 +135,13 @@ class MainActivity : ComponentActivity() {
 
                             val syncState = chatViewModel.syncState.collectAsState().value
                             val messages = chatViewModel.messagesPagingData.collectAsLazyPagingItems()
+                            
+                            androidx.compose.runtime.LaunchedEffect(messages.itemCount) {
+                                if (messages.itemCount > 0) {
+                                    chatViewModel.markAsRead()
+                                }
+                            }
+
                             val alias = chatViewModel.alias.collectAsState().value
                             val context = androidx.compose.ui.platform.LocalContext.current
 

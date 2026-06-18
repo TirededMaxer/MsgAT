@@ -29,6 +29,15 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.delay
+
 import org.msgat.utils.MediaHelper.saveBase64ToGallery
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -51,6 +60,7 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val listState = rememberLazyListState()
+    var selectedMedia by remember { mutableStateOf<MessageUIModel?>(null) }
 
     val firstMessageId = messages.itemSnapshotList.items.firstOrNull()?.id
     LaunchedEffect(firstMessageId) {
@@ -148,7 +158,7 @@ fun ChatScreen(
                             Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.secondaryContainer, modifier = Modifier.size(60.dp)) {
                                 Icon(Icons.Default.Add, contentDescription = "Media", tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.padding(16.dp))
                             }
-                            Text("Photos", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
+                            Text("Media", color = Color.Gray, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp))
                         }
 
                         Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.clickable {
@@ -175,7 +185,7 @@ fun ChatScreen(
                 items(messages.itemCount, key = { index -> messages[index]?.id ?: index }) { index ->
                     val msg = messages[index]
                     if (msg != null) {
-                        ChatBubble(msg)
+                        ChatBubble(msg, onMediaClick = { selectedMedia = it })
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
@@ -189,12 +199,32 @@ fun ChatScreen(
             }
         }
     }
+
+    var animatingMedia by remember { mutableStateOf<MessageUIModel?>(null) }
+    LaunchedEffect(selectedMedia) {
+        if (selectedMedia != null) {
+            animatingMedia = selectedMedia
+        }
+    }
+
+    androidx.compose.animation.AnimatedVisibility(
+        visible = selectedMedia != null,
+        enter = androidx.compose.animation.scaleIn(initialScale = 0.8f) + androidx.compose.animation.fadeIn(),
+        exit = androidx.compose.animation.scaleOut(targetScale = 0.8f) + androidx.compose.animation.fadeOut()
+    ) {
+        animatingMedia?.let { msg ->
+            InAppMediaViewer(
+                msg = msg,
+                onDismiss = { selectedMedia = null }
+            )
+        }
+    }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 // Renders an individual chat message bubble with dynamic styling based on sender.
-fun ChatBubble(msg: MessageUIModel) {
+fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {}) {
     val context = LocalContext.current
     val isMe = msg.isMine
     val formatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
@@ -254,12 +284,17 @@ fun ChatBubble(msg: MessageUIModel) {
 
             Box(
                 modifier = Modifier
-                    .background(
-                        color = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                        shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = 4.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
-                                else RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
-                    )
-                    .padding(12.dp)
+                    .run {
+                        if (msg.ext == "txt") {
+                            background(
+                                color = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
+                                shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = 4.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
+                                        else RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
+                            ).padding(12.dp)
+                        } else {
+                            clip(RoundedCornerShape(12.dp))
+                        }
+                    }
                     .widthIn(max = 250.dp)
             ) {
                 if (msg.ext == "txt") {
@@ -296,71 +331,67 @@ fun ChatBubble(msg: MessageUIModel) {
                         )
                     }
                 } else if (msg.ext.lowercase() in listOf("jpg", "jpeg", "png", "webp")) {
-                    val bitmap = remember(msg.content) {
-                        try {
-                            var cleanBase64 = msg.content.replace(Regex("\\s+"), "")
-                            cleanBase64 = cleanBase64.replace("=", "")
-                            val padding = cleanBase64.length % 4
-                            if (padding > 0) {
-                                cleanBase64 += "=".repeat(4 - padding)
-                            }
-                            val bytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
-                            android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                        } catch(e:Exception) { null }
+                    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, msg.content) {
+                        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                var cleanBase64 = msg.content.replace(Regex("\\s+"), "")
+                                cleanBase64 = cleanBase64.replace("=", "")
+                                val padding = cleanBase64.length % 4
+                                if (padding > 0) {
+                                    cleanBase64 += "=".repeat(4 - padding)
+                                }
+                                val bytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
+                                val options = android.graphics.BitmapFactory.Options()
+                                options.inJustDecodeBounds = true
+                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+                                options.inSampleSize = calculateInSampleSize(options, 400, 400)
+                                options.inJustDecodeBounds = false
+                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
+                            } catch(e:Exception) { null }
+                        }
                     }
-                    if (bitmap != null) {
+                    val currentBitmap = bitmap
+                    if (currentBitmap != null) {
                         androidx.compose.foundation.Image(
-                            bitmap = bitmap,
+                            bitmap = currentBitmap,
                             contentDescription = "Image",
-                            contentScale = androidx.compose.ui.layout.ContentScale.Fit,
+                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .heightIn(max = 200.dp)
                                 .combinedClickable(
-                                    onClick = { 
-                                        val uri = saveBase64ToGallery(context, msg.content, msg.ext)
-                                        if (uri != null) {
-                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                                setDataAndType(uri, "image/*")
-                                                flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                            }
-                                            context.startActivity(intent)
-                                        }
-                                    },
-                                    onLongClick = {
-                                        showSaveDialog = true
-                                    }
+                                    onClick = { onMediaClick(msg) },
+                                    onLongClick = { showSaveDialog = true }
                                 )
                         )
                     } else {
-                        Text("🖼️ Corrupted Image", color = Color.Red)
+                        Text("Loading...", color = Color.Gray)
                     }
                 } else {
+                    val thumbnail by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(initialValue = null, msg.content) {
+                        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                            org.msgat.core.media.MediaCacheManager.getVideoThumbnail(context, msg.id, msg.content)
+                        }
+                    }
                     Box(modifier = Modifier
                         .fillMaxWidth()
-                        .height(150.dp)
+                        .height(200.dp)
                         .background(Color.Black)
                         .combinedClickable(
-                            onClick = {
-                                val uri = saveBase64ToGallery(context, msg.content, msg.ext)
-                                if (uri != null) {
-                                    val intent = android.content.Intent(android.content.Intent.ACTION_VIEW).apply {
-                                        setDataAndType(uri, "video/*")
-                                        flags = android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION
-                                    }
-                                    context.startActivity(intent)
-                                } else {
-                                    android.widget.Toast.makeText(context, "Failed to preview video", android.widget.Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            onLongClick = {
-                                showSaveDialog = true
-                            }
+                            onClick = { onMediaClick(msg) },
+                            onLongClick = { showSaveDialog = true }
                         ), contentAlignment = Alignment.Center) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Icon(Icons.Default.Check, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(48.dp))
-                            Spacer(modifier = Modifier.height(8.dp))
-                            Text("Video - Tap to Play", color = Color.White)
+                        val currentThumbnail = thumbnail
+                        if (currentThumbnail != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = currentThumbnail.asImageBitmap(),
+                                contentDescription = "Video Thumbnail",
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                        Box(modifier = Modifier.size(48.dp).background(Color.Black.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape), contentAlignment = Alignment.Center) {
+                            Icon(Icons.Default.PlayArrow, contentDescription = "Play", tint = Color.White, modifier = Modifier.size(32.dp))
                         }
                     }
                 }
@@ -392,6 +423,183 @@ fun ChatBubble(msg: MessageUIModel) {
                     Icon(Icons.Default.Add, contentDescription = null, tint = Color.White) 
                 }
             }
+        }
+    }
+}
+
+fun calculateInSampleSize(options: android.graphics.BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+    val height = options.outHeight
+    val width = options.outWidth
+    var inSampleSize = 1
+    if (height > reqHeight || width > reqWidth) {
+        val halfHeight = height / 2
+        val halfWidth = width / 2
+        while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
+            inSampleSize *= 2
+        }
+    }
+    return inSampleSize
+}
+
+@Composable
+fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    androidx.compose.foundation.layout.Box(
+        modifier = androidx.compose.ui.Modifier
+            .fillMaxSize()
+            .background(androidx.compose.ui.graphics.Color.Black)
+            .pointerInput(Unit) {
+                detectTapGestures(onTap = { onDismiss() })
+            }
+    ) {
+        if (msg.ext.lowercase() in listOf("jpg", "jpeg", "png", "webp")) {
+            var scale by remember { mutableStateOf(1f) }
+            var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
+
+            val bitmap = remember(msg.content) {
+                try {
+                    var cleanBase64 = msg.content.replace(Regex("\\s+"), "")
+                    cleanBase64 = cleanBase64.replace("=", "")
+                    val padding = cleanBase64.length % 4
+                    if (padding > 0) {
+                        cleanBase64 += "=".repeat(4 - padding)
+                    }
+                    val bytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
+                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
+                } catch(e:Exception) { null }
+            }
+
+            if (bitmap != null) {
+                androidx.compose.foundation.Image(
+                    bitmap = bitmap,
+                    contentDescription = "Full Screen Image",
+                    modifier = androidx.compose.ui.Modifier
+                        .fillMaxSize()
+                        .pointerInput(Unit) {
+                            detectTransformGestures { _, pan, zoom, _ ->
+                                scale = (scale * zoom).coerceIn(1f, 5f)
+                                offset = if (scale == 1f) androidx.compose.ui.geometry.Offset.Zero else offset + pan
+                            }
+                        }
+                        .graphicsLayer(
+                            scaleX = scale,
+                            scaleY = scale,
+                            translationX = offset.x,
+                            translationY = offset.y
+                        )
+                )
+            } else {
+                Text("Corrupted Image", color = Color.White, modifier = Modifier.align(Alignment.Center))
+            }
+        } else {
+            val videoFile by androidx.compose.runtime.produceState<java.io.File?>(initialValue = null, msg.content) {
+                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    org.msgat.core.media.MediaCacheManager.getVideoFileFromBase64(context, msg.id, msg.content)
+                }
+            }
+            val currentVideoFile = videoFile
+            if (currentVideoFile != null) {
+                VideoPlayer(videoFile = currentVideoFile, onDismiss = onDismiss)
+            } else {
+                Text("Loading Video...", color = Color.White, modifier = Modifier.align(Alignment.Center))
+            }
+        }
+    }
+}
+
+@Composable
+fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val exoPlayer = remember {
+        androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
+            val mediaItem = androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(videoFile))
+            setMediaItem(mediaItem)
+            prepare()
+            playWhenReady = true
+            repeatMode = androidx.media3.common.Player.REPEAT_MODE_OFF
+        }
+    }
+
+    var isPlaying by remember { mutableStateOf(true) }
+    var currentPosition by remember { mutableStateOf(0L) }
+    var totalDuration by remember { mutableStateOf(0L) }
+
+    DisposableEffect(Unit) {
+        val listener = object : androidx.media3.common.Player.Listener {
+            override fun onIsPlayingChanged(isPlayingNow: Boolean) {
+                isPlaying = isPlayingNow
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == androidx.media3.common.Player.STATE_READY) {
+                    totalDuration = exoPlayer.duration.coerceAtLeast(0)
+                }
+            }
+        }
+        exoPlayer.addListener(listener)
+        onDispose {
+            exoPlayer.removeListener(listener)
+            exoPlayer.release()
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isActive && isPlaying) {
+            currentPosition = exoPlayer.currentPosition
+            delay(100)
+        }
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        androidx.compose.ui.viewinterop.AndroidView(
+            factory = {
+                androidx.media3.ui.PlayerView(context).apply {
+                    player = exoPlayer
+                    useController = false
+                }
+            },
+            modifier = Modifier.fillMaxSize().pointerInput(Unit) {
+                detectTapGestures(onTap = { onDismiss() })
+            }
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .fillMaxWidth()
+                .background(Color.Black.copy(alpha = 0.6f))
+                .padding(16.dp)
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                Box(
+                    modifier = Modifier
+                        .clickable { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }
+                        .padding(8.dp)
+                ) {
+                    Icon(
+                        imageVector = if (isPlaying) Icons.Default.Close else Icons.Default.PlayArrow,
+                        contentDescription = if (isPlaying) "Pause" else "Play",
+                        tint = Color.White
+                    )
+                }
+                Spacer(modifier = Modifier.width(8.dp))
+                val currentText = String.format("%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(currentPosition), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(currentPosition) % 60)
+                val totalText = String.format("%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(totalDuration), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(totalDuration) % 60)
+                Text("$currentText / $totalText", color = Color.White, fontSize = 12.sp)
+            }
+            androidx.compose.material3.Slider(
+                value = if (totalDuration > 0) currentPosition.toFloat() / totalDuration.toFloat() else 0f,
+                onValueChange = { percent ->
+                    val seekTo = (percent * totalDuration).toLong()
+                    exoPlayer.seekTo(seekTo)
+                    currentPosition = seekTo
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = androidx.compose.material3.SliderDefaults.colors(
+                    thumbColor = Color.White,
+                    activeTrackColor = MaterialTheme.colorScheme.primary,
+                    inactiveTrackColor = Color.Gray
+                )
+            )
         }
     }
 }

@@ -18,7 +18,8 @@ data class ChatMessage(
     val isMine: Boolean,
     val content: String,
     val ext: String,
-    val timestamp: Long
+    val timestamp: Long,
+    @androidx.room.ColumnInfo(defaultValue = "0") val isRead: Boolean = false
 )
 
 @Entity(tableName = "friend_requests")

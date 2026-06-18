@@ -59,6 +59,12 @@ class ChatViewModel(
         }
     }
 
+    fun markAsRead() {
+        viewModelScope.launch {
+            msgDao.markMessagesAsRead(targetUuid)
+        }
+    }
+
     // Packages and encrypts a text message payload, then sends it via the network client.
     fun sendMessage(text: String, onFail: () -> Unit) {
         val myUuid = securePrefs.myUuid

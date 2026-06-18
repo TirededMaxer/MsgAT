@@ -5,12 +5,8 @@ import android.content.Intent
 import android.os.IBinder
 import org.msgat.MsgATApp
 import org.msgat.NotificationHelper
-import android.content.Context
-import android.os.PowerManager
 
 class MsgATService : Service() {
-
-    private var wakeLock: PowerManager.WakeLock? = null
 
     // Returns null as this foreground service does not support IPC binding.
     override fun onBind(intent: Intent?): IBinder? {
@@ -24,11 +20,6 @@ class MsgATService : Service() {
 
         val app = MsgATApp.instance
         if (app.securePrefs.isConfigured()) {
-            if (wakeLock == null) {
-                val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "MsgAT::ConnectionWakeLock")
-                wakeLock?.acquire()
-            }
             app.nettyClient.connect()
         }
 
@@ -38,11 +29,6 @@ class MsgATService : Service() {
     // Cleans up resources and disconnects the network client when the service is destroyed.
     override fun onDestroy() {
         super.onDestroy()
-        wakeLock?.let {
-            if (it.isHeld) {
-                it.release()
-            }
-        }
         MsgATApp.instance.nettyClient.disconnect()
     }
 }

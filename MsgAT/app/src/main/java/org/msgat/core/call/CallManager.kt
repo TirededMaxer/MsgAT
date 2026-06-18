@@ -45,6 +45,7 @@ class CallManager private constructor(private val context: Context) {
         private set
     
     private var isCaller: Boolean = false
+    private val pendingIceCandidates = mutableListOf<IceCandidate>()
 
     init {
         initializeWebRTC()
@@ -98,8 +99,10 @@ class CallManager private constructor(private val context: Context) {
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
                 Log.d("MsgAT-Call", "ICE Connection State: $newState")
                 if (newState == PeerConnection.IceConnectionState.CONNECTED || newState == PeerConnection.IceConnectionState.COMPLETED) {
-                    _callState.value = CallState.CONNECTED
-                    startCallTimers()
+                    if (_callState.value != CallState.CONNECTED) {
+                        _callState.value = CallState.CONNECTED
+                        startCallTimers()
+                    }
                 } else if (newState == PeerConnection.IceConnectionState.DISCONNECTED || newState == PeerConnection.IceConnectionState.FAILED) {
                     endCall()
                 }
@@ -199,13 +202,15 @@ class CallManager private constructor(private val context: Context) {
         scope.launch(Dispatchers.IO) {
             val conv = db.getConversationByUuid(peerUuid)
             val alias = conv?.alias ?: "Unknown"
-            org.msgat.NotificationHelper.showMessageNotification(
-                context,
-                peerUuid,
-                alias,
-                "txt",
-                "[Incoming Voice Call]"
-            )
+            if (!org.msgat.MsgATApp.instance.isAppInForeground) {
+                org.msgat.NotificationHelper.showMessageNotification(
+                    context,
+                    peerUuid,
+                    alias,
+                    "txt",
+                    "[Incoming Voice Call]"
+                )
+            }
         }
     }
 
@@ -236,6 +241,9 @@ class CallManager private constructor(private val context: Context) {
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
             override fun onSetSuccess() {
+                pendingIceCandidates.forEach { peerConnection?.addIceCandidate(it) }
+                pendingIceCandidates.clear()
+                
                 peerConnection?.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(answer: SessionDescription?) {
                         answer?.let {
@@ -261,7 +269,10 @@ class CallManager private constructor(private val context: Context) {
     fun handleRemoteAnswer(answer: SessionDescription) {
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
-            override fun onSetSuccess() {}
+            override fun onSetSuccess() {
+                pendingIceCandidates.forEach { peerConnection?.addIceCandidate(it) }
+                pendingIceCandidates.clear()
+            }
             override fun onCreateFailure(s: String?) {}
             override fun onSetFailure(s: String?) {}
         }, answer)
@@ -270,7 +281,11 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun handleRemoteIceCandidate(candidate: IceCandidate) {
-        peerConnection?.addIceCandidate(candidate)
+        if (peerConnection?.remoteDescription == null) {
+            pendingIceCandidates.add(candidate)
+        } else {
+            peerConnection?.addIceCandidate(candidate)
+        }
     }
 
     fun endCall() {
@@ -292,9 +307,7 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun remoteSyncReceived(remoteDuration: Long) {
-        if (!isCaller && _callState.value == CallState.CONNECTED) {
-            _callDurationSeconds.value = remoteDuration
-        }
+        // Obsolete: We rely on local elapsedRealtime now to prevent jitter.
     }
 
     fun remoteRejectedCall() {
@@ -344,6 +357,7 @@ class CallManager private constructor(private val context: Context) {
         AudioDeviceManager.getInstance().endCallMode()
         
         currentPeerUuid = null
+        pendingIceCandidates.clear()
         
         scope.launch {
             delay(1500)
@@ -360,17 +374,9 @@ class CallManager private constructor(private val context: Context) {
 
         durationJob = scope.launch {
             val startTime = android.os.SystemClock.elapsedRealtime()
-            var lastSyncTime = 0L
             while (isActive && _callState.value == CallState.CONNECTED) {
                 val currentSeconds = (android.os.SystemClock.elapsedRealtime() - startTime) / 1000
                 _callDurationSeconds.value = currentSeconds
-                
-                if (isCaller) {
-                    if (currentSeconds - lastSyncTime >= 5) {
-                        currentPeerUuid?.let { signalingHandler?.sendSync(it, currentSeconds) }
-                        lastSyncTime = currentSeconds
-                    }
-                }
                 delay(500)
             }
         }

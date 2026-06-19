@@ -323,7 +323,7 @@ fun CallScreen(
                         .background(if (isSpeakerOn) Color.White else Color(0x33FFFFFF), CircleShape)
                 ) {
                     Icon(
-                        imageVector = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeOff,
+                        imageVector = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeUp,
                         contentDescription = "Speaker",
                         tint = if (isSpeakerOn) Color.Black else Color.White,
                         modifier = Modifier.size(32.dp)

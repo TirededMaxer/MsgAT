@@ -18,6 +18,7 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -34,9 +35,11 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 import org.msgat.utils.MediaHelper.saveBase64ToGallery
 import java.text.SimpleDateFormat
@@ -62,10 +65,26 @@ fun ChatScreen(
     val listState = rememberLazyListState()
     var selectedMedia by remember { mutableStateOf<MessageUIModel?>(null) }
 
-    val firstMessageId = messages.itemSnapshotList.items.firstOrNull()?.id
-    LaunchedEffect(firstMessageId) {
-        if (firstMessageId != null) {
-            listState.animateScrollToItem(0)
+    var previousMessageId by remember { mutableStateOf<String?>(null) }
+    val firstMessage = messages.itemSnapshotList.items.firstOrNull()
+    
+    LaunchedEffect(firstMessage?.id) {
+        if (firstMessage != null) {
+            if (previousMessageId == null) {
+                previousMessageId = firstMessage.id
+            } else if (previousMessageId != firstMessage.id) {
+                previousMessageId = firstMessage.id
+                val isAtBottom = listState.firstVisibleItemIndex <= 2
+                if (firstMessage.isMine) {
+                    if (isAtBottom) {
+                        listState.animateScrollToItem(0)
+                    } else {
+                        listState.scrollToItem(0)
+                    }
+                } else if (isAtBottom) {
+                    listState.animateScrollToItem(0)
+                }
+            }
         }
     }
 
@@ -105,7 +124,7 @@ fun ChatScreen(
         },
         bottomBar = {
             var showAttachmentMenu by remember { mutableStateOf(false) }
-            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)) {
+            Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).navigationBarsPadding()) {
                 Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
                     TextField(
                         value = inputText,
@@ -175,26 +194,56 @@ fun ChatScreen(
             }
         }
     ) { padding ->
-        Column(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 8.dp)) {
-            LazyColumn(
-                modifier = Modifier.weight(1f),
-                state = listState,
-                reverseLayout = true,
-                contentPadding = PaddingValues(vertical = 16.dp)
-            ) {
-                items(messages.itemCount, key = { index -> messages[index]?.id ?: index }) { index ->
-                    val msg = messages[index]
-                    if (msg != null) {
-                        ChatBubble(msg, onMediaClick = { selectedMedia = it })
-                        Spacer(modifier = Modifier.height(24.dp))
-                    }
-                }
-                if (messages.loadState.append is androidx.paging.LoadState.Loading) {
-                    item {
-                        Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+        val coroutineScope = rememberCoroutineScope()
+        Box(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 8.dp)) {
+            Column(modifier = Modifier.fillMaxSize()) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    state = listState,
+                    reverseLayout = true,
+                    contentPadding = PaddingValues(vertical = 16.dp)
+                ) {
+                    items(messages.itemCount, key = { index -> messages.peek(index)?.id ?: index }) { index ->
+                        val msg = messages[index]
+                        if (msg != null) {
+                            ChatBubble(msg, onMediaClick = { selectedMedia = it })
+                            Spacer(modifier = Modifier.height(24.dp))
                         }
                     }
+                    if (messages.loadState.append is androidx.paging.LoadState.Loading) {
+                        item {
+                            Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                    }
+                }
+            }
+
+            val showScrollToBottom by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
+            
+            androidx.compose.animation.AnimatedVisibility(
+                visible = showScrollToBottom,
+                modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 8.dp),
+                enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
+                exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically(targetOffsetY = { it })
+            ) {
+                FloatingActionButton(
+                    onClick = {
+                        coroutineScope.launch {
+                            listState.animateScrollToItem(0)
+                        }
+                    },
+                    modifier = Modifier.size(40.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    shape = androidx.compose.foundation.shape.CircleShape,
+                    elevation = FloatingActionButtonDefaults.elevation(0.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Scroll to bottom"
+                    )
                 }
             }
         }
@@ -205,6 +254,10 @@ fun ChatScreen(
         if (selectedMedia != null) {
             animatingMedia = selectedMedia
         }
+    }
+
+    androidx.activity.compose.BackHandler(enabled = selectedMedia != null) {
+        selectedMedia = null
     }
 
     androidx.compose.animation.AnimatedVisibility(
@@ -351,21 +404,30 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
                         }
                     }
                     val currentBitmap = bitmap
-                    if (currentBitmap != null) {
-                        androidx.compose.foundation.Image(
-                            bitmap = currentBitmap,
-                            contentDescription = "Image",
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .heightIn(max = 200.dp)
-                                .combinedClickable(
-                                    onClick = { onMediaClick(msg) },
-                                    onLongClick = { showSaveDialog = true }
-                                )
-                        )
-                    } else {
-                        Text("Loading...", color = Color.Gray)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(200.dp)
+                            .background(Color.DarkGray)
+                            .combinedClickable(
+                                onClick = { onMediaClick(msg) },
+                                onLongClick = { showSaveDialog = true }
+                            ),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (currentBitmap != null) {
+                            androidx.compose.foundation.Image(
+                                bitmap = currentBitmap,
+                                contentDescription = "Image",
+                                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            CircularProgressIndicator(
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 } else {
                     val thumbnail by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(initialValue = null, msg.content) {
@@ -576,7 +638,7 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
                         .padding(8.dp)
                 ) {
                     Icon(
-                        imageVector = if (isPlaying) Icons.Default.Close else Icons.Default.PlayArrow,
+                        imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = if (isPlaying) "Pause" else "Play",
                         tint = Color.White
                     )

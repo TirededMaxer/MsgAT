@@ -44,7 +44,7 @@ class ChatViewModel(
         ).flow.map { pagingData ->
             val myAvatar = securePrefs.myAvatarPath ?: ""
             val targetAvatar = msgDao.getConversationByUuid(targetUuid)?.avatarPath ?: ""
-            pagingData.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp, if (it.isMine) myAvatar else targetAvatar) }
+            pagingData.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp, if (it.isMine) myAvatar else targetAvatar, it.isRead) }
         }.cachedIn(viewModelScope)
 
     private val _alias = MutableStateFlow(targetUuid)
@@ -56,6 +56,7 @@ class ChatViewModel(
             if (convo != null) {
                 _alias.value = convo.alias
             }
+            msgDao.markMessagesAsRead(targetUuid)
         }
     }
 

@@ -58,7 +58,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSendMessage: (String, () -> Unit) -> Unit,
     onSelectMedia: (android.net.Uri, () -> Unit) -> Unit,
-    onStartCall: () -> Unit
+    onStartCall: () -> Unit,
+    onMarkAsRead: () -> Unit
 ) {
     var inputText by remember { mutableStateOf("") }
     val context = LocalContext.current
@@ -67,6 +68,14 @@ fun ChatScreen(
 
     var previousMessageId by remember { mutableStateOf<String?>(null) }
     val firstMessage = messages.itemSnapshotList.items.firstOrNull()
+    val isNewUnread = firstMessage != null && !firstMessage.isMine && !firstMessage.isRead
+    val isAtBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 2 } }
+
+    LaunchedEffect(isAtBottom, isNewUnread) {
+        if (isAtBottom && isNewUnread) {
+            onMarkAsRead()
+        }
+    }
     
     LaunchedEffect(firstMessage?.id) {
         if (firstMessage != null) {
@@ -74,7 +83,6 @@ fun ChatScreen(
                 previousMessageId = firstMessage.id
             } else if (previousMessageId != firstMessage.id) {
                 previousMessageId = firstMessage.id
-                val isAtBottom = listState.firstVisibleItemIndex <= 2
                 if (firstMessage.isMine) {
                     if (isAtBottom) {
                         listState.animateScrollToItem(0)
@@ -220,7 +228,7 @@ fun ChatScreen(
                 }
             }
 
-            val showScrollToBottom by remember { derivedStateOf { listState.firstVisibleItemIndex > 2 } }
+            val showScrollToBottom = !isAtBottom
             
             androidx.compose.animation.AnimatedVisibility(
                 visible = showScrollToBottom,
@@ -228,6 +236,9 @@ fun ChatScreen(
                 enter = androidx.compose.animation.fadeIn() + androidx.compose.animation.slideInVertically(initialOffsetY = { it }),
                 exit = androidx.compose.animation.fadeOut() + androidx.compose.animation.slideOutVertically(targetOffsetY = { it })
             ) {
+                val fabContainerColor = if (isNewUnread) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.surfaceVariant
+                val fabContentColor = if (isNewUnread) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
+
                 FloatingActionButton(
                     onClick = {
                         coroutineScope.launch {
@@ -235,8 +246,8 @@ fun ChatScreen(
                         }
                     },
                     modifier = Modifier.size(40.dp),
-                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    containerColor = fabContainerColor,
+                    contentColor = fabContentColor,
                     shape = androidx.compose.foundation.shape.CircleShape,
                     elevation = FloatingActionButtonDefaults.elevation(0.dp)
                 ) {

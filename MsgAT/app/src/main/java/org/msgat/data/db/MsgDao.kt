@@ -21,7 +21,7 @@ interface MsgDao {
     """)
     fun getAllConversationsWithUnread(): Flow<List<ConversationWithUnreadCount>>
 
-    @Query("UPDATE messages SET isRead = 1 WHERE conversationUuid = :uuid AND isMine = 0")
+    @Query("UPDATE messages SET isRead = 1 WHERE conversationUuid = :uuid AND isMine = 0 AND isRead = 0")
     suspend fun markMessagesAsRead(uuid: String)
 
     @Query("SELECT * FROM conversations WHERE uuid = :uuid LIMIT 1")

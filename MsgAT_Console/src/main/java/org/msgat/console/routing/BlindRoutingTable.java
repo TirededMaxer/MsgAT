@@ -14,15 +14,7 @@ public class BlindRoutingTable {
 
     private final ConcurrentHashMap<String, Channel> activeChannels = new ConcurrentHashMap<>();
 
-    private final ScheduledExecutorService cleanerExecutor = Executors.newSingleThreadScheduledExecutor(r -> {
-        Thread t = new Thread(r, "OfflineVault-Cleaner");
-        t.setDaemon(true);
-        return t;
-    });
-
-    // Constructor initializing a scheduled task to periodically clean expired messages.
     public BlindRoutingTable() {
-        cleanerExecutor.scheduleAtFixedRate(this::cleanExpiredMessages, 1, 1, TimeUnit.HOURS);
     }
 
     // Stores an encrypted offline message into the database bounded by a max cap per mailbox.
@@ -74,14 +66,7 @@ public class BlindRoutingTable {
         return result.isEmpty() ? null : result;
     }
 
-    // Deletes messages from the database that are older than three days.
-    private void cleanExpiredMessages() {
-        try (java.sql.Connection conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
-             java.sql.Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("DELETE FROM offline_messages WHERE created_at < datetime('now', '-3 days')");
-        } catch (java.sql.SQLException e) {
-        }
-    }
+
 
     // Forcibly deletes all pending offline messages associated with a given mailbox.
     public void clearAndWipeOfflineMessages(String mailboxHash) {
@@ -110,7 +95,6 @@ public class BlindRoutingTable {
 
     // Erases all memory state by shutting down tasks, closing connections, and dropping all offline DB records.
     public void secureWipe() {
-        cleanerExecutor.shutdownNow();
         activeChannels.values().forEach(Channel::close);
         activeChannels.clear();
 

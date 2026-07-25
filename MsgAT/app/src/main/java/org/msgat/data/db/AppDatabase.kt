@@ -12,7 +12,7 @@ import java.security.KeyStore
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 
-@Database(entities = [Conversation::class, ChatMessage::class, FriendRequest::class], version = 7, exportSchema = false)
+@Database(entities = [Conversation::class, ChatMessage::class, FriendRequest::class], version = 10, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     // Provides access to the data access object for database operations.

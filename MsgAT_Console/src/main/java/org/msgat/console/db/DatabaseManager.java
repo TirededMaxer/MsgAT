@@ -33,6 +33,8 @@ public class DatabaseManager {
                     "avatar_data TEXT, " +
                     "updated_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_users_mailbox ON users(mailbox_id)");
+
             try {
                 stmt.execute("ALTER TABLE users ADD COLUMN avatar_data TEXT");
             } catch (SQLException e) {
@@ -50,6 +52,9 @@ public class DatabaseManager {
                     "target_mailbox TEXT, " +
                     "packet_data BLOB, " +
                     "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
+
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_mailbox ON offline_messages(target_mailbox)");
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_created ON offline_messages(created_at)");
 
         } catch (SQLException e) {
             log.error("Offline DB init failed", e);

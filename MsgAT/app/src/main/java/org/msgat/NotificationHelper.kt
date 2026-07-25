@@ -105,7 +105,16 @@ object NotificationHelper {
     // Dismisses all active notifications for the application.
     fun clearAllNotifications(context: Context) {
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.cancelAll()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val activeNotifications = manager.activeNotifications
+            for (notification in activeNotifications) {
+                if (notification.id != 1 && notification.id != CALL_NOTIFICATION_ID) {
+                    manager.cancel(notification.id)
+                }
+            }
+        } else {
+            manager.cancelAll()
+        }
     }
     // Creates a high-priority, full-screen intent notification for voice calls.
     fun createCallNotification(

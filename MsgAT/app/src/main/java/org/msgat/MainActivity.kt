@@ -146,11 +146,11 @@ class MainActivity : ComponentActivity() {
                                 syncState = syncState,
                                 messages = messages,
                                 onBack = { navController.popBackStack() },
-                                onSendMessage = { text, onFail ->
-                                    chatViewModel.sendMessage(text, onFail)
+                                onSendMessage = { text, replyToId, replyToSender, replyToContent, onFail ->
+                                    chatViewModel.sendMessage(text, replyToId, replyToSender, replyToContent, onFail)
                                 },
-                                onSelectMedia = { uri, onFail ->
-                                    chatViewModel.sendMedia(context, uri, onFail)
+                                onSelectMedia = { uri, replyToId, replyToSender, replyToContent, onFail ->
+                                    chatViewModel.sendMedia(context, uri, replyToId, replyToSender, replyToContent, onFail)
                                 },
                                 onStartCall = {
                                     if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -162,7 +162,12 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onMarkAsRead = {
                                     chatViewModel.markAsRead()
-                                }
+                                },
+                                onSendReadAck = { msgId ->
+                                    chatViewModel.sendReadAck(msgId)
+                                },
+                                onRevokeMessage = chatViewModel::revokeMessage,
+                                onEditMessage = chatViewModel::editMessage
                             )
                         }
                     }

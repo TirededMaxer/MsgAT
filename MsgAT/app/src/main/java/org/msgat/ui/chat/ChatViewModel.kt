@@ -44,7 +44,7 @@ class ChatViewModel(
         ).flow.map { pagingData ->
             val myAvatar = securePrefs.myAvatarPath ?: ""
             val targetAvatar = msgDao.getConversationByUuid(targetUuid)?.avatarPath ?: ""
-            pagingData.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp, if (it.isMine) myAvatar else targetAvatar, it.isRead) }
+            pagingData.map { MessageUIModel(it.messageId, it.isMine, it.content, it.ext, it.timestamp, if (it.isMine) myAvatar else targetAvatar, it.isRead, it.replyToId, it.replyToSender, it.replyToContent, it.status, isRevoked = it.isRevoked == 1, isEdited = it.isEdited == 1) }
         }.cachedIn(viewModelScope)
 
     private val _alias = MutableStateFlow(targetUuid)
@@ -67,7 +67,13 @@ class ChatViewModel(
     }
 
     // Packages and encrypts a text message payload, then sends it via the network client.
-    fun sendMessage(text: String, onFail: () -> Unit) {
+    fun sendMessage(
+        text: String,
+        replyToId: String? = null,
+        replyToSender: String? = null,
+        replyToContent: String? = null,
+        onFail: () -> Unit
+    ) {
         val myUuid = securePrefs.myUuid
         if (text.isBlank()) return
 
@@ -83,7 +89,19 @@ class ChatViewModel(
 
                 val msgId = UUID.randomUUID().toString()
 
-                val chatMsg = ChatMessage(msgId, targetUuid, true, text, "txt", System.currentTimeMillis())
+                val chatMsg = ChatMessage(
+                    messageId = msgId,
+                    conversationUuid = targetUuid,
+                    isMine = true,
+                    content = text,
+                    ext = "txt",
+                    timestamp = System.currentTimeMillis(),
+                    isRead = true,
+                    replyToId = replyToId,
+                    replyToSender = replyToSender,
+                    replyToContent = replyToContent,
+                    status = 0
+                )
                 msgDao.insertMessage(chatMsg)
 
                 val payload = MessagePayload(
@@ -93,7 +111,10 @@ class ChatViewModel(
                     index = 0,
                     ext = "txt",
                     data = Base64.encodeToString(text.toByteArray(), Base64.NO_WRAP),
-                    timestamp = System.currentTimeMillis()
+                    timestamp = System.currentTimeMillis(),
+                    replyToId = replyToId,
+                    replyToSender = replyToSender,
+                    replyToContent = replyToContent
                 )
                 val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
 
@@ -102,9 +123,6 @@ class ChatViewModel(
 
                 val cipherText: ByteArray
                 val authTag: ByteArray
-                
-                val convo = msgDao.getConversationByUuid(targetUuid)
-                val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
                 
                 if (peerPublicKeyBase64.isNotEmpty()) {
                     val myPrivateKey = securePrefs.getX25519PrivateKey()
@@ -128,10 +146,8 @@ class ChatViewModel(
                 )
 
                 val success = nettyClient.sendPacket(packet)
-                if (!success) {
-
-                    msgDao.deleteMessageById(msgId)
-                    kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
+                if (success) {
+                    msgDao.updateMessageStatus(msgId, 1)
                 }
 
             } catch (e: Exception) {
@@ -141,7 +157,14 @@ class ChatViewModel(
     }
 
     // Processes, encrypts, and transmits media files (such as images) as base64 payloads.
-    fun sendMedia(context: Context, uri: Uri, onFail: () -> Unit) {
+    fun sendMedia(
+        context: Context,
+        uri: Uri,
+        replyToId: String? = null,
+        replyToSender: String? = null,
+        replyToContent: String? = null,
+        onFail: () -> Unit
+    ) {
         val myUuid = securePrefs.myUuid
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -173,7 +196,19 @@ class ChatViewModel(
                 val total = chunks.size
 
                 val localContent = chunks.joinToString("")
-                val chatMsg = ChatMessage(msgId, targetUuid, true, localContent, ext, System.currentTimeMillis())
+                val chatMsg = ChatMessage(
+                    messageId = msgId,
+                    conversationUuid = targetUuid,
+                    isMine = true,
+                    content = localContent,
+                    ext = ext,
+                    timestamp = System.currentTimeMillis(),
+                    isRead = true,
+                    replyToId = replyToId,
+                    replyToSender = replyToSender,
+                    replyToContent = replyToContent,
+                    status = 0
+                )
                 msgDao.insertMessage(chatMsg)
 
                 chunks.forEachIndexed { index, chunkData ->
@@ -184,15 +219,15 @@ class ChatViewModel(
                         index = index,
                         ext = ext,
                         data = chunkData,
-                        timestamp = System.currentTimeMillis()
+                        timestamp = System.currentTimeMillis(),
+                        replyToId = replyToId,
+                        replyToSender = replyToSender,
+                        replyToContent = replyToContent
                     )
                     val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
 
                     val iv = ByteArray(16)
                     SecureRandom().nextBytes(iv)
-                    
-                    val convo = msgDao.getConversationByUuid(targetUuid)
-                    val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
                     
                     val cipherText: ByteArray
                     val authTag: ByteArray
@@ -221,11 +256,108 @@ class ChatViewModel(
                     kotlinx.coroutines.delay(50)
                 }
             } catch (e: Exception) {
-                Log.e("ChatViewModel", "媒体发送失败", e)
-                if (msgId.isNotEmpty()) {
-                    msgDao.deleteMessageById(msgId)
-                }
+                Log.e("ChatViewModel", "发送媒体消息失败", e)
+                msgDao.deleteMessageById(msgId)
                 kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
+            }
+        }
+    }
+
+    fun sendReadAck(messageId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val convo = msgDao.getConversationByUuid(targetUuid) ?: return@launch
+            val peerPublicKeyBase64 = convo.peerPublicKey
+            if (peerPublicKeyBase64.isEmpty()) return@launch
+
+            try {
+                val myUuid = securePrefs.myUuid
+                val payload = MessagePayload(
+                    senderUuid = myUuid,
+                    fileId = UUID.randomUUID().toString(),
+                    total = 1,
+                    index = 0,
+                    ext = "ack_read",
+                    data = messageId,
+                    timestamp = System.currentTimeMillis()
+                )
+                val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
+                val iv = ByteArray(16)
+                SecureRandom().nextBytes(iv)
+                val myPrivateKey = securePrefs.getX25519PrivateKey()
+                val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
+                val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, pair.first, pair.second)
+                nettyClient.sendPacket(packet)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to send ack_read", e)
+            }
+        }
+    }
+
+    fun revokeMessage(messageId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            msgDao.updateMessageRevoked(messageId)
+            val convo = msgDao.getConversationByUuid(targetUuid) ?: return@launch
+            val peerPublicKeyBase64 = convo.peerPublicKey
+            if (peerPublicKeyBase64.isEmpty()) return@launch
+
+            try {
+                val myUuid = securePrefs.myUuid
+                val payload = MessagePayload(
+                    senderUuid = myUuid,
+                    fileId = UUID.randomUUID().toString(),
+                    total = 1,
+                    index = 0,
+                    ext = "txt",
+                    data = "",
+                    timestamp = System.currentTimeMillis(),
+                    action = "revoke",
+                    targetMessageId = messageId
+                )
+                val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
+                val iv = ByteArray(16)
+                SecureRandom().nextBytes(iv)
+                val myPrivateKey = securePrefs.getX25519PrivateKey()
+                val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
+                val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, pair.first, pair.second)
+                nettyClient.sendPacket(packet)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to send revoke payload", e)
+            }
+        }
+    }
+
+    fun editMessage(messageId: String, newContent: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            msgDao.updateMessageContent(messageId, newContent)
+            val convo = msgDao.getConversationByUuid(targetUuid) ?: return@launch
+            val peerPublicKeyBase64 = convo.peerPublicKey
+            if (peerPublicKeyBase64.isEmpty()) return@launch
+
+            try {
+                val myUuid = securePrefs.myUuid
+                val payload = MessagePayload(
+                    senderUuid = myUuid,
+                    fileId = UUID.randomUUID().toString(),
+                    total = 1,
+                    index = 0,
+                    ext = "txt",
+                    data = Base64.encodeToString(newContent.toByteArray(), Base64.NO_WRAP),
+                    timestamp = System.currentTimeMillis(),
+                    action = "edit",
+                    targetMessageId = messageId
+                )
+                val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
+                val iv = ByteArray(16)
+                SecureRandom().nextBytes(iv)
+                val myPrivateKey = securePrefs.getX25519PrivateKey()
+                val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
+                val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, pair.first, pair.second)
+                nettyClient.sendPacket(packet)
+            } catch (e: Exception) {
+                Log.e("ChatViewModel", "Failed to send edit payload", e)
             }
         }
     }

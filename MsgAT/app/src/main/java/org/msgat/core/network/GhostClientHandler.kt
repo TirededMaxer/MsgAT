@@ -28,6 +28,7 @@ class GhostClientHandler(
     private val myMailboxId = CryptoManager.calculateMailboxId(myUuid)
     private val scope = CoroutineScope(Dispatchers.IO)
     private val fileAssembler = mutableMapOf<String, MutableMap<Int, String>>()
+    private val fileAssemblerTimestamps = mutableMapOf<String, Long>()
 
     // Handles the successful establishment of a TCP connection to the server.
     override fun channelActive(ctx: ChannelHandlerContext) {
@@ -157,51 +158,112 @@ class GhostClientHandler(
                     var finalData = ""
 
                     if (total > 1) {
+                        val now = System.currentTimeMillis()
+                        fileAssemblerTimestamps.entries.removeIf { now - it.value > 10 * 60 * 1000L }
+                        fileAssembler.keys.retainAll(fileAssemblerTimestamps.keys)
 
                         val chunks = fileAssembler.getOrPut(fileId) { mutableMapOf() }
+                        fileAssemblerTimestamps[fileId] = now
                         chunks[decryptedPayload.index] = decryptedPayload.data
                         if (chunks.size == total) {
                             finalData = (0 until total).joinToString("") { chunks[it] ?: "" }
                             fileAssembler.remove(fileId)
+                            fileAssemblerTimestamps.remove(fileId)
                         }
                     } else {
 
                         finalData = decryptedPayload.data
                     }
 
-                    if (finalData.isNotEmpty()) {
-
-                        val contentToSave = if (decryptedPayload.ext == "txt") {
-                            try {
-                                String(Base64.decode(finalData, Base64.DEFAULT), Charsets.UTF_8)
-                            } catch (_: Exception) {
-                                finalData 
+                    if (finalData.isNotEmpty() || decryptedPayload.action == "revoke") {
+                        if (decryptedPayload.ext == "ack_deliv") {
+                            val ackMsg = msgDao.getMessageById(finalData)
+                            if (ackMsg != null) {
+                                msgDao.updateMessageStatusUpTo(ackMsg.conversationUuid, ackMsg.timestamp, 2)
+                            } else {
+                                msgDao.updateMessageStatus(finalData, 2)
+                            }
+                        } else if (decryptedPayload.ext == "ack_read") {
+                            val ackMsg = msgDao.getMessageById(finalData)
+                            if (ackMsg != null) {
+                                msgDao.updateMessageStatusUpTo(ackMsg.conversationUuid, ackMsg.timestamp, 3)
+                            } else {
+                                msgDao.updateMessageStatus(finalData, 3)
                             }
                         } else {
-                            finalData 
-                        }
+                            val contentToSave = if (decryptedPayload.ext == "txt") {
+                                try {
+                                    String(Base64.decode(finalData, Base64.DEFAULT), Charsets.UTF_8)
+                                } catch (_: Exception) {
+                                    finalData 
+                                }
+                            } else {
+                                finalData 
+                            }
 
-                        val chatMsg = ChatMessage(
-                            fileId,
-                            decryptedPayload.senderUuid,
-                            false,
-                            contentToSave,
-                            decryptedPayload.ext,
-                            decryptedPayload.timestamp
-                        )
-                        msgDao.insertMessage(chatMsg)
+                            if (decryptedPayload.action == "revoke" && !decryptedPayload.targetMessageId.isNullOrEmpty()) {
+                                msgDao.updateMessageRevoked(decryptedPayload.targetMessageId)
+                            } else if (decryptedPayload.action == "edit" && !decryptedPayload.targetMessageId.isNullOrEmpty()) {
+                                val editedContent = try {
+                                    String(Base64.decode(finalData, Base64.DEFAULT), Charsets.UTF_8)
+                                } catch (_: Exception) {
+                                    finalData
+                                }
+                                msgDao.updateMessageContent(decryptedPayload.targetMessageId, editedContent)
+                            } else {
+                                val chatMsg = ChatMessage(
+                                    fileId,
+                                    decryptedPayload.senderUuid,
+                                    false,
+                                    contentToSave,
+                                    decryptedPayload.ext,
+                                    decryptedPayload.timestamp,
+                                    false,
+                                    decryptedPayload.replyToId,
+                                    decryptedPayload.replyToSender,
+                                    decryptedPayload.replyToContent,
+                                    status = 1
+                                )
+                                msgDao.insertMessage(chatMsg)
+                            }
 
-                        if (!org.msgat.MsgATApp.instance.isAppInForeground) {
-                            val context = org.msgat.MsgATApp.instance.applicationContext
+                            // Send ACK_DELIVERED back to sender
                             val conv = msgDao.getConversationByUuid(decryptedPayload.senderUuid)
-                            val alias = conv?.alias ?: "Unknown"
-                            org.msgat.NotificationHelper.showMessageNotification(
-                                context,
-                                decryptedPayload.senderUuid,
-                                alias,
-                                decryptedPayload.ext,
-                                contentToSave
-                            )
+                            val peerPublicKeyBase64 = conv?.peerPublicKey ?: ""
+                            if (peerPublicKeyBase64.isNotEmpty()) {
+                                try {
+                                    val ackPayload = MessagePayload(
+                                        senderUuid = myUuid,
+                                        fileId = java.util.UUID.randomUUID().toString(),
+                                        total = 1,
+                                        index = 0,
+                                        ext = "ack_deliv",
+                                        data = fileId,
+                                        timestamp = System.currentTimeMillis()
+                                    )
+                                    val jsonBytes = ackPayload.toJson().toByteArray(Charsets.UTF_8)
+                                    val iv = ByteArray(16)
+                                    java.security.SecureRandom().nextBytes(iv)
+                                    val pair = CryptoManager.encryptPayloadECDH(myX25519PrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+                                    val targetMailboxId = CryptoManager.calculateMailboxId(decryptedPayload.senderUuid)
+                                    val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, pair.first, pair.second)
+                                    ctx.writeAndFlush(packet)
+                                } catch (e: Exception) {
+                                    Log.e("MsgAT", "Failed to send ack_deliv", e)
+                                }
+                            }
+
+                            if (!org.msgat.MsgATApp.instance.isAppInForeground) {
+                                val context = org.msgat.MsgATApp.instance.applicationContext
+                                val alias = conv?.alias ?: "Unknown"
+                                org.msgat.NotificationHelper.showMessageNotification(
+                                    context,
+                                    decryptedPayload.senderUuid,
+                                    alias,
+                                    decryptedPayload.ext,
+                                    contentToSave
+                                )
+                            }
                         }
                     }
                 } else {

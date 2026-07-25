@@ -48,6 +48,24 @@ interface MsgDao {
     // Inserts a new chat message into the database.
     suspend fun insertMessage(message: ChatMessage)
 
+    @Query("UPDATE messages SET status = :status WHERE messageId = :messageId AND status < :status")
+    suspend fun updateMessageStatus(messageId: String, status: Int)
+
+    @Query("SELECT * FROM messages WHERE messageId = :id LIMIT 1")
+    suspend fun getMessageById(id: String): ChatMessage?
+
+    @Query("UPDATE messages SET status = :status WHERE conversationUuid = :targetUuid AND timestamp <= :timestamp AND isMine = 1 AND status < :status")
+    suspend fun updateMessageStatusUpTo(targetUuid: String, timestamp: Long, status: Int)
+
+    @Query("SELECT * FROM messages WHERE status = 0 AND isMine = 1")
+    suspend fun getPendingMessages(): List<ChatMessage>
+
+    @Query("UPDATE messages SET isRevoked = 1 WHERE messageId = :messageId")
+    suspend fun updateMessageRevoked(messageId: String)
+
+    @Query("UPDATE messages SET content = :newContent, isEdited = 1 WHERE messageId = :messageId")
+    suspend fun updateMessageContent(messageId: String, newContent: String)
+
     @Query("DELETE FROM messages WHERE conversationUuid = :uuid")
     // Deletes all messages associated with a specific conversation UUID.
     suspend fun clearMessages(uuid: String)

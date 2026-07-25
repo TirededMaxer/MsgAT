@@ -1,5 +1,6 @@
 package org.msgat.ui.chat
 
+import android.content.Context
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -40,6 +41,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import androidx.compose.animation.togetherWith
 
 import org.msgat.utils.MediaHelper.saveBase64ToGallery
 import java.text.SimpleDateFormat
@@ -56,12 +58,19 @@ fun ChatScreen(
     syncState: SyncState,
     messages: androidx.paging.compose.LazyPagingItems<MessageUIModel>,
     onBack: () -> Unit,
-    onSendMessage: (String, () -> Unit) -> Unit,
-    onSelectMedia: (android.net.Uri, () -> Unit) -> Unit,
+    onSendMessage: (text: String, replyToId: String?, replyToSender: String?, replyToContent: String?, onFail: () -> Unit) -> Unit,
+    onSelectMedia: (uri: android.net.Uri, replyToId: String?, replyToSender: String?, replyToContent: String?, onFail: () -> Unit) -> Unit,
     onStartCall: () -> Unit,
-    onMarkAsRead: () -> Unit
+    onMarkAsRead: () -> Unit,
+    onSendReadAck: (messageId: String) -> Unit = {},
+    onRevokeMessage: (messageId: String) -> Unit = {},
+    onEditMessage: (messageId: String, newContent: String) -> Unit = { _, _ -> }
 ) {
     var inputText by remember { mutableStateOf("") }
+    var replyingToMessage by remember { mutableStateOf<MessageUIModel?>(null) }
+    var highlightedMessageId by remember { mutableStateOf<String?>(null) }
+    var editingMsg by remember { mutableStateOf<MessageUIModel?>(null) }
+    var editingText by remember { mutableStateOf("") }
     val context = LocalContext.current
     val listState = rememberLazyListState()
     var selectedMedia by remember { mutableStateOf<MessageUIModel?>(null) }
@@ -71,9 +80,10 @@ fun ChatScreen(
     val isNewUnread = firstMessage != null && !firstMessage.isMine && !firstMessage.isRead
     val isAtBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 2 } }
 
-    LaunchedEffect(isAtBottom, isNewUnread) {
-        if (isAtBottom && isNewUnread) {
+    LaunchedEffect(isAtBottom, isNewUnread, firstMessage?.id) {
+        if (isAtBottom && firstMessage != null && !firstMessage.isMine) {
             onMarkAsRead()
+            onSendReadAck(firstMessage.id)
         }
     }
     
@@ -100,10 +110,49 @@ fun ChatScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            onSelectMedia(uri) {
+            val replyId = replyingToMessage?.id
+            val replySender = if (replyingToMessage?.isMine == true) "Me" else alias
+            val replyContent = if (replyingToMessage?.ext == "txt") replyingToMessage?.content else "[${replyingToMessage?.ext?.uppercase()}]"
+            replyingToMessage = null
+            onSelectMedia(uri, replyId, replySender, replyContent) {
                 android.widget.Toast.makeText(context, "Send content Failed", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    if (editingMsg != null) {
+        AlertDialog(
+            onDismissRequest = { editingMsg = null },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("Edit Message", color = MaterialTheme.colorScheme.onSurface) },
+            text = {
+                OutlinedTextField(
+                    value = editingText,
+                    onValueChange = { editingText = it },
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = TextFieldDefaults.colors(
+                        focusedContainerColor = MaterialTheme.colorScheme.background,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                        focusedTextColor = MaterialTheme.colorScheme.onBackground,
+                        unfocusedTextColor = MaterialTheme.colorScheme.onBackground
+                    )
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val targetMsg = editingMsg
+                        if (targetMsg != null && editingText.isNotBlank()) {
+                            onEditMessage(targetMsg.id, editingText)
+                        }
+                        editingMsg = null
+                    }
+                ) { Text("Save", color = MaterialTheme.colorScheme.primary) }
+            },
+            dismissButton = {
+                TextButton(onClick = { editingMsg = null }) { Text("Cancel", color = Color.Gray) }
+            }
+        )
     }
 
     Scaffold(
@@ -133,6 +182,49 @@ fun ChatScreen(
         bottomBar = {
             var showAttachmentMenu by remember { mutableStateOf(false) }
             Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).navigationBarsPadding()) {
+                androidx.compose.animation.AnimatedVisibility(
+                    visible = replyingToMessage != null,
+                    enter = androidx.compose.animation.expandVertically(animationSpec = androidx.compose.animation.core.spring(stiffness = androidx.compose.animation.core.Spring.StiffnessMediumLow)) + androidx.compose.animation.fadeIn(),
+                    exit = androidx.compose.animation.shrinkVertically() + androidx.compose.animation.fadeOut()
+                ) {
+                    replyingToMessage?.let { replyMsg ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.9f))
+                                .padding(horizontal = 12.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .width(4.dp)
+                                    .height(32.dp)
+                                    .background(MaterialTheme.colorScheme.primary, RoundedCornerShape(2.dp))
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Replying to ${if (replyMsg.isMine) "Me" else alias}",
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                val previewText = if (replyMsg.ext == "txt") replyMsg.content else "[${replyMsg.ext.uppercase()}]"
+                                Text(
+                                    text = previewText,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                                )
+                            }
+                            IconButton(onClick = { replyingToMessage = null }, modifier = Modifier.size(24.dp)) {
+                                Icon(Icons.Default.Close, contentDescription = "Cancel reply", tint = Color.Gray)
+                            }
+                        }
+                    }
+                }
+
                 Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
                     TextField(
                         value = inputText,
@@ -152,8 +244,12 @@ fun ChatScreen(
                         onClick = {
                             if (inputText.isNotEmpty()) {
                                 val textToSend = inputText
+                                val replyId = replyingToMessage?.id
+                                val replySender = if (replyingToMessage?.isMine == true) "Me" else alias
+                                val replyContent = if (replyingToMessage?.ext == "txt") replyingToMessage?.content else "[${replyingToMessage?.ext?.uppercase()}]"
                                 inputText = ""
-                                onSendMessage(textToSend) {
+                                replyingToMessage = null
+                                onSendMessage(textToSend, replyId, replySender, replyContent) {
                                     inputText = textToSend
                                     android.widget.Toast.makeText(context, "Send content failed", android.widget.Toast.LENGTH_SHORT).show()
                                 }
@@ -163,10 +259,19 @@ fun ChatScreen(
                         },
                         modifier = Modifier.background(if (inputText.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(50))
                     ) {
-                        if (inputText.isNotEmpty()) {
-                            Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
-                        } else {
-                            Icon(Icons.Default.Add, contentDescription = "Add Media", tint = MaterialTheme.colorScheme.onSurface)
+                        androidx.compose.animation.AnimatedContent(
+                            targetState = inputText.isNotEmpty(),
+                            transitionSpec = {
+                                (androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.5f))
+                                    .togetherWith(androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.5f))
+                            },
+                            label = "SendButtonMorph"
+                        ) { hasText ->
+                            if (hasText) {
+                                Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send", tint = Color.White)
+                            } else {
+                                Icon(Icons.Default.Add, contentDescription = "Add Media", tint = MaterialTheme.colorScheme.onSurface)
+                            }
                         }
                     }
                 }
@@ -214,7 +319,31 @@ fun ChatScreen(
                     items(messages.itemCount, key = { index -> messages.peek(index)?.id ?: index }) { index ->
                         val msg = messages[index]
                         if (msg != null) {
-                            ChatBubble(msg, onMediaClick = { selectedMedia = it })
+                            ChatBubble(
+                                msg = msg,
+                                onMediaClick = { selectedMedia = it },
+                                onReply = { replyingToMessage = it },
+                                onQuotedClick = { targetId ->
+                                    val items = messages.itemSnapshotList.items
+                                    val targetIndex = items.indexOfFirst { it.id == targetId }
+                                    if (targetIndex != -1) {
+                                        highlightedMessageId = targetId
+                                        coroutineScope.launch {
+                                            listState.animateScrollToItem(targetIndex)
+                                            kotlinx.coroutines.delay(1500)
+                                            if (highlightedMessageId == targetId) {
+                                                highlightedMessageId = null
+                                            }
+                                        }
+                                    } else {
+                                        android.widget.Toast.makeText(context, "Quoted message not found", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                isHighlighted = msg.id == highlightedMessageId,
+                                onRevoke = { onRevokeMessage(it.id) },
+                                onEdit = { msgToEdit -> editingMsg = msgToEdit; editingText = msgToEdit.content },
+                                onReEdit = { textToRestore -> inputText = textToRestore }
+                            )
                             Spacer(modifier = Modifier.height(24.dp))
                         }
                     }
@@ -260,41 +389,34 @@ fun ChatScreen(
         }
     }
 
-    var animatingMedia by remember { mutableStateOf<MessageUIModel?>(null) }
-    LaunchedEffect(selectedMedia) {
-        if (selectedMedia != null) {
-            animatingMedia = selectedMedia
-        }
-    }
-
-    androidx.activity.compose.BackHandler(enabled = selectedMedia != null) {
-        selectedMedia = null
-    }
-
-    androidx.compose.animation.AnimatedVisibility(
-        visible = selectedMedia != null,
-        enter = androidx.compose.animation.scaleIn(initialScale = 0.8f) + androidx.compose.animation.fadeIn(),
-        exit = androidx.compose.animation.scaleOut(targetScale = 0.8f) + androidx.compose.animation.fadeOut()
-    ) {
-        animatingMedia?.let { msg ->
-            InAppMediaViewer(
-                msg = msg,
-                onDismiss = { selectedMedia = null }
-            )
-        }
+    if (selectedMedia != null) {
+        InAppMediaViewer(
+            msg = selectedMedia!!,
+            onDismiss = { selectedMedia = null }
+        )
     }
 }
 
 @OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 @Composable
 // Renders an individual chat message bubble with dynamic styling based on sender.
-fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {}) {
+fun ChatBubble(
+    msg: MessageUIModel,
+    onMediaClick: (MessageUIModel) -> Unit = {},
+    onReply: (MessageUIModel) -> Unit = {},
+    onQuotedClick: (String) -> Unit = {},
+    isHighlighted: Boolean = false,
+    onRevoke: (MessageUIModel) -> Unit = {},
+    onEdit: (MessageUIModel) -> Unit = {},
+    onReEdit: (String) -> Unit = {}
+) {
     val context = LocalContext.current
     val isMe = msg.isMine
     val formatter = remember { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()) }
     val timeString = formatter.format(Date(msg.timestamp))
 
     var showSaveDialog by remember { mutableStateOf(false) }
+    var showMenu by remember { mutableStateOf(false) }
 
     if (showSaveDialog) {
         AlertDialog(
@@ -317,11 +439,38 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
         )
     }
 
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
-        horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
-        verticalAlignment = Alignment.Top
-    ) {
+    if (msg.isRevoked) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    text = if (isMe) "You revoked a message" else "Peer revoked a message",
+                    color = Color.Gray,
+                    fontSize = 12.sp
+                )
+                if (isMe && msg.ext == "txt" && msg.content.isNotEmpty()) {
+                    Text(
+                        text = "Re-edit",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .clickable { onReEdit(msg.content) }
+                    )
+                }
+            }
+        }
+    } else {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
+            horizontalArrangement = if (isMe) Arrangement.End else Arrangement.Start,
+            verticalAlignment = Alignment.Top
+        ) {
         if (!isMe) {
             Surface(
                 shape = RoundedCornerShape(12.dp),
@@ -345,55 +494,121 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
             horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
             modifier = Modifier.weight(1f, fill = false)
         ) {
-
-            Box(
-                modifier = Modifier
-                    .run {
-                        if (msg.ext == "txt") {
-                            background(
-                                color = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer,
-                                shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = 4.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
-                                        else RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
-                            ).padding(12.dp)
-                        } else {
-                            clip(RoundedCornerShape(12.dp))
+            Box {
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false }
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Reply") },
+                        onClick = {
+                            showMenu = false
+                            onReply(msg)
                         }
-                    }
-                    .widthIn(max = 250.dp)
-            ) {
-                if (msg.ext == "txt") {
-                    androidx.compose.foundation.text.selection.SelectionContainer {
-                        val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
-                        val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
-                            val words = msg.content.split(Regex("(?<=\\s)|(?=\\s)"))
-                            for (word in words) {
-                                if (word.startsWith("http://") || word.startsWith("https://")) {
-                                    pushStringAnnotation(tag = "URL", annotation = word)
-                                    withStyle(style = androidx.compose.ui.text.SpanStyle(color = Color(0xFF64B5F6), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
-                                        append(word)
-                                    }
-                                    pop()
-                                } else {
-                                    append(word)
-                                }
-                            }
-                        }
-
-                        androidx.compose.foundation.text.ClickableText(
-                            text = annotatedString,
-                            style = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 16.sp),
-                            onClick = { offset ->
-                                annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                                    .firstOrNull()?.let { annotation ->
-                                        try {
-                                            uriHandler.openUri(annotation.item)
-                                        } catch (e: Exception) {
-                                            android.widget.Toast.makeText(context, "Invalid URL", android.widget.Toast.LENGTH_SHORT).show()
-                                        }
-                                    }
+                    )
+                    if (msg.ext == "txt") {
+                        DropdownMenuItem(
+                            text = { Text("Copy Text") },
+                            onClick = {
+                                showMenu = false
+                                val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                                val clip = android.content.ClipData.newPlainText("MsgAT", msg.content)
+                                clipboard.setPrimaryClip(clip)
+                                android.widget.Toast.makeText(context, "Copied to clipboard", android.widget.Toast.LENGTH_SHORT).show()
                             }
                         )
                     }
+                    val canRevokeOrEdit = isMe && (System.currentTimeMillis() - msg.timestamp <= 120_000L)
+                    if (canRevokeOrEdit && !msg.isRevoked) {
+                        DropdownMenuItem(
+                            text = { Text("Revoke") },
+                            onClick = {
+                                showMenu = false
+                                onRevoke(msg)
+                            }
+                        )
+                        if (msg.ext == "txt") {
+                            DropdownMenuItem(
+                                text = { Text("Edit") },
+                                onClick = {
+                                    showMenu = false
+                                    onEdit(msg)
+                                }
+                            )
+                        }
+                    }
+                    if (msg.ext.lowercase() in listOf("jpg", "jpeg", "png", "webp", "mp4", "m4a")) {
+                        DropdownMenuItem(
+                            text = { Text("Save Media") },
+                            onClick = {
+                                showMenu = false
+                                showSaveDialog = true
+                            }
+                        )
+                    }
+                }
+
+                Column(
+                    horizontalAlignment = if (isMe) Alignment.End else Alignment.Start
+                ) {
+
+                    Box(
+                        modifier = Modifier
+                            .run {
+                                if (msg.ext == "txt") {
+                                    val normalBg = if (isMe) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.secondaryContainer
+                                    background(
+                                        color = normalBg,
+                                        shape = if (isMe) RoundedCornerShape(topStart = 20.dp, topEnd = 4.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
+                                                else RoundedCornerShape(topStart = 4.dp, topEnd = 20.dp, bottomEnd = 20.dp, bottomStart = 20.dp)
+                                    )
+                                    .combinedClickable(
+                                        onClick = {},
+                                        onLongClick = { showMenu = true }
+                                    )
+                                    .padding(12.dp)
+                                } else {
+                                    clip(RoundedCornerShape(12.dp))
+                                }
+                            }
+                            .widthIn(max = 250.dp)
+                    ) {
+                if (msg.ext == "txt") {
+                    val uriHandler = androidx.compose.ui.platform.LocalUriHandler.current
+                    val annotatedString = androidx.compose.ui.text.buildAnnotatedString {
+                        val words = msg.content.split(Regex("(?<=\\s)|(?=\\s)"))
+                        for (word in words) {
+                            if (word.startsWith("http://") || word.startsWith("https://")) {
+                                pushStringAnnotation(tag = "URL", annotation = word)
+                                withStyle(style = androidx.compose.ui.text.SpanStyle(color = Color(0xFF64B5F6), textDecoration = androidx.compose.ui.text.style.TextDecoration.Underline)) {
+                                    append(word)
+                                }
+                                pop()
+                            } else {
+                                append(word)
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = annotatedString,
+                        style = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 16.sp),
+                        modifier = Modifier.combinedClickable(
+                            onClick = {
+                                val urlAnnotation = annotatedString.getStringAnnotations(tag = "URL", start = 0, end = annotatedString.length).firstOrNull()
+                                if (urlAnnotation != null) {
+                                    try {
+                                        uriHandler.openUri(urlAnnotation.item)
+                                    } catch (e: Exception) {
+                                        android.widget.Toast.makeText(context, "Invalid URL", android.widget.Toast.LENGTH_SHORT).show()
+                                    }
+                                }
+                            },
+                            onLongClick = {
+                                showMenu = true
+                            }
+                        )
+                    )
                 } else if (msg.ext.lowercase() in listOf("jpg", "jpeg", "png", "webp")) {
                     val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, msg.content) {
                         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
@@ -422,7 +637,7 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
                             .background(Color.DarkGray)
                             .combinedClickable(
                                 onClick = { onMediaClick(msg) },
-                                onLongClick = { showSaveDialog = true }
+                                onLongClick = { showMenu = true }
                             ),
                         contentAlignment = Alignment.Center
                     ) {
@@ -452,7 +667,7 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
                         .background(Color.Black)
                         .combinedClickable(
                             onClick = { onMediaClick(msg) },
-                            onLongClick = { showSaveDialog = true }
+                            onLongClick = { showMenu = true }
                         ), contentAlignment = Alignment.Center) {
                         val currentThumbnail = thumbnail
                         if (currentThumbnail != null) {
@@ -469,14 +684,61 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
                     }
                 }
             }
+            }
+            }
 
-            Text(
-                text = timeString,
-                color = Color.DarkGray, 
-                fontSize = 10.sp,
+            if (msg.replyToId != null) {
+                val senderName = msg.replyToSender ?: "User"
+                val rawContent = msg.replyToContent ?: ""
+                val displayContent = if (rawContent.startsWith("[") && rawContent.endsWith("]")) {
+                    "[Media]"
+                } else {
+                    rawContent
+                }
+                Box(
+                    modifier = Modifier
+                        .padding(top = 2.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(Color(0xFF38383A))
+                        .clickable { msg.replyToId?.let { onQuotedClick(it) } }
+                        .padding(horizontal = 8.dp, vertical = 2.dp)
+                        .widthIn(max = 250.dp)
+                ) {
+                    Text(
+                        text = "$senderName: $displayContent",
+                        fontSize = 11.sp,
+                        color = Color(0xFFD0D0D0),
+                        maxLines = 1,
+                        overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis
+                    )
+                }
+            }
 
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier.padding(top = 4.dp, start = 4.dp, end = 4.dp)
-            )
+            ) {
+                Text(
+                    text = if (msg.isEdited) "$timeString (edited)" else timeString,
+                    color = Color.DarkGray, 
+                    fontSize = 10.sp
+                )
+                if (isMe) {
+                    Spacer(modifier = Modifier.width(4.dp))
+                    when (msg.status) {
+                        0 -> CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = Color.Gray)
+                        1 -> Icon(Icons.Default.Check, contentDescription = "Sent", tint = Color.Gray, modifier = Modifier.size(12.dp))
+                        2 -> Box(modifier = Modifier.width(16.dp), contentAlignment = Alignment.CenterStart) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(12.dp))
+                            Icon(Icons.Default.Check, contentDescription = "Delivered", tint = Color.Gray, modifier = Modifier.size(12.dp).offset(x = 4.dp))
+                        }
+                        else -> Box(modifier = Modifier.width(16.dp), contentAlignment = Alignment.CenterStart) {
+                            Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                            Icon(Icons.Default.Check, contentDescription = "Read", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp).offset(x = 4.dp))
+                        }
+                    }
+                }
+            }
         }
 
         if (isMe) {
@@ -497,6 +759,7 @@ fun ChatBubble(msg: MessageUIModel, onMediaClick: (MessageUIModel) -> Unit = {})
                 }
             }
         }
+    }
     }
 }
 

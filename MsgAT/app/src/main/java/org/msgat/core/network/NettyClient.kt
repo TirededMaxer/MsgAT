@@ -34,6 +34,31 @@ class NettyClient(
     private var channel: Channel? = null
 
     private var isManualDisconnect = false
+    private var retryAttempt = 0
+
+    fun resetBackoff() {
+        retryAttempt = 0
+    }
+
+    private fun calculateBackoffDelayMs(): Long {
+        val baseDelay = (1000L * (1 shl kotlin.math.min(retryAttempt, 5))).coerceAtMost(30000L)
+        val jitter = kotlin.random.Random.nextLong(0, 1000)
+        return baseDelay + jitter
+    }
+
+    private fun scheduleReconnect() {
+        if (isManualDisconnect || !isConfigured()) return
+        val delayMs = calculateBackoffDelayMs()
+        retryAttempt++
+        android.util.Log.i("MsgAT_Netty", "Scheduling reconnect attempt #$retryAttempt in ${delayMs}ms")
+        _connectionState.value = SyncState.DISCONNECTED
+        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
+            kotlinx.coroutines.delay(delayMs)
+            if (!isManualDisconnect && (channel == null || channel?.isActive != true)) {
+                connect()
+            }
+        }
+    }
 
     // Checks whether the client possesses the necessary configuration to initiate a connection.
     fun isConfigured(): Boolean = prefs.isConfigured()
@@ -73,7 +98,9 @@ class NettyClient(
 
                         p.addLast(GhostClientHandler(prefs, msgDao,
                             onStateChange = { newState ->
-
+                                if (newState == SyncState.SYNCED) {
+                                    resetBackoff()
+                                }
                                 _connectionState.value = newState
                             }
                         ))
@@ -86,23 +113,14 @@ class NettyClient(
                     channel = (future as io.netty.channel.ChannelFuture).channel()
                     channel?.closeFuture()?.addListener {
                         if (!isManualDisconnect) {
-                            android.util.Log.i("MsgAT_Netty", "Connection lost, attempting reconnect in 3s")
-                            _connectionState.value = SyncState.DISCONNECTED
-                            kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                                kotlinx.coroutines.delay(3000)
-                                connect()
-                            }
+                            scheduleReconnect()
                         }
                     }
                 } else {
                     android.util.Log.e("MsgAT_Netty", "Connection failed to $ip:$port", future.cause())
-                    _connectionState.value = SyncState.DISCONNECTED
                     workerGroup?.shutdownGracefully()
                     if (!isManualDisconnect) {
-                        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-                            kotlinx.coroutines.delay(5000)
-                            connect()
-                        }
+                        scheduleReconnect()
                     }
                 }
             }

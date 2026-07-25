@@ -102,6 +102,20 @@ class CallManager private constructor(private val context: Context) {
                     if (_callState.value != CallState.CONNECTED) {
                         _callState.value = CallState.CONNECTED
                         startCallTimers()
+                        try {
+                            peerConnection?.senders?.forEach { sender ->
+                                if (sender.track()?.kind() == "audio") {
+                                    val params = sender.parameters
+                                    params.encodings.forEach { encoding ->
+                                        encoding.maxBitrateBps = 32_000
+                                    }
+                                    sender.parameters = params
+                                    Log.d("MsgAT-Call", "Enforced audio RTP Sender max bitrate to 32 kbps")
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MsgAT-Call", "Failed to set audio sender max bitrate", e)
+                        }
                     }
                 } else if (newState == PeerConnection.IceConnectionState.DISCONNECTED || newState == PeerConnection.IceConnectionState.FAILED) {
                     endCall()
@@ -173,9 +187,11 @@ class CallManager private constructor(private val context: Context) {
 
                     peerConnection?.createOffer(object : SdpObserver {
                         override fun onCreateSuccess(desc: SessionDescription?) {
-                            desc?.let {
-                                peerConnection?.setLocalDescription(this, it)
-                                signalingHandler?.sendOffer(it, peerUuid)
+                            desc?.let { origDesc ->
+                                val optimizedSdp = OpusCodecHelper.modifySdpForOpus(origDesc.description, maxBitrateKbps = 32)
+                                val finalOffer = SessionDescription(origDesc.type, optimizedSdp)
+                                peerConnection?.setLocalDescription(this, finalOffer)
+                                signalingHandler?.sendOffer(finalOffer, peerUuid)
                             }
                         }
 
@@ -236,7 +252,9 @@ class CallManager private constructor(private val context: Context) {
         
         createPeerConnection()
 
-        val offer = signalingHandler?.pendingOffer ?: return
+        val rawOffer = signalingHandler?.pendingOffer ?: return
+        val optimizedOfferSdp = OpusCodecHelper.modifySdpForOpus(rawOffer.description, maxBitrateKbps = 32)
+        val offer = SessionDescription(rawOffer.type, optimizedOfferSdp)
 
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
@@ -246,9 +264,11 @@ class CallManager private constructor(private val context: Context) {
                 
                 peerConnection?.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(answer: SessionDescription?) {
-                        answer?.let {
-                            peerConnection?.setLocalDescription(this, it)
-                            signalingHandler?.sendAnswer(it, currentPeerUuid ?: return)
+                        answer?.let { origAnswer ->
+                            val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(origAnswer.description, maxBitrateKbps = 32)
+                            val finalAnswer = SessionDescription(origAnswer.type, optimizedAnswerSdp)
+                            peerConnection?.setLocalDescription(this, finalAnswer)
+                            signalingHandler?.sendAnswer(finalAnswer, currentPeerUuid ?: return)
                         }
                     }
                     override fun onSetSuccess() {}
@@ -267,6 +287,8 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun handleRemoteAnswer(answer: SessionDescription) {
+        val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32)
+        val finalAnswer = SessionDescription(answer.type, optimizedAnswerSdp)
         peerConnection?.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
             override fun onSetSuccess() {

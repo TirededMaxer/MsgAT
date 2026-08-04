@@ -316,7 +316,10 @@ fun ChatScreen(
                     reverseLayout = true,
                     contentPadding = PaddingValues(vertical = 16.dp)
                 ) {
-                    items(messages.itemCount, key = { index -> messages.peek(index)?.id ?: index }) { index ->
+                    items(messages.itemCount, key = { index -> 
+                        val msg = messages.peek(index)
+                        if (msg != null) "${msg.id}_${msg.status}_${msg.isRevoked}_${msg.isEdited}" else index 
+                    }) { index ->
                         val msg = messages[index]
                         if (msg != null) {
                             ChatBubble(

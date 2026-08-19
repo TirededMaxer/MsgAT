@@ -43,7 +43,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.animation.togetherWith
 
-import org.msgat.utils.MediaHelper.saveBase64ToGallery
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -430,7 +429,8 @@ fun ChatBubble(
             text = { Text("Do you want to save this media to your gallery?", color = MaterialTheme.colorScheme.onSurface) },
             confirmButton = {
                 TextButton(onClick = {
-                    val uri = saveBase64ToGallery(context, msg.content, msg.ext)
+                    val mediaFile = org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.id, msg.ext, msg.content)
+                    val uri = if (mediaFile != null) org.msgat.core.media.MediaStorageManager.saveToGallery(context, mediaFile, msg.ext) else null
                     if (uri != null) android.widget.Toast.makeText(context, "Saved to Gallery", android.widget.Toast.LENGTH_SHORT).show()
                     else android.widget.Toast.makeText(context, "Failed to save", android.widget.Toast.LENGTH_SHORT).show()
                     showSaveDialog = false
@@ -613,26 +613,9 @@ fun ChatBubble(
                         )
                     )
                 } else if (msg.ext.lowercase() in listOf("jpg", "jpeg", "png", "webp")) {
-                    val bitmap by androidx.compose.runtime.produceState<androidx.compose.ui.graphics.ImageBitmap?>(initialValue = null, msg.content) {
-                        value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            try {
-                                var cleanBase64 = msg.content.replace(Regex("\\s+"), "")
-                                cleanBase64 = cleanBase64.replace("=", "")
-                                val padding = cleanBase64.length % 4
-                                if (padding > 0) {
-                                    cleanBase64 += "=".repeat(4 - padding)
-                                }
-                                val bytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
-                                val options = android.graphics.BitmapFactory.Options()
-                                options.inJustDecodeBounds = true
-                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                                options.inSampleSize = calculateInSampleSize(options, 400, 400)
-                                options.inJustDecodeBounds = false
-                                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)?.asImageBitmap()
-                            } catch(e:Exception) { null }
-                        }
+                    val mediaFile = remember(msg.id, msg.content) {
+                        org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.id, msg.ext, msg.content)
                     }
-                    val currentBitmap = bitmap
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -644,9 +627,13 @@ fun ChatBubble(
                             ),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (currentBitmap != null) {
-                            androidx.compose.foundation.Image(
-                                bitmap = currentBitmap,
+                        if (mediaFile != null && mediaFile.exists()) {
+                            coil.compose.AsyncImage(
+                                model = coil.request.ImageRequest.Builder(context)
+                                    .data(mediaFile)
+                                    .size(400, 400)
+                                    .crossfade(true)
+                                    .build(),
                                 contentDescription = "Image",
                                 contentScale = androidx.compose.ui.layout.ContentScale.Crop,
                                 modifier = Modifier.fillMaxSize()
@@ -659,9 +646,20 @@ fun ChatBubble(
                         }
                     }
                 } else {
-                    val thumbnail by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(initialValue = null, msg.content) {
+                    val mediaFile = remember(msg.id, msg.content) {
+                        org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.id, msg.ext, msg.content)
+                    }
+                    val thumbnail by androidx.compose.runtime.produceState<android.graphics.Bitmap?>(initialValue = null, mediaFile) {
                         value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                            org.msgat.core.media.MediaCacheManager.getVideoThumbnail(context, msg.id, msg.content)
+                            if (mediaFile != null && mediaFile.exists()) {
+                                try {
+                                    val retriever = android.media.MediaMetadataRetriever()
+                                    retriever.setDataSource(mediaFile.absolutePath)
+                                    val frame = retriever.getFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                                    retriever.release()
+                                    frame
+                                } catch (_: Exception) { null }
+                            } else null
                         }
                     }
                     Box(modifier = Modifier
@@ -766,20 +764,6 @@ fun ChatBubble(
     }
 }
 
-fun calculateInSampleSize(options: android.graphics.BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-    val height = options.outHeight
-    val width = options.outWidth
-    var inSampleSize = 1
-    if (height > reqHeight || width > reqWidth) {
-        val halfHeight = height / 2
-        val halfWidth = width / 2
-        while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-            inSampleSize *= 2
-        }
-    }
-    return inSampleSize
-}
-
 @Composable
 fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -795,22 +779,16 @@ fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
             var scale by remember { mutableStateOf(1f) }
             var offset by remember { mutableStateOf(androidx.compose.ui.geometry.Offset.Zero) }
 
-            val bitmap = remember(msg.content) {
-                try {
-                    var cleanBase64 = msg.content.replace(Regex("\\s+"), "")
-                    cleanBase64 = cleanBase64.replace("=", "")
-                    val padding = cleanBase64.length % 4
-                    if (padding > 0) {
-                        cleanBase64 += "=".repeat(4 - padding)
-                    }
-                    val bytes = android.util.Base64.decode(cleanBase64, android.util.Base64.DEFAULT)
-                    android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap()
-                } catch(e:Exception) { null }
+            val mediaFile = remember(msg.id, msg.content) {
+                org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.id, msg.ext, msg.content)
             }
 
-            if (bitmap != null) {
-                androidx.compose.foundation.Image(
-                    bitmap = bitmap,
+            if (mediaFile != null && mediaFile.exists()) {
+                coil.compose.AsyncImage(
+                    model = coil.request.ImageRequest.Builder(context)
+                        .data(mediaFile)
+                        .crossfade(true)
+                        .build(),
                     contentDescription = "Full Screen Image",
                     modifier = androidx.compose.ui.Modifier
                         .fillMaxSize()
@@ -831,14 +809,11 @@ fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
                 Text("Corrupted Image", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }
         } else {
-            val videoFile by androidx.compose.runtime.produceState<java.io.File?>(initialValue = null, msg.content) {
-                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    org.msgat.core.media.MediaCacheManager.getVideoFileFromBase64(context, msg.id, msg.content)
-                }
+            val videoFile = remember(msg.id, msg.content) {
+                org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.id, msg.ext, msg.content)
             }
-            val currentVideoFile = videoFile
-            if (currentVideoFile != null) {
-                VideoPlayer(videoFile = currentVideoFile, onDismiss = onDismiss)
+            if (videoFile != null && videoFile.exists()) {
+                VideoPlayer(videoFile = videoFile, onDismiss = onDismiss)
             } else {
                 Text("Loading Video...", color = Color.White, modifier = Modifier.align(Alignment.Center))
             }

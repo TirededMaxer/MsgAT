@@ -198,10 +198,28 @@ class GhostClientHandler(
                                     finalData 
                                 }
                             } else {
-                                finalData 
+                                try {
+                                    val context = org.msgat.MsgATApp.instance.applicationContext
+                                    var cleanBase64 = finalData.replace(Regex("\\s+"), "").replace("=", "")
+                                    val padding = cleanBase64.length % 4
+                                    if (padding > 0) {
+                                        cleanBase64 += "=".repeat(4 - padding)
+                                    }
+                                    val bytes = Base64.decode(cleanBase64, Base64.DEFAULT)
+                                    val savedFile = org.msgat.core.media.MediaStorageManager.saveMediaBytes(context, fileId, decryptedPayload.ext, bytes)
+                                    savedFile.absolutePath
+                                } catch (e: Exception) {
+                                    Log.e("MsgAT", "Failed to save incoming media to sandbox", e)
+                                    finalData
+                                }
                             }
 
                             if (decryptedPayload.action == "revoke" && !decryptedPayload.targetMessageId.isNullOrEmpty()) {
+                                val targetMsg = msgDao.getMessageById(decryptedPayload.targetMessageId)
+                                if (targetMsg != null && targetMsg.ext != "txt") {
+                                    val context = org.msgat.MsgATApp.instance.applicationContext
+                                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, targetMsg.messageId, targetMsg.ext)
+                                }
                                 msgDao.updateMessageRevoked(decryptedPayload.targetMessageId)
                             } else if (decryptedPayload.action == "edit" && !decryptedPayload.targetMessageId.isNullOrEmpty()) {
                                 val editedContent = try {

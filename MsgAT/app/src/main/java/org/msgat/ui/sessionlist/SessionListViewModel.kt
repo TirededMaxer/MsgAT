@@ -140,6 +140,13 @@ class SessionListViewModel(
                     nettyClient.sendPacket(packet)
                 }
             }
+            val msgs = msgDao.getMessageListByConversation(uuid)
+            val context = org.msgat.MsgATApp.instance.applicationContext
+            for (m in msgs) {
+                if (m.ext != "txt") {
+                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, m.messageId, m.ext)
+                }
+            }
             msgDao.deleteConversation(uuid)
             msgDao.clearMessages(uuid)
         }
@@ -147,7 +154,14 @@ class SessionListViewModel(
 
     // Wipes all chat history for a specific conversation without deleting the thread.
     fun clearMessages(uuid: String) {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
+            val msgs = msgDao.getMessageListByConversation(uuid)
+            val context = org.msgat.MsgATApp.instance.applicationContext
+            for (m in msgs) {
+                if (m.ext != "txt") {
+                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, m.messageId, m.ext)
+                }
+            }
             msgDao.clearMessages(uuid)
         }
     }
@@ -185,6 +199,7 @@ class SessionListViewModel(
             msgDao.clearAllMessages()
             msgDao.clearAllConversations()
             msgDao.clearAllFriendRequests()
+            org.msgat.core.media.MediaStorageManager.deleteAllMedia(org.msgat.MsgATApp.instance.applicationContext)
             
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 securePrefs.myNickname = ""

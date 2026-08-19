@@ -40,6 +40,9 @@ interface MsgDao {
     // Retrieves an observable flow of all messages belonging to a specific conversation.
     fun getMessages(uuid: String): Flow<List<ChatMessage>>
 
+    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid")
+    suspend fun getMessageListByConversation(uuid: String): List<ChatMessage>
+
     @Query("SELECT * FROM messages WHERE conversationUuid = :uuid ORDER BY timestamp DESC")
     // Retrieves a PagingSource of messages belonging to a specific conversation.
     fun getPagingMessages(uuid: String): androidx.paging.PagingSource<Int, ChatMessage>

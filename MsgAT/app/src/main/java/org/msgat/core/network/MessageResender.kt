@@ -69,18 +69,42 @@ object MessageResender {
                             msgDao.updateMessageStatus(msg.messageId, 1)
                         }
                     } else {
-                        val contentLen = msg.content.length
-                        val actualChunkSize = 40000
-                        val chunksCount = (contentLen + actualChunkSize - 1) / actualChunkSize
-                        
-                        for (i in 0 until chunksCount) {
-                            val end = kotlin.math.min(contentLen, (i + 1) * actualChunkSize)
-                            val chunkData = msg.content.substring(i * actualChunkSize, end)
-                            
+                        val context = app.applicationContext
+                        val mediaFile = org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.messageId, msg.ext, msg.content)
+                        val chunks = if (mediaFile != null && mediaFile.exists()) {
+                            val bytes = mediaFile.readBytes()
+                            val chunkList = mutableListOf<String>()
+                            var offset = 0
+                            val chunkSize = 45000
+                            while (offset < bytes.size) {
+                                val length = chunkSize.coerceAtMost(bytes.size - offset)
+                                val chunkBytes = bytes.copyOfRange(offset, offset + length)
+                                chunkList.add(Base64.encodeToString(chunkBytes, Base64.NO_WRAP))
+                                offset += length
+                            }
+                            chunkList
+                        } else {
+                            val contentLen = msg.content.length
+                            val actualChunkSize = 40000
+                            val chunksCount = (contentLen + actualChunkSize - 1) / actualChunkSize
+                            val chunkList = mutableListOf<String>()
+                            for (i in 0 until chunksCount) {
+                                val end = kotlin.math.min(contentLen, (i + 1) * actualChunkSize)
+                                chunkList.add(msg.content.substring(i * actualChunkSize, end))
+                            }
+                            chunkList
+                        }
+
+                        if (chunks.isEmpty()) continue
+                        val totalChunks = chunks.size
+                        var allSent = true
+
+                        for (i in 0 until totalChunks) {
+                            val chunkData = chunks[i]
                             val payload = MessagePayload(
                                 senderUuid = myUuid,
                                 fileId = msg.messageId,
-                                total = chunksCount,
+                                total = totalChunks,
                                 index = i,
                                 ext = msg.ext,
                                 data = chunkData,
@@ -111,9 +135,18 @@ object MessageResender {
                             val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, cipherText, authTag)
                             
                             val success = nettyClient.sendPacket(packet)
-                            if (success && i == chunksCount - 1) {
-                                msgDao.updateMessageStatus(msg.messageId, 1)
+                            if (!success) {
+                                allSent = false
+                                break
                             }
+
+                            if (i < totalChunks - 1) {
+                                kotlinx.coroutines.delay(50)
+                            }
+                        }
+
+                        if (allSent) {
+                            msgDao.updateMessageStatus(msg.messageId, 1)
                         }
                     }
                 }

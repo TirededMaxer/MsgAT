@@ -189,18 +189,13 @@ class ChatViewModel(
                 }
 
                 val ext = getExtensionFromUri(context, uri)
+                val savedFile = org.msgat.core.media.MediaStorageManager.saveMediaFromUri(context, msgId, ext, uri)
 
-                val chunks = uriToBase64Chunks(context, uri)
-
-                if (chunks.isEmpty()) return@launch
-                val total = chunks.size
-
-                val localContent = chunks.joinToString("")
                 val chatMsg = ChatMessage(
                     messageId = msgId,
                     conversationUuid = targetUuid,
                     isMine = true,
-                    content = localContent,
+                    content = savedFile.absolutePath,
                     ext = ext,
                     timestamp = System.currentTimeMillis(),
                     isRead = true,
@@ -211,7 +206,13 @@ class ChatViewModel(
                 )
                 msgDao.insertMessage(chatMsg)
 
-                chunks.forEachIndexed { index, chunkData ->
+                val chunks = uriToBase64Chunks(context, uri)
+                if (chunks.isEmpty()) return@launch
+                val total = chunks.size
+
+                var allChunksSent = true
+                for (index in 0 until total) {
+                    val chunkData = chunks[index]
                     val payload = MessagePayload(
                         senderUuid = myUuid,
                         fileId = msgId,
@@ -250,15 +251,20 @@ class ChatViewModel(
 
                     val success = nettyClient.sendPacket(packet)
                     if (!success) {
-                        throw Exception("Chunk $index 发送失败")
+                        allChunksSent = false
+                        break
                     }
 
-                    kotlinx.coroutines.delay(50)
+                    if (index < total - 1) {
+                        kotlinx.coroutines.delay(50)
+                    }
+                }
+
+                if (allChunksSent) {
+                    msgDao.updateMessageStatus(msgId, 1)
                 }
             } catch (e: Exception) {
                 Log.e("ChatViewModel", "发送媒体消息失败", e)
-                msgDao.deleteMessageById(msgId)
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
             }
         }
     }
@@ -296,6 +302,11 @@ class ChatViewModel(
 
     fun revokeMessage(messageId: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            val targetMsg = msgDao.getMessageById(messageId)
+            if (targetMsg != null && targetMsg.ext != "txt") {
+                val context = org.msgat.MsgATApp.instance.applicationContext
+                org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, targetMsg.messageId, targetMsg.ext)
+            }
             msgDao.updateMessageRevoked(messageId)
             val convo = msgDao.getConversationByUuid(targetUuid) ?: return@launch
             val peerPublicKeyBase64 = convo.peerPublicKey

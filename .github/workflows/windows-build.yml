@@ -22,15 +22,16 @@ jobs:
         working-directory: MsgAT_Windows
         run: ./gradlew.bat jar --no-daemon
 
-      - name: jpackage - app image (folder layout for EVB packaging)
+      - name: jpackage - app image (exe name MUST match cfg name for portable rename)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path appdir | Out-Null
           Copy-Item MsgAT_Windows/build/libs/MsgAT-Windows-*.jar appdir/
           jpackage --type app-image `
-            --name MsgAT `
+            --name MsgAT-Portable `
             --app-version 1.1.0 `
             --vendor "MsgAT Team" `
+            --icon MsgAT_Windows/src/main/resources/icons/icon.ico `
             --input appdir `
             --main-jar (Get-ChildItem appdir/*.jar | Select-Object -First 1).Name `
             --main-class org.msgat.MainKt `
@@ -45,11 +46,11 @@ jobs:
         shell: pwsh
         continue-on-error: true
         run: |
-          $p = Start-Process -FilePath "./dist/MsgAT/MsgAT.exe" -PassThru
+          $p = Start-Process -FilePath "./dist/MsgAT-Portable/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 12
-          $alive = Get-Process -Name MsgAT -ErrorAction SilentlyContinue
+          $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if ($alive) { "APP_RUNNING_OK" } else { "APP_CRASHED_AT_LAUNCH" }
-          Stop-Process -Name MsgAT -Force -ErrorAction SilentlyContinue
+          Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
 
       - name: Download Enigma Virtual Box (portable single-EXE packer)
         shell: pwsh
@@ -67,15 +68,13 @@ jobs:
           npm install generate-evb --no-save --silent
           node -e "
             const generateEvb = require('generate-evb');
-            const path = require('path');
-            const appDir = 'dist/MsgAT';
-            const inputExe = appDir + '/MsgAT.exe';
+            const appDir = 'dist/MsgAT-Portable';
+            const inputExe = appDir + '/MsgAT-Portable.exe';
             const outputExe = 'dist/MsgAT-Portable.exe';
             generateEvb('dist/MsgAT.evb', inputExe, outputExe, appDir, {
               filter: (fullPath, name, isDir) => {
-                // 不要递归打包 MsgAT.exe 自身（它将作为宿主解释器）
-                if (!isDir && name.toLowerCase() === 'msgat.exe') return false;
-                // runtime/bin 里的 exe/dll 必须保留（JVM 虚拟执行）
+                // 不要递归打包 exe 自身（它将作为宿主解释器）
+                if (!isDir && name.toLowerCase() === 'msgat-portable.exe') return false;
                 return true;
               }
             });

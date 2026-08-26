@@ -1,0 +1,90 @@
+name: Windows Build (MsgAT single EXE)
+
+on:
+  push:
+    branches: [ msgat-windows-build ]
+  workflow_dispatch:
+
+jobs:
+  build-windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Build fat JAR (with webrtc-java natives)
+        working-directory: MsgAT_Windows
+        run: ./gradlew.bat jar --no-daemon --stacktrace
+
+      - name: Install WiX 3 (required by jpackage --type exe)
+        run: choco install wixtoolset -y
+
+      - name: Prepare app directory
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path appdir | Out-Null
+          Copy-Item MsgAT_Windows/build/libs/MsgAT-Windows-*.jar appdir/
+          Get-ChildItem appdir
+
+      - name: jpackage - app image
+        shell: pwsh
+        run: |
+          jpackage --type app-image `
+            --name MsgAT `
+            --app-version 1.1.0 `
+            --vendor "MsgAT Team" `
+            --input appdir `
+            --main-jar (Get-ChildItem appdir/*.jar | Select-Object -First 1).Name `
+            --main-class org.msgat.MainKt `
+            --dest dist `
+            --java-options "-Dfile.encoding=UTF-8" `
+            --java-options "-Dskiko.renderApi=DIRECT3D" `
+            --java-options "-XX:+UseG1GC" `
+            --java-options "-XX:+UseStringDeduplication" `
+            --java-options "-Xmx2g"
+
+      - name: Smoke test - launch app and verify it stays alive
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath "./dist/MsgAT/MsgAT.exe" -PassThru
+          Start-Sleep -Seconds 12
+          $alive = Get-Process -Name MsgAT -ErrorAction SilentlyContinue
+          if ($alive) { "APP_RUNNING_OK" } else { "APP_CRASHED_AT_LAUNCH" }
+          if (-not $alive) { exit 1 }
+          Stop-Process -Name MsgAT -Force -ErrorAction SilentlyContinue
+
+      - name: jpackage - single-file EXE installer
+        shell: pwsh
+        run: |
+          jpackage --type exe `
+            --name MsgAT `
+            --app-version 1.1.0 `
+            --vendor "MsgAT Team" `
+            --input appdir `
+            --main-jar (Get-ChildItem appdir/*.jar | Select-Object -First 1).Name `
+            --main-class org.msgat.MainKt `
+            --dest dist-exe `
+            --win-menu `
+            --win-shortcut `
+            --java-options "-Dfile.encoding=UTF-8" `
+            --java-options "-Dskiko.renderApi=DIRECT3D" `
+            --java-options "-XX:+UseG1GC" `
+            --java-options "-XX:+UseStringDeduplication" `
+            --java-options "-Xmx2g"
+
+      - name: List artifacts
+        shell: pwsh
+        run: Get-ChildItem -Recurse dist-exe | Select-Object FullName, Length
+
+      - name: Upload EXE installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: MsgAT-Windows-Installer
+          path: dist-exe/*.exe
+          if-no-files-found: error

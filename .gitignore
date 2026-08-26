@@ -1,8 +1,11 @@
-*.iml
-.idea/
-.DS_Store
-build/
-out/
-.gradle/
-local.properties
-target/
+# MsgAT_Windows build artifacts & IDE state
+MsgAT_Windows/build/
+MsgAT_Windows/.gradle/
+MsgAT_Windows/.idea/
+MsgAT_Windows/.kotlin/
+MsgAT_Windows/libs/
+MsgAT_Windows/MsgAT.exe
+MsgAT_Windows/MsgAT_Release_Windows/
+MsgAT_Windows/MsgAT_Release_Windows.zip
+*.class
+**/.DS_Store

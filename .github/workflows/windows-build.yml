@@ -76,7 +76,12 @@ jobs:
             'GUIMode="2"'
             ';!@InstallEnd@!'
           )
-          Set-Content -Path "dist\config.txt" -Value ($lines -join "`r`n") -Encoding UTF8 -NoNewline
+          $cfgText = $lines -join "`r`n"
+          [System.IO.File]::WriteAllText(
+            "dist\config.txt",
+            $cfgText,
+            [System.Text.UTF8Encoding]::new($false)
+          )
 
           # 4. Concatenate: SFX header + config + archive => single EXE
           cmd /c "copy /b `"$($sfx.FullName)`" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
@@ -104,7 +109,7 @@ jobs:
             "PACKED_EXE_CRASHED"
           } else {
             $title = $alive.MainWindowTitle
-            if ($title -match "无法|Error|入口|错误|InitCommonControls") {
+            if ($title -match "无法|Error|入口|错误|InitCommonControls|Extraction|Failed") {
               "PACKED_EXE_ERROR_DIALOG: $title"
             } else {
               "PACKED_EXE_RUNNING_OK title=[$title]"

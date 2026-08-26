@@ -1,5 +1,5 @@
 // Generate an Enigma Virtual Box project that packs the jpackage app-image
-// into a single portable EXE (JVM DLLs mapped in-memory, no temp-file race).
+// into a single portable EXE.
 const generateEvb = require('generate-evb');
 
 const appDir = 'dist/MsgAT-Portable';
@@ -14,10 +14,10 @@ generateEvb('dist/MsgAT.evb', inputExe, outputExe, appDir, {
   },
   evbOptions: {
     deleteExtractedOnExit: true,
-    compressFiles: true,
+    // KEY: no compression -> DLLs are mapped directly from raw bytes
+    // (avoids the jli.dll import-table corruption on real desktops)
+    compressFiles: false,
     shareVirtualSystem: false,
-    // JVM loads many DLLs concurrently at startup; the temp-file mapping
-    // races and corrupts jli.dll -> "InitCommonControlsEx entry point" error.
     mapExecutableWithTemporaryFile: false,
     allowRunningOfVirtualExeFiles: true
   }

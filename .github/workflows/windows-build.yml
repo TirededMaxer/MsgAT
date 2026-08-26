@@ -43,153 +43,44 @@ jobs:
             --java-options "-XX:+UseStringDeduplication" `
             --java-options "-Xmx2g"
 
-      - name: Install 7-Zip (full installer with SFX modules)
+      - name: Install Enigma Virtual Box
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-x64.exe" -OutFile "7zinst.exe"
-          Start-Process -FilePath ".\7zinst.exe" -ArgumentList "/S","/D=C:\7z" -Wait
-          if (-not (Test-Path "C:\7z\7z.exe")) { throw "7-Zip install failed" }
-          Get-ChildItem "C:\7z\7z*.sfx" | Select-Object Name
+          Invoke-WebRequest -Uri "https://www.enigmaprotector.com/assets/files/enigmavb.exe" -OutFile "evb_installer.exe"
+          Start-Process -FilePath "evb_installer.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          $cli = Get-ChildItem "C:\Program Files*\Enigma Virtual Box\enigmavbconsole.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cli) { throw "enigmavbconsole.exe not found after install" }
+          Write-Host "EVB CLI: $($cli.FullName)"
+          $cli.FullName | Out-File -FilePath evbcli.txt -Encoding ascii
 
-      - name: Create self-extracting single EXE (7z SFX)
+      - name: Generate EVB project & pack single EXE
         shell: pwsh
         run: |
-          # 1. Get the installer SFX module (7zSD.sfx) from the official LZMA SDK package
-          Invoke-WebRequest -Uri "https://www.7-zip.org/a/lzma2501.7z" -OutFile "lzma.7z"
-          & "C:\7z\7z.exe" x -y "lzma.7z" "-oC:\7z\lzma" | Out-Null
-          $sfxPath = "C:\7z\lzma\bin\7zS2.sfx"
-          if (-not (Test-Path $sfxPath)) { throw "7zS2.sfx not found at $sfxPath" }
-          $sfx = Get-Item $sfxPath
-          Write-Host "SFX module: $($sfx.FullName)"
+          npm install generate-evb --no-save --silent
+          node pack-evb.js
+          $cli = (Get-Content evbcli.txt).Trim()
+          & $cli "dist/MsgAT.evb"
+          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "EVB pack failed - no output exe" }
+          Get-Item "dist/MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
-          # 2. Compress the app-image folder with 7zr (same decoder core as 7zSD.sfx)
-          Push-Location "dist/MsgAT-Portable"
-          & "C:\7z\lzma\bin\7zr.exe" a "..\msgat-app.7z" * | Out-Null
-          Pop-Location
-          if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
-
-          # 3. SFX config: silent mode, run launcher, auto-clean temp on exit
-          $lines = @(
-            ';!@Install@!UTF-8!'
-            'Title="MsgAT Portable"'
-            'BeginPrompt=""'
-            'Progress="no"'
-            'RunProgram="MsgAT-Portable.exe"'
-            'GUIMode="2"'
-            ';!@InstallEnd@!'
-          )
-          $cfgText = $lines -join "`r`n"
-          [System.IO.File]::WriteAllText(
-            "dist\config.txt",
-            $cfgText,
-            [System.Text.UTF8Encoding]::new($false)
-          )
-
-          # 4. Concatenate: SFX header + config + archive => single EXE
-          cmd /c "copy /b `"$($sfx.FullName)`" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
-          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "SFX concat failed" }
-
-          # 5. Replace icon/metadata (7zSD default icon -> real app icon)
-          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
-          & .\rcedit.exe "dist\MsgAT-Portable.exe" `
-            --set-icon "MsgAT_Windows\src\main\resources\icons\icon.ico" `
-            --set-file-version "1.1.0.0" `
-            --set-product-version "1.1.0.0" `
-            --set-version-string "ProductName" "MsgAT" `
-            --set-version-string "FileDescription" "MsgAT - Secure P2P Encrypted Messenger" `
-            --set-version-string "CompanyName" "MsgAT Team"
-          Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
-
-      - name: Diagnostics - cross matrix SFX tests
+      - name: Smoke test - single EXE must open the real app window
         shell: pwsh
         continue-on-error: true
         run: |
-          $sfxModule = "C:\7z\lzma\bin\7zS2.sfx"
-
-          function Make-Sfx($name, $dirToPack, $runProg) {
-            Push-Location $dirToPack
-            & "C:\7z\lzma\bin\7zr.exe" a "..\tmp-$name.7z" * | Out-Null
-            Pop-Location
-            $cfg = ";!@Install@!UTF-8!`r`nTitle=`"T`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"$runProg`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
-            [System.IO.File]::WriteAllText("tmp-$name.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
-            cmd /c "copy /b $sfxModule + tmp-$name.txt + tmp-$name.7z tmp-$name.exe" | Out-Null
-          }
-
-          # T1: full archive but registered by 7z - can it read the final exe?
-          & "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Select-String -Pattern "MsgAT-Portable.cfg|runtime|Error|Cannot" | Select-Object -First 5 | ForEach-Object { "T1_7Z_READ: $($_.Line)" }
-
-          # T2: tiny archive with the SAME config style (control)
-          New-Item -ItemType Directory -Force -Path tiny | Out-Null
-          Set-Content -Path "tiny\a.txt" -Value "x" -NoNewline
-          Make-Sfx "tiny" "tiny" "a.txt"
-
-          # T3: app-only (no runtime) archive
-          New-Item -ItemType Directory -Force -Path apponly | Out-Null
-          Copy-Item -Recurse -Force "dist\MsgAT-Portable\app" "apponly\app"
-          Copy-Item -Force "dist\MsgAT-Portable\MsgAT-Portable.exe" "apponly\"
-          Make-Sfx "apponly" "apponly" "MsgAT-Portable.exe"
-
-          # T4: runtime-only subtree (bin)
-          New-Item -ItemType Directory -Force -Path rtbin | Out-Null
-          Copy-Item -Recurse -Force "dist\MsgAT-Portable\runtime\bin" "rtbin\bin"
-          Make-Sfx "rtbin" "rtbin" "bin\javaw.exe"
-
-          foreach ($t in @("tmp-tiny.exe","tmp-apponly.exe","tmp-rtbin.exe")) {
-            $p2 = Start-Process -FilePath "./$t" -PassThru
-            Start-Sleep -Seconds 10
-            $a2 = Get-Process -Name ($t -replace "tmp-","" -replace ".exe","") -ErrorAction SilentlyContinue
-            if ($a2) { "$t => OK" } else { "$t => FAILED" }
-            Stop-Process -Name ($t -replace "tmp-","" -replace ".exe","") -Force -ErrorAction SilentlyContinue
-          }
-
-          # Final: full app
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 25
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
-          if ($alive) {
+          if (-not $alive) {
+            "PACKED_EXE_CRASHED"
+          } else {
             $title = $alive.MainWindowTitle
-            "FULL_TITLE=[$title]"
-            Add-Type -AssemblyName UIAutomationClient
-            try {
-              $el = [System.Windows.Automation.AutomationElement]::FromHandle($alive.MainWindowHandle)
-              $all = $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-              foreach ($e in $all) { if ($e.Current.Name) { "DIALOG_TEXT: " + $e.Current.Name } }
-            } catch { "UIA_FAILED" }
-          } else { "FULL_CRASHED" }
+            if ($title -match "无法|Error|入口|错误|InitCommonControls|Extraction|7-Zip|Failed") {
+              "PACKED_EXE_ERROR_DIALOG: [$title]"
+            } else {
+              "PACKED_EXE_RUNNING_OK title=[$title]"
+            }
+          }
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
-      - name: Capture desktop screenshot + try native 7z.sfx module
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          # Native module test: C:\7z\7z.sfx (from the full 25.01 installer)
-          $sfxPath = "C:\7z\7z.sfx"
-          if (Test-Path $sfxPath) {
-            $cfg = ";!@Install@!UTF-8!`r`nTitle=`"T`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
-            [System.IO.File]::WriteAllText("native.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
-            cmd /c "copy /b C:\7z\7z.sfx + native.txt + dist\msgat-app.7z dist\MsgAT-Native.exe" | Out-Null
-            $p2 = Start-Process -FilePath "./dist/MsgAT-Native.exe" -PassThru
-            Start-Sleep -Seconds 25
-            $a2 = Get-Process -Name "MsgAT-Native" -ErrorAction SilentlyContinue
-            if ($a2) { $t2 = $a2.MainWindowTitle; "NATIVE_TITLE=[$t2]" } else { "NATIVE_CRASHED" }
-            Stop-Process -Name "MsgAT-Native" -Force -ErrorAction SilentlyContinue
-          } else { "NO_NATIVE_MODULE" }
-
-          # Screenshot the desktop to read the error dialog of the S2 build
-          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-          $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
-          $g = [System.Drawing.Graphics]::FromImage($bmp)
-          $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
-          $bmp.Save("desktop.png", [System.Drawing.Imaging.ImageFormat]::Png)
-          "SCREENSHOT_SAVED"
-
-      - name: Upload desktop screenshot
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: desktop-screenshot
-          path: desktop.png
-          if-no-files-found: ignore
 
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4

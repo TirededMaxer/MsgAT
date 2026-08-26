@@ -100,45 +100,63 @@ jobs:
             --set-version-string "CompanyName" "MsgAT Team"
           Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Diagnostics - minimal SFX + archive integrity + dialog text capture
+      - name: Diagnostics - cross matrix SFX tests
         shell: pwsh
         continue-on-error: true
         run: |
-          # A. Archive integrity check (rules out codec/archive problem)
-          & "C:\7z\7z.exe" t "dist\msgat-app.7z" | Select-String -Pattern "Everything is Ok|Error" | Select-Object -First 1 | ForEach-Object { "ARCHIVE_CHECK: $($_.Line)" }
+          $sfxModule = "C:\7z\lzma\bin\7zS2.sfx"
 
-          # B. Minimal SFX smoke test (isolates stub from app payload)
-          Set-Content -Path "min.txt" -Value "min" -NoNewline
-          & "C:\7z\lzma\bin\7zr.exe" a "mini.7z" "min.txt" | Out-Null
-          $miniCfg = ";!@Install@!UTF-8!`r`nTitle=`"Mini`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"min.txt`"`r`n;!@InstallEnd@!"
-          [System.IO.File]::WriteAllText("mini.txt", $miniCfg, [System.Text.UTF8Encoding]::new($false))
-          cmd /c "copy /b C:\7z\lzma\bin\7zS2.sfx + mini.txt + mini.7z mini.exe" | Out-Null
-          $mp = Start-Process -FilePath "./mini.exe" -PassThru
-          Start-Sleep -Seconds 8
-          $mAlive = Get-Process -Name "mini" -ErrorAction SilentlyContinue
-          if ($mAlive) { "MINI_SFX_OK" } else { "MINI_SFX_FAILED" }
-          Stop-Process -Name "mini" -Force -ErrorAction SilentlyContinue
+          function Make-Sfx($name, $dirToPack, $runProg) {
+            Push-Location $dirToPack
+            & "C:\7z\lzma\bin\7zr.exe" a "..\tmp-$name.7z" * | Out-Null
+            Pop-Location
+            $cfg = ";!@Install@!UTF-8!`r`nTitle=`"T`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"$runProg`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
+            [System.IO.File]::WriteAllText("tmp-$name.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
+            cmd /c "copy /b $sfxModule + tmp-$name.txt + tmp-$name.7z tmp-$name.exe" | Out-Null
+          }
 
-          # C. Full app SFX + capture dialog message body via UIA
-          Add-Type -AssemblyName UIAutomationClient
+          # T1: full archive but registered by 7z - can it read the final exe?
+          & "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Select-String -Pattern "MsgAT-Portable.cfg|runtime|Error|Cannot" | Select-Object -First 5 | ForEach-Object { "T1_7Z_READ: $($_.Line)" }
+
+          # T2: tiny archive with the SAME config style (control)
+          New-Item -ItemType Directory -Force -Path tiny | Out-Null
+          Set-Content -Path "tiny\a.txt" -Value "x" -NoNewline
+          Make-Sfx "tiny" "tiny" "a.txt"
+
+          # T3: app-only (no runtime) archive
+          New-Item -ItemType Directory -Force -Path apponly | Out-Null
+          Copy-Item -Recurse -Force "dist\MsgAT-Portable\app" "apponly\app"
+          Copy-Item -Force "dist\MsgAT-Portable\MsgAT-Portable.exe" "apponly\"
+          Make-Sfx "apponly" "apponly" "MsgAT-Portable.exe"
+
+          # T4: runtime-only subtree (bin)
+          New-Item -ItemType Directory -Force -Path rtbin | Out-Null
+          Copy-Item -Recurse -Force "dist\MsgAT-Portable\runtime\bin" "rtbin\bin"
+          Make-Sfx "rtbin" "rtbin" "bin\javaw.exe"
+
+          foreach ($t in @("tmp-tiny.exe","tmp-apponly.exe","tmp-rtbin.exe")) {
+            $p2 = Start-Process -FilePath "./$t" -PassThru
+            Start-Sleep -Seconds 10
+            $a2 = Get-Process -Name ($t -replace "tmp-","" -replace ".exe","") -ErrorAction SilentlyContinue
+            if ($a2) { "$t => OK" } else { "$t => FAILED" }
+            Stop-Process -Name ($t -replace "tmp-","" -replace ".exe","") -Force -ErrorAction SilentlyContinue
+          }
+
+          # Final: full app
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 25
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if ($alive) {
             $title = $alive.MainWindowTitle
             "FULL_TITLE=[$title]"
+            Add-Type -AssemblyName UIAutomationClient
             try {
               $el = [System.Windows.Automation.AutomationElement]::FromHandle($alive.MainWindowHandle)
               $all = $el.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition)
-              foreach ($e in $all) {
-                if ($e.Current.Name) { "DIALOG_TEXT: " + $e.Current.Name }
-              }
-            } catch { "UIA_FAILED: $($_.Exception.Message)" }
-          } else {
-            "FULL_CRASHED"
-          }
+              foreach ($e in $all) { if ($e.Current.Name) { "DIALOG_TEXT: " + $e.Current.Name } }
+            } catch { "UIA_FAILED" }
+          } else { "FULL_CRASHED" }
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
-
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:

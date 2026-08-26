@@ -67,29 +67,7 @@ jobs:
         shell: pwsh
         run: |
           npm install generate-evb --no-save --silent
-          node -e "
-            const generateEvb = require('generate-evb');
-            const appDir = 'dist/MsgAT-Portable';
-            const inputExe = appDir + '/MsgAT-Portable.exe';
-            const outputExe = 'dist/MsgAT-Portable.exe';
-            generateEvb('dist/MsgAT.evb', inputExe, outputExe, appDir, {
-              filter: (fullPath, name, isDir) => {
-                // 不要递归打包 exe 自身（它将作为宿主解释器）
-                if (!isDir && name.toLowerCase() === 'msgat-portable.exe') return false;
-                return true;
-              },
-              evbOptions: {
-                deleteExtractedOnExit: true,
-                compressFiles: true,
-                shareVirtualSystem: false,
-                // JVM 启动时并发加载大量 DLL，临时文件映射会产生竞态导致
-                // "无法定位程序输入点 InitCommonControlsEx 于 jli.dll" 错误
-                mapExecutableWithTemporaryFile: false,
-                allowRunningOfVirtualExeFiles: true
-              }
-            });
-            console.log('EVB project generated: dist/MsgAT.evb');
-          "
+          node pack-evb.js
           $cli = (Get-Content evbcli.txt).Trim()
           & $cli "dist/MsgAT.evb"
           if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "EVB pack failed - no output exe" }

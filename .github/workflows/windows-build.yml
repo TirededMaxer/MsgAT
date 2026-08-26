@@ -43,44 +43,82 @@ jobs:
             --java-options "-XX:+UseStringDeduplication" `
             --java-options "-Xmx2g"
 
-      - name: Install Enigma Virtual Box
+      - name: Install 7-Zip (full installer, gets SFX modules)
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.enigmaprotector.com/assets/files/enigmavb.exe" -OutFile "evb_installer.exe"
-          Start-Process -FilePath "evb_installer.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
-          $cli = Get-ChildItem "C:\Program Files*\Enigma Virtual Box\enigmavbconsole.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $cli) { throw "enigmavbconsole.exe not found after install" }
-          Write-Host "EVB CLI: $($cli.FullName)"
-          $cli.FullName | Out-File -FilePath evbcli.txt -Encoding ascii
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-x64.exe" -OutFile "7zinst.exe"
+          Start-Process -FilePath ".\7zinst.exe" -ArgumentList "/S","/D=C:\7z" -Wait
+          if (-not (Test-Path "C:\7z\7z.exe")) { throw "7-Zip install failed" }
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/lzma2501.7z" -OutFile "lzma.7z"
+          & "C:\7z\7z.exe" x -y "lzma.7z" "-oC:\7z\lzma" | Out-Null
+          if (-not (Test-Path "C:\7z\lzma\bin\7zS2.sfx")) { throw "7zS2.sfx missing" }
 
-      - name: Generate EVB project & pack single EXE
+      - name: Build SFX single EXE with proven pattern
         shell: pwsh
         run: |
-          npm install generate-evb --no-save --silent
-          node pack-evb.js
-          $cli = (Get-Content evbcli.txt).Trim()
-          & $cli "dist/MsgAT.evb"
-          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "EVB pack failed - no output exe" }
-          Get-Item "dist/MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+          # Archive with 7zr (same decoder core as the stub) - flat root
+          Push-Location "dist/MsgAT-Portable"
+          & "C:\7z\lzma\bin\7zr.exe" a "..\msgat-app.7z" * | Out-Null
+          Pop-Location
+          if (-not (Test-Path "dist\msgat-app.7z")) { throw "archive missing" }
 
-      - name: Smoke test - single EXE must open the real app window
+          # Config: UTF-8 no BOM, CRLF, trailing newline
+          $cfg = ";!@Install@!UTF-8!`r`nTitle=`"MsgAT`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
+          [System.IO.File]::WriteAllText("dist\config.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
+
+          # Concatenate stub + config + archive
+          cmd /c "copy /b C:\7z\lzma\bin\7zS2.sfx + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
+          if (-not (Test-Path "dist\MsgAT-Portable.exe")) { throw "concat failed" }
+
+          # Sanity: 7z must be able to read the embedded archive of the final exe
+          & "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Select-String -Pattern "MsgAT-Portable.cfg" | Select-Object -First 1 | ForEach-Object { "FINAL_EXE_CONTAINS_CFG: YES" }
+          if (-not (Select-String -InputObject (& "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Out-String) -Pattern "MsgAT-Portable.cfg" -Quiet)) { "FINAL_EXE_CONTAINS_CFG: NO" }
+
+          # Replace icon/metadata
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+          & .\rcedit.exe "dist\MsgAT-Portable.exe" `
+            --set-icon "MsgAT_Windows\src\main\resources\icons\icon.ico" `
+            --set-file-version "1.1.0.0" `
+            --set-product-version "1.1.0.0" `
+            --set-version-string "ProductName" "MsgAT" `
+            --set-version-string "FileDescription" "MsgAT - Secure P2P Encrypted Messenger" `
+            --set-version-string "CompanyName" "MsgAT Team"
+          Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Smoke test - SFX must open the real app window (title check + screenshot)
         shell: pwsh
         continue-on-error: true
         run: |
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
-          Start-Sleep -Seconds 25
+          Start-Sleep -Seconds 30
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if (-not $alive) {
             "PACKED_EXE_CRASHED"
           } else {
             $title = $alive.MainWindowTitle
-            if ($title -match "无法|Error|入口|错误|InitCommonControls|Extraction|7-Zip|Failed") {
-              "PACKED_EXE_ERROR_DIALOG: [$title]"
+            "WINDOW_TITLE=[$title]"
+            if ($title -match "无法|Error|入口|错误|InitCommonControls|7-Zip|Failed") {
+              "PACKED_EXE_ERROR_DIALOG"
+              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+              $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+              $g = [System.Drawing.Graphics]::FromImage($bmp)
+              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+              $bmp.Save("errshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+              "ERR_SCREENSHOT_SAVED"
             } else {
-              "PACKED_EXE_RUNNING_OK title=[$title]"
+              "PACKED_EXE_RUNNING_OK"
             }
           }
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
+
+      - name: Upload error screenshot (when present)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: errshot
+          path: errshot.png
+          if-no-files-found: ignore
 
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4

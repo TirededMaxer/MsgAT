@@ -64,6 +64,17 @@ jobs:
           if (-not (Test-Path "dist\MsgAT-Portable.exe")) { throw "NSIS build failed - no output" }
           Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
+      - name: Control - run app-image directly (no wrapper)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $p = Start-Process -FilePath "./dist/MsgAT-Portable/MsgAT-Portable.exe" -PassThru
+          Start-Sleep -Seconds 30
+          $procs = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
+          Write-Host ("CONTROL_COUNT=" + @($procs).Count)
+          foreach ($pr in @($procs)) { Write-Host ("CONTROL_PROC: " + $pr.Id + " title=[" + $pr.MainWindowTitle + "]") }
+          Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
+
       - name: Smoke test - portable EXE must open the real app window
         shell: pwsh
         continue-on-error: true

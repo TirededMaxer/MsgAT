@@ -1,4 +1,4 @@
-; MsgAT portable single EXE (NSIS) - runs the app directly via bundled javaw.exe
+; MsgAT portable single EXE (NSIS)
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -19,6 +19,7 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "(c) 2026 MsgAT Team"
 Section "Portable"
   SetOutPath "$PLUGINSDIR"
   File /r "dist\MsgAT-Portable\*"
-  ; Run the app directly (no jpackage launcher, no cfg path magic)
-  ExecWait '"$PLUGINSDIR\runtime\bin\javaw.exe" -Dfile.encoding=UTF-8 -Dskiko.renderApi=DIRECT3D -XX:+UseG1GC -XX:+UseStringDeduplication -Xmx2g -jar "$PLUGINSDIR\app\MsgAT-Windows-1.0.0.jar"'
+  ; console java.exe + stderr log so failures are visible
+  ExecWait '"$PLUGINSDIR\runtime\bin\java.exe" -Dfile.encoding=UTF-8 -Dskiko.renderApi=DIRECT3D -XX:+UseG1GC -XX:+UseStringDeduplication -Xmx2g -jar "$PLUGINSDIR\app\MsgAT-Windows-1.0.0.jar" 2> "$PLUGINSDIR\msgat-error.log"'
+  CopyFiles /SILENT "$PLUGINSDIR\msgat-error.log" "$PLUGINSDIR\stderr.log"
 SectionEnd

@@ -69,9 +69,18 @@ jobs:
           $cfg = ";!@Install@!UTF-8!`r`nTitle=`"MsgAT`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
           [System.IO.File]::WriteAllText("dist\config.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
 
-          # Concatenate stub + config + archive
-          cmd /c "copy /b C:\7z\lzma\bin\7zS2.sfx + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
-          if (-not (Test-Path "dist\MsgAT-Portable.exe")) { throw "concat failed" }
+          # Concatenate stub + config + archive (pure PS byte concat - deterministic)
+          $stub = [IO.File]::ReadAllBytes("C:\7z\lzma\bin\7zS2.sfx")
+          $cfg = [IO.File]::ReadAllBytes("dist\config.txt")
+          $arc = [IO.File]::ReadAllBytes("dist\msgat-app.7z")
+          $fs = [IO.File]::Create("dist\MsgAT-Portable.exe")
+          $fs.Write($stub, 0, $stub.Length)
+          $fs.Write($cfg, 0, $cfg.Length)
+          $fs.Write($arc, 0, $arc.Length)
+          $fs.Close()
+          $fsz = (Get-Item "dist\MsgAT-Portable.exe").Length
+          "FINAL_BYTES=$fsz"
+          if ($fsz -lt 50MB) { throw "final exe too small - concat failed" }
 
           # Sanity: 7z must be able to read the embedded archive of the final exe
           & "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Select-String -Pattern "MsgAT-Portable.cfg" | Select-Object -First 1 | ForEach-Object { "FINAL_EXE_CONTAINS_CFG: YES" }

@@ -31,84 +31,84 @@ jobs:
           jpackage --type app-image `
             --name MsgAT-Portable `
             --app-version 1.1.0 `
-            --vendor \"MsgAT Team\" `
+            --vendor "MsgAT Team" `
             --icon MsgAT_Windows/src/main/resources/icons/icon.ico `
             --input appdir `
             --main-jar (Get-ChildItem appdir/*.jar | Select-Object -First 1).Name `
             --main-class org.msgat.MainKt `
             --dest dist `
-            --java-options \"-Dfile.encoding=UTF-8\" `
-            --java-options \"-Dskiko.renderApi=DIRECT3D\" `
-            --java-options \"-XX:+UseG1GC\" `
-            --java-options \"-XX:+UseStringDeduplication\" `
-            --java-options \"-Xmx2g\"
+            --java-options "-Dfile.encoding=UTF-8" `
+            --java-options "-Dskiko.renderApi=DIRECT3D" `
+            --java-options "-XX:+UseG1GC" `
+            --java-options "-XX:+UseStringDeduplication" `
+            --java-options "-Xmx2g"
 
       - name: Install 7-Zip (full installer with SFX modules)
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri \"https://www.7-zip.org/a/7z2501-x64.exe\" -OutFile \"7zinst.exe\"
-          Start-Process -FilePath \".\7zinst.exe\" -ArgumentList \"/S\",\"/D=C:\7z\" -Wait
-          if (-not (Test-Path \"C:\7z\7z.exe\")) { throw \"7-Zip install failed\" }
-          Get-ChildItem \"C:\7z\7z*.sfx\" | Select-Object Name
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-x64.exe" -OutFile "7zinst.exe"
+          Start-Process -FilePath ".\7zinst.exe" -ArgumentList "/S","/D=C:\7z" -Wait
+          if (-not (Test-Path "C:\7z\7z.exe")) { throw "7-Zip install failed" }
+          Get-ChildItem "C:\7z\7z*.sfx" | Select-Object Name
 
       - name: Create self-extracting single EXE (7z SFX)
         shell: pwsh
         run: |
           # 1. Locate the 7-Zip SFX module from the full install above
-          $sfxPath = \"C:\7z\7zSD.sfx\"
-          if (-not (Test-Path $sfxPath)) { throw \"7zSD.sfx not found at $sfxPath\" }
+          $sfxPath = "C:\7z\7zSD.sfx"
+          if (-not (Test-Path $sfxPath)) { throw "7zSD.sfx not found at $sfxPath" }
           $sfx = Get-Item $sfxPath
-          Write-Host \"SFX module: $($sfx.FullName)\"
+          Write-Host "SFX module: $($sfx.FullName)"
 
           # 2. Compress the app-image folder (flat root: MsgAT-Portable.exe at top level)
-          Push-Location \"dist/MsgAT-Portable\"
-          & \"C:\7z\7z.exe\" a -t7z -mx=7 -mmt=on \"..\msgat-app.7z\" * | Out-Null
+          Push-Location "dist/MsgAT-Portable"
+          & "C:\7z\7z.exe" a -t7z -mx=7 -mmt=on "..\msgat-app.7z" * | Out-Null
           Pop-Location
-          if (-not (Test-Path \"dist/msgat-app.7z\")) { throw \"7z archive creation failed\" }
+          if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
 
           # 3. SFX config: silent mode, run launcher, auto-clean temp on exit
           $lines = @(
             ';!@Install@!UTF-8!'
-            'Title=\"MsgAT Portable\"'
-            'RunProgram=\"MsgAT-Portable.exe\"'
-            'GUIMode=\"2\"'
+            'Title="MsgAT Portable"'
+            'RunProgram="MsgAT-Portable.exe"'
+            'GUIMode="2"'
             ';!@InstallEnd@!'
           )
-          Set-Content -Path \"dist\config.txt\" -Value ($lines -join \"`r`n\") -Encoding UTF8 -NoNewline
+          Set-Content -Path "dist\config.txt" -Value ($lines -join "`r`n") -Encoding UTF8 -NoNewline
 
           # 4. Concatenate: SFX header + config + archive => single EXE
-          cmd /c \"copy /b `\"$($sfx.FullName)`\" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe\" | Out-Null
-          if (-not (Test-Path \"dist/MsgAT-Portable.exe\")) { throw \"SFX concat failed\" }
+          cmd /c "copy /b `"$($sfx.FullName)`" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
+          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "SFX concat failed" }
 
           # 5. Replace icon/metadata (7zSD default icon -> real app icon)
-          Invoke-WebRequest -Uri \"https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe\" -OutFile \"rcedit.exe\"
-          & .\rcedit.exe \"dist\MsgAT-Portable.exe\" `
-            --set-icon \"MsgAT_Windows\src\main\resources\icons\icon.ico\" `
-            --set-file-version \"1.1.0.0\" `
-            --set-product-version \"1.1.0.0\" `
-            --set-version-string \"ProductName\" \"MsgAT\" `
-            --set-version-string \"FileDescription\" \"MsgAT - Secure P2P Encrypted Messenger\" `
-            --set-version-string \"CompanyName\" \"MsgAT Team\"
-          Get-Item \"dist\MsgAT-Portable.exe\" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+          & .\rcedit.exe "dist\MsgAT-Portable.exe" `
+            --set-icon "MsgAT_Windows\src\main\resources\icons\icon.ico" `
+            --set-file-version "1.1.0.0" `
+            --set-product-version "1.1.0.0" `
+            --set-version-string "ProductName" "MsgAT" `
+            --set-version-string "FileDescription" "MsgAT - Secure P2P Encrypted Messenger" `
+            --set-version-string "CompanyName" "MsgAT Team"
+          Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: Smoke test - single EXE must open the real app window
         shell: pwsh
         continue-on-error: true
         run: |
-          $p = Start-Process -FilePath \"./dist/MsgAT-Portable.exe\" -PassThru
+          $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 25
-          $alive = Get-Process -Name \"MsgAT-Portable\" -ErrorAction SilentlyContinue
+          $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if (-not $alive) {
-            \"PACKED_EXE_CRASHED\"
+            "PACKED_EXE_CRASHED"
           } else {
             $title = $alive.MainWindowTitle
-            if ($title -match \"无法|Error|入口|错误|InitCommonControls\") {
-              \"PACKED_EXE_ERROR_DIALOG: $title\"
+            if ($title -match "无法|Error|入口|错误|InitCommonControls") {
+              "PACKED_EXE_ERROR_DIALOG: $title"
             } else {
-              \"PACKED_EXE_RUNNING_OK title=[$title]\"
+              "PACKED_EXE_RUNNING_OK title=[$title]"
             }
           }
-          Stop-Process -Name \"MsgAT-Portable\" -Force -ErrorAction SilentlyContinue
+          Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
 
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4

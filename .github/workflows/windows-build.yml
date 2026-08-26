@@ -43,24 +43,26 @@ jobs:
             --java-options "-XX:+UseStringDeduplication" `
             --java-options "-Xmx2g"
 
-      - name: Install 7-Zip
+      - name: Install 7-Zip (full installer with SFX modules)
         shell: pwsh
         run: |
-          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) { choco install 7zip -y }
-          Get-Command 7z | Select-Object Source
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-x64.exe" -OutFile "7zinst.exe"
+          Start-Process -FilePath ".zinst.exe" -ArgumentList "/S","/D=C:\7z" -Wait
+          if (-not (Test-Path "C:\7z\7z.exe")) { throw "7-Zip install failed" }
+          Get-ChildItem "C:\7z\7z*.sfx" | Select-Object Name
 
       - name: Create self-extracting single EXE (7z SFX)
         shell: pwsh
         run: |
           # 1. Locate the 7-Zip SFX module (installed by choco into Program Files\7-Zip)
-          $sfxPath = Join-Path $env:ProgramFiles "7-Zip\7zSD.sfx"
+          $sfxPath = "C:\7z\7zSD.sfx"
           if (-not (Test-Path $sfxPath)) { throw "7zSD.sfx not found at $sfxPath" }
           $sfx = Get-Item $sfxPath
           Write-Host "SFX module: $($sfx.FullName)"
 
           # 2. Compress the app-image folder (flat root: MsgAT-Portable.exe at top level)
           Push-Location "dist/MsgAT-Portable"
-          7z a -t7z -mx=7 -mmt=on "..\msgat-app.7z" * | Out-Null
+          & "C:\7z\7z.exe" a -t7z -mx=7 -mmt=on "..\msgat-app.7z" * | Out-Null
           Pop-Location
           if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
 

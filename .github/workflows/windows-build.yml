@@ -62,9 +62,9 @@ jobs:
           $sfx = Get-Item $sfxPath
           Write-Host "SFX module: $($sfx.FullName)"
 
-          # 2. Compress the app-image folder (flat root: MsgAT-Portable.exe at top level)
+          # 2. Compress the app-image folder with 7zr (same decoder core as 7zSD.sfx)
           Push-Location "dist/MsgAT-Portable"
-          & "C:\7z\7z.exe" a -t7z -mx=7 -mmt=on "..\msgat-app.7z" * | Out-Null
+          & "C:\7z\lzma\bin\7zr.exe" a "..\msgat-app.7z" * | Out-Null
           Pop-Location
           if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
 
@@ -72,6 +72,8 @@ jobs:
           $lines = @(
             ';!@Install@!UTF-8!'
             'Title="MsgAT Portable"'
+            'BeginPrompt=""'
+            'Progress="no"'
             'RunProgram="MsgAT-Portable.exe"'
             'GUIMode="2"'
             ';!@InstallEnd@!'

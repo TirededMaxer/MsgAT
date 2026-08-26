@@ -19,7 +19,9 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "(c) 2026 MsgAT Team"
 Section "Portable"
   SetOutPath "$PLUGINSDIR"
   File /r "dist\MsgAT-Portable\*"
-  ; console java.exe + stderr log so failures are visible
-  ExecWait '"$PLUGINSDIR\runtime\bin\java.exe" -Dfile.encoding=UTF-8 -Dskiko.renderApi=DIRECT3D -XX:+UseG1GC -XX:+UseStringDeduplication -Xmx2g -jar "$PLUGINSDIR\app\MsgAT-Windows-1.0.0.jar" 2> "$PLUGINSDIR\msgat-error.log"'
-  CopyFiles /SILENT "$PLUGINSDIR\msgat-error.log" "$PLUGINSDIR\stderr.log"
+  ; dump resolved paths for diagnostics (written to $EXEDIR which is the workspace)
+  FileOpen $9 "$EXEDIR\nsis-paths.txt" w
+  FileWrite $9 "PLUGINSDIR=$PLUGINSDIR$\r$\nEXEDIR=$EXEDIR$\r$\nINSTDIR=$INSTDIR$\r$\nTEMP=$TEMP$\r$\n"
+  FileClose $9
+  ExecWait '"$PLUGINSDIR\MsgAT-Portable.exe"'
 SectionEnd

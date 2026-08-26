@@ -103,6 +103,7 @@ jobs:
           Copy-Item "shot.png" "errshot.png" -Force
           "SHOT_SAVED"
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
+          if (Test-Path "nsis-paths.txt") { "NSIS_PATHS:"; Get-Content "nsis-paths.txt" }
 
       - name: Upload error screenshot (when present)
         uses: actions/upload-artifact@v4

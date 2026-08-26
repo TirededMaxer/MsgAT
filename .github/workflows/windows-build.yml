@@ -52,11 +52,10 @@ jobs:
       - name: Create self-extracting single EXE (7z SFX)
         shell: pwsh
         run: |
-          # 1. Download the 7-Zip SFX module (7zSD.sfx inside the extra package)
-          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-extra.7z" -OutFile "extra.7z"
-          7z x -y "extra.7z" "-oextra" | Out-Null
-          $sfx = Get-ChildItem -Recurse -Filter "7zSD.sfx" extra | Select-Object -First 1
-          if (-not $sfx) { throw "7zSD.sfx not found in extra package" }
+          # 1. Locate the 7-Zip SFX module (installed by choco into Program Files\7-Zip)
+          $sfxPath = Join-Path $env:ProgramFiles "7-Zip\7zSD.sfx"
+          if (-not (Test-Path $sfxPath)) { throw "7zSD.sfx not found at $sfxPath" }
+          $sfx = Get-Item $sfxPath
           Write-Host "SFX module: $($sfx.FullName)"
 
           # 2. Compress the app-image folder (flat root: MsgAT-Portable.exe at top level)

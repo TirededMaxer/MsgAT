@@ -53,48 +53,15 @@ jobs:
           & "C:\7z\7z.exe" x -y "lzma.7z" "-oC:\7z\lzma" | Out-Null
           if (-not (Test-Path "C:\7z\lzma\bin\7zS2.sfx")) { throw "7zS2.sfx missing" }
 
-      - name: Build SFX single EXE with proven pattern
+      - name: Build portable single EXE with NSIS
         shell: pwsh
         run: |
-          # Archive with 7zr (same decoder core as the stub) - flat root
-          Push-Location "dist/MsgAT-Portable"
-          & "C:\7z\lzma\bin\7zr.exe" a -r "..\msgat-app.7z" * | Out-Null
-          Pop-Location
-          if (-not (Test-Path "dist\msgat-app.7z")) { throw "archive missing" }
-          $arcSize = (Get-Item "dist\msgat-app.7z").Length
-          "ARCHIVE_BYTES=$arcSize"
-          if ($arcSize -lt 50MB) { throw "archive suspiciously small - recursion failed" }
-
-          # Config: UTF-8 no BOM, CRLF, trailing newline
-          $cfg = ";!@Install@!UTF-8!`r`nTitle=`"MsgAT`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
-          [System.IO.File]::WriteAllText("dist\config.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
-
-          # Concatenate stub + config + archive (pure PS byte concat - deterministic)
-          $stub = [IO.File]::ReadAllBytes("C:\7z\lzma\bin\7zS2.sfx")
-          $cfg = [IO.File]::ReadAllBytes("dist\config.txt")
-          $arc = [IO.File]::ReadAllBytes("dist\msgat-app.7z")
-          $fs = [IO.File]::Create("dist\MsgAT-Portable.exe")
-          $fs.Write($stub, 0, $stub.Length)
-          $fs.Write($cfg, 0, $cfg.Length)
-          $fs.Write($arc, 0, $arc.Length)
-          $fs.Close()
-          $fsz = (Get-Item "dist\MsgAT-Portable.exe").Length
-          "FINAL_BYTES=$fsz"
-          if ($fsz -lt 50MB) { throw "final exe too small - concat failed" }
-
-          # Sanity: 7z must be able to read the embedded archive of the final exe
-          & "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Select-String -Pattern "MsgAT-Portable.cfg" | Select-Object -First 1 | ForEach-Object { "FINAL_EXE_CONTAINS_CFG: YES" }
-          if (-not (Select-String -InputObject (& "C:\7z\7z.exe" l "dist\MsgAT-Portable.exe" | Out-String) -Pattern "MsgAT-Portable.cfg" -Quiet)) { "FINAL_EXE_CONTAINS_CFG: NO" }
-
-          # Replace icon/metadata
-          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
-          & .\rcedit.exe "dist\MsgAT-Portable.exe" `
-            --set-icon "MsgAT_Windows\src\main\resources\icons\icon.ico" `
-            --set-file-version "1.1.0.0" `
-            --set-product-version "1.1.0.0" `
-            --set-version-string "ProductName" "MsgAT" `
-            --set-version-string "FileDescription" "MsgAT - Secure P2P Encrypted Messenger" `
-            --set-version-string "CompanyName" "MsgAT Team"
+          choco install nsis -y | Out-Null
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { $nsis = "C:\Program Files\NSIS\makensis.exe" }
+          if (-not (Test-Path $nsis)) { throw "makensis.exe not found" }
+          & $nsis /V2 "portable.nsi"
+          if (-not (Test-Path "dist\MsgAT-Portable.exe")) { throw "NSIS build failed - no output" }
           Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
       - name: Smoke test - SFX must open the real app window (title check + screenshot)

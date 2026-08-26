@@ -57,8 +57,8 @@ jobs:
           # 1. Get the installer SFX module (7zSD.sfx) from the official LZMA SDK package
           Invoke-WebRequest -Uri "https://www.7-zip.org/a/lzma2501.7z" -OutFile "lzma.7z"
           & "C:\7z\7z.exe" x -y "lzma.7z" "-oC:\7z\lzma" | Out-Null
-          $sfxPath = "C:\7z\lzma\bin\7zSD.sfx"
-          if (-not (Test-Path $sfxPath)) { throw "7zSD.sfx not found at $sfxPath" }
+          $sfxPath = "C:\7z\lzma\bin\7zS2.sfx"
+          if (-not (Test-Path $sfxPath)) { throw "7zS2.sfx not found at $sfxPath" }
           $sfx = Get-Item $sfxPath
           Write-Host "SFX module: $($sfx.FullName)"
 
@@ -106,6 +106,8 @@ jobs:
         run: |
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 25
+          $temps = Get-ChildItem $env:TEMP -Filter "7zO*" -ErrorAction SilentlyContinue
+          Write-Host "TEMP_ENTRIES=$($temps.Count)"
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if (-not $alive) {
             "PACKED_EXE_CRASHED"

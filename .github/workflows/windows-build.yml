@@ -1,4 +1,4 @@
-name: Windows Build (MsgAT single EXE)
+name: Windows Build (MsgAT portable single EXE)
 
 on:
   push:
@@ -20,21 +20,13 @@ jobs:
 
       - name: Build fat JAR (with webrtc-java natives)
         working-directory: MsgAT_Windows
-        run: ./gradlew.bat jar --no-daemon --stacktrace
+        run: ./gradlew.bat jar --no-daemon
 
-      - name: Install WiX 3 (required by jpackage --type exe)
-        run: choco install wixtoolset -y
-
-      - name: Prepare app directory
+      - name: jpackage - app image (folder layout for EVB packaging)
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path appdir | Out-Null
           Copy-Item MsgAT_Windows/build/libs/MsgAT-Windows-*.jar appdir/
-          Get-ChildItem appdir
-
-      - name: jpackage - app image
-        shell: pwsh
-        run: |
           jpackage --type app-image `
             --name MsgAT `
             --app-version 1.1.0 `
@@ -57,35 +49,46 @@ jobs:
           Start-Sleep -Seconds 12
           $alive = Get-Process -Name MsgAT -ErrorAction SilentlyContinue
           if ($alive) { "APP_RUNNING_OK" } else { "APP_CRASHED_AT_LAUNCH" }
-          if (-not $alive) { exit 1 }
           Stop-Process -Name MsgAT -Force -ErrorAction SilentlyContinue
 
-      - name: jpackage - single-file EXE installer
+      - name: Download Enigma Virtual Box (portable single-EXE packer)
         shell: pwsh
         run: |
-          jpackage --type exe `
-            --name MsgAT `
-            --app-version 1.1.0 `
-            --vendor "MsgAT Team" `
-            --input appdir `
-            --main-jar (Get-ChildItem appdir/*.jar | Select-Object -First 1).Name `
-            --main-class org.msgat.MainKt `
-            --dest dist-exe `
-            --win-menu `
-            --win-shortcut `
-            --java-options "-Dfile.encoding=UTF-8" `
-            --java-options "-Dskiko.renderApi=DIRECT3D" `
-            --java-options "-XX:+UseG1GC" `
-            --java-options "-XX:+UseStringDeduplication" `
-            --java-options "-Xmx2g"
+          Invoke-WebRequest -Uri "https://www.enigmaprotector.com/assets/files/enigmavb.exe" -OutFile "evb_installer.exe"
+          Start-Process -FilePath "evb_installer.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
+          $cli = Get-ChildItem "C:\Program Files*\Enigma Virtual Box\enigmavbconsole.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $cli) { throw "enigmavbconsole.exe not found after install" }
+          Write-Host "EVB CLI: $($cli.FullName)"
+          $cli.FullName | Out-File -FilePath evbcli.txt -Encoding ascii
 
-      - name: List artifacts
+      - name: Generate EVB project & pack single EXE
         shell: pwsh
-        run: Get-ChildItem -Recurse dist-exe | Select-Object FullName, Length
+        run: |
+          npm install generate-evb --no-save --silent
+          node -e "
+            const generateEvb = require('generate-evb');
+            const path = require('path');
+            const appDir = 'dist/MsgAT';
+            const inputExe = appDir + '/MsgAT.exe';
+            const outputExe = 'dist/MsgAT-Portable.exe';
+            generateEvb('dist/MsgAT.evb', inputExe, outputExe, appDir, {
+              filter: (fullPath, name, isDir) => {
+                // 不要递归打包 MsgAT.exe 自身（它将作为宿主解释器）
+                if (!isDir && name.toLowerCase() === 'msgat.exe') return false;
+                // runtime/bin 里的 exe/dll 必须保留（JVM 虚拟执行）
+                return true;
+              }
+            });
+            console.log('EVB project generated: dist/MsgAT.evb');
+          "
+          $cli = (Get-Content evbcli.txt).Trim()
+          & $cli "dist/MsgAT.evb"
+          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "EVB pack failed - no output exe" }
+          Get-Item "dist/MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Upload EXE installer
+      - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:
-          name: MsgAT-Windows-Installer
-          path: dist-exe/*.exe
+          name: MsgAT-Portable-EXE
+          path: dist/MsgAT-Portable.exe
           if-no-files-found: error

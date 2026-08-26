@@ -52,7 +52,7 @@ jobs:
       - name: Create self-extracting single EXE (7z SFX)
         shell: pwsh
         run: |
-          # 1. Download the 7-Zip SFX module (7zSD.sfx packed inside the "extra" package)
+          # 1. Download the 7-Zip SFX module (7zSD.sfx inside the extra package)
           Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-extra.7z" -OutFile "extra.7z"
           7z x -y "extra.7z" "-oextra" | Out-Null
           $sfx = Get-ChildItem -Recurse -Filter "7zSD.sfx" extra | Select-Object -First 1
@@ -65,18 +65,17 @@ jobs:
           Pop-Location
           if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
 
-          # 3. SFX config: silent, run the launcher, auto-clean temp on exit
-          $cfg = @"
-;!@Install@!UTF-8!
-Title="MsgAT Portable"
-RunProgram="MsgAT-Portable.exe"
-GUIMode="2"
-;!@InstallEnd@!
-"@
-          Set-Content -Path "dist\config.txt" -Value $cfg -Encoding UTF8 -NoNewline
+          # 3. SFX config: silent mode, run launcher, auto-clean temp on exit
+          $lines = @(
+            ';!@Install@!UTF-8!'
+            'Title="MsgAT Portable"'
+            'RunProgram="MsgAT-Portable.exe"'
+            'GUIMode="2"'
+            ';!@InstallEnd@!'
+          )
+          Set-Content -Path "dist\config.txt" -Value ($lines -join "`r`n") -Encoding UTF8 -NoNewline
 
           # 4. Concatenate: SFX header + config + archive => single EXE
-          Get-Content -Encoding Byte "dist/config.txt" | Set-Content -Encoding Byte "dist/sfx.tmp"
           cmd /c "copy /b `"$($sfx.FullName)`" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
           if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "SFX concat failed" }
 

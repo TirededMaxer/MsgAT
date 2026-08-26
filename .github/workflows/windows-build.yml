@@ -69,7 +69,7 @@ jobs:
         continue-on-error: true
         run: |
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
-          Start-Sleep -Seconds 35
+          Start-Sleep -Seconds 60
           $procs = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           Write-Host ("PROCESS_COUNT=" + @($procs).Count)
           $ok = $false
@@ -89,6 +89,7 @@ jobs:
           $g = [System.Drawing.Graphics]::FromImage($bmp)
           $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
           $bmp.Save("shot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          Copy-Item "shot.png" "errshot.png" -Force
           "SHOT_SAVED"
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
 

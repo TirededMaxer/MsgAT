@@ -157,6 +157,40 @@ jobs:
             } catch { "UIA_FAILED" }
           } else { "FULL_CRASHED" }
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
+      - name: Capture desktop screenshot + try native 7z.sfx module
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          # Native module test: C:\7z\7z.sfx (from the full 25.01 installer)
+          $sfxPath = "C:\7z\7z.sfx"
+          if (Test-Path $sfxPath) {
+            $cfg = ";!@Install@!UTF-8!`r`nTitle=`"T`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"
+            [System.IO.File]::WriteAllText("native.txt", $cfg, [System.Text.UTF8Encoding]::new($false))
+            cmd /c "copy /b C:\7z\7z.sfx + native.txt + dist\msgat-app.7z dist\MsgAT-Native.exe" | Out-Null
+            $p2 = Start-Process -FilePath "./dist/MsgAT-Native.exe" -PassThru
+            Start-Sleep -Seconds 25
+            $a2 = Get-Process -Name "MsgAT-Native" -ErrorAction SilentlyContinue
+            if ($a2) { $t2 = $a2.MainWindowTitle; "NATIVE_TITLE=[$t2]" } else { "NATIVE_CRASHED" }
+            Stop-Process -Name "MsgAT-Native" -Force -ErrorAction SilentlyContinue
+          } else { "NO_NATIVE_MODULE" }
+
+          # Screenshot the desktop to read the error dialog of the S2 build
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap($bounds.Width, $bounds.Height)
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+          $bmp.Save("desktop.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          "SCREENSHOT_SAVED"
+
+      - name: Upload desktop screenshot
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-screenshot
+          path: desktop.png
+          if-no-files-found: ignore
+
       - name: Upload portable EXE
         uses: actions/upload-artifact@v4
         with:

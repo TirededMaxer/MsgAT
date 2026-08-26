@@ -17,6 +17,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
       - name: Build fat JAR (with webrtc-java natives)
         working-directory: MsgAT_Windows

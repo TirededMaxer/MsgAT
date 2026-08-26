@@ -23,7 +23,7 @@ jobs:
         working-directory: MsgAT_Windows
         run: ./gradlew.bat jar --no-daemon
 
-      - name: jpackage - app image (exe name MUST match cfg name for portable rename)
+      - name: jpackage - app image
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path appdir | Out-Null
@@ -43,48 +43,66 @@ jobs:
             --java-options "-XX:+UseStringDeduplication" `
             --java-options "-Xmx2g"
 
-      - name: Smoke test - launch app and verify it stays alive
-        shell: pwsh
-        continue-on-error: true
-        run: |
-          $p = Start-Process -FilePath "./dist/MsgAT-Portable/MsgAT-Portable.exe" -PassThru
-          Start-Sleep -Seconds 12
-          $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
-          if ($alive) { "APP_RUNNING_OK" } else { "APP_CRASHED_AT_LAUNCH" }
-          Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
-
-      - name: Download Enigma Virtual Box (portable single-EXE packer)
+      - name: Install 7-Zip
         shell: pwsh
         run: |
-          Invoke-WebRequest -Uri "https://www.enigmaprotector.com/assets/files/enigmavb.exe" -OutFile "evb_installer.exe"
-          Start-Process -FilePath "evb_installer.exe" -ArgumentList "/VERYSILENT","/SUPPRESSMSGBOXES","/NORESTART" -Wait
-          $cli = Get-ChildItem "C:\Program Files*\Enigma Virtual Box\enigmavbconsole.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $cli) { throw "enigmavbconsole.exe not found after install" }
-          Write-Host "EVB CLI: $($cli.FullName)"
-          $cli.FullName | Out-File -FilePath evbcli.txt -Encoding ascii
+          if (-not (Get-Command 7z -ErrorAction SilentlyContinue)) { choco install 7zip -y }
+          Get-Command 7z | Select-Object Source
 
-      - name: Generate EVB project & pack single EXE
+      - name: Create self-extracting single EXE (7z SFX)
         shell: pwsh
         run: |
-          npm install generate-evb --no-save --silent
-          node pack-evb.js
-          $cli = (Get-Content evbcli.txt).Trim()
-          & $cli "dist/MsgAT.evb"
-          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "EVB pack failed - no output exe" }
-          Get-Item "dist/MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+          # 1. Download the 7-Zip SFX module (7zSD.sfx packed inside the "extra" package)
+          Invoke-WebRequest -Uri "https://www.7-zip.org/a/7z2501-extra.7z" -OutFile "extra.7z"
+          7z x -y "extra.7z" "-oextra" | Out-Null
+          $sfx = Get-ChildItem -Recurse -Filter "7zSD.sfx" extra | Select-Object -First 1
+          if (-not $sfx) { throw "7zSD.sfx not found in extra package" }
+          Write-Host "SFX module: $($sfx.FullName)"
 
-      - name: Smoke test - FINAL packed single EXE (cfg lookup check)
+          # 2. Compress the app-image folder (flat root: MsgAT-Portable.exe at top level)
+          Push-Location "dist/MsgAT-Portable"
+          7z a -t7z -mx=7 -mmt=on "..\msgat-app.7z" * | Out-Null
+          Pop-Location
+          if (-not (Test-Path "dist/msgat-app.7z")) { throw "7z archive creation failed" }
+
+          # 3. SFX config: silent, run the launcher, auto-clean temp on exit
+          $cfg = @"
+;!@Install@!UTF-8!
+Title="MsgAT Portable"
+RunProgram="MsgAT-Portable.exe"
+GUIMode="2"
+;!@InstallEnd@!
+"@
+          Set-Content -Path "dist\config.txt" -Value $cfg -Encoding UTF8 -NoNewline
+
+          # 4. Concatenate: SFX header + config + archive => single EXE
+          Get-Content -Encoding Byte "dist/config.txt" | Set-Content -Encoding Byte "dist/sfx.tmp"
+          cmd /c "copy /b `"$($sfx.FullName)`" + dist\config.txt + dist\msgat-app.7z dist\MsgAT-Portable.exe" | Out-Null
+          if (-not (Test-Path "dist/MsgAT-Portable.exe")) { throw "SFX concat failed" }
+
+          # 5. Replace icon/metadata (7zSD default icon -> real app icon)
+          Invoke-WebRequest -Uri "https://github.com/electron/rcedit/releases/download/v2.0.0/rcedit-x64.exe" -OutFile "rcedit.exe"
+          & .\rcedit.exe "dist\MsgAT-Portable.exe" `
+            --set-icon "MsgAT_Windows\src\main\resources\icons\icon.ico" `
+            --set-file-version "1.1.0.0" `
+            --set-product-version "1.1.0.0" `
+            --set-version-string "ProductName" "MsgAT" `
+            --set-version-string "FileDescription" "MsgAT - Secure P2P Encrypted Messenger" `
+            --set-version-string "CompanyName" "MsgAT Team"
+          Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
+
+      - name: Smoke test - single EXE must open the real app window
         shell: pwsh
         continue-on-error: true
         run: |
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
-          Start-Sleep -Seconds 15
+          Start-Sleep -Seconds 25
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
           if (-not $alive) {
             "PACKED_EXE_CRASHED"
           } else {
             $title = $alive.MainWindowTitle
-            if ($title -match "无法|Error|入口|错误") {
+            if ($title -match "无法|Error|入口|错误|InitCommonControls") {
               "PACKED_EXE_ERROR_DIALOG: $title"
             } else {
               "PACKED_EXE_RUNNING_OK title=[$title]"

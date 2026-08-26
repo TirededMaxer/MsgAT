@@ -77,6 +77,15 @@ jobs:
                 // 不要递归打包 exe 自身（它将作为宿主解释器）
                 if (!isDir && name.toLowerCase() === 'msgat-portable.exe') return false;
                 return true;
+              },
+              evbOptions: {
+                deleteExtractedOnExit: true,
+                compressFiles: true,
+                shareVirtualSystem: false,
+                // JVM 启动时并发加载大量 DLL，临时文件映射会产生竞态导致
+                // "无法定位程序输入点 InitCommonControlsEx 于 jli.dll" 错误
+                mapExecutableWithTemporaryFile: false,
+                allowRunningOfVirtualExeFiles: true
               }
             });
             console.log('EVB project generated: dist/MsgAT.evb');
@@ -93,7 +102,16 @@ jobs:
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
           Start-Sleep -Seconds 15
           $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
-          if ($alive) { "PACKED_EXE_RUNNING_OK" } else { "PACKED_EXE_CRASHED" }
+          if (-not $alive) {
+            "PACKED_EXE_CRASHED"
+          } else {
+            $title = $alive.MainWindowTitle
+            if ($title -match "无法|Error|入口|错误") {
+              "PACKED_EXE_ERROR_DIALOG: $title"
+            } else {
+              "PACKED_EXE_RUNNING_OK title=[$title]"
+            }
+          }
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
 
       - name: Upload portable EXE

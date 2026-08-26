@@ -58,9 +58,12 @@ jobs:
         run: |
           # Archive with 7zr (same decoder core as the stub) - flat root
           Push-Location "dist/MsgAT-Portable"
-          & "C:\7z\lzma\bin\7zr.exe" a "..\msgat-app.7z" * | Out-Null
+          & "C:\7z\lzma\bin\7zr.exe" a -r "..\msgat-app.7z" * | Out-Null
           Pop-Location
           if (-not (Test-Path "dist\msgat-app.7z")) { throw "archive missing" }
+          $arcSize = (Get-Item "dist\msgat-app.7z").Length
+          "ARCHIVE_BYTES=$arcSize"
+          if ($arcSize -lt 50MB) { throw "archive suspiciously small - recursion failed" }
 
           # Config: UTF-8 no BOM, CRLF, trailing newline
           $cfg = ";!@Install@!UTF-8!`r`nTitle=`"MsgAT`"`r`nBeginPrompt=`"`"`r`nProgress=`"no`"`r`nRunProgram=`"MsgAT-Portable.exe`"`r`nGUIMode=`"2`"`r`n;!@InstallEnd@!`r`n"

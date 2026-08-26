@@ -1,6 +1,4 @@
-; MsgAT portable single EXE (NSIS)
-; Extracts to $PLUGINSDIR (auto-cleaned after exit), runs the app, waits for it.
-
+; MsgAT portable single EXE (NSIS) - runs the app directly via bundled javaw.exe
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -21,5 +19,6 @@ VIAddVersionKey /LANG=1033 "LegalCopyright" "(c) 2026 MsgAT Team"
 Section "Portable"
   SetOutPath "$PLUGINSDIR"
   File /r "dist\MsgAT-Portable\*"
-  ExecWait '"$PLUGINSDIR\MsgAT-Portable.exe"'
+  ; Run the app directly (no jpackage launcher, no cfg path magic)
+  ExecWait '"$PLUGINSDIR\runtime\bin\javaw.exe" -Dfile.encoding=UTF-8 -Dskiko.renderApi=DIRECT3D -XX:+UseG1GC -XX:+UseStringDeduplication -Xmx2g -jar "$PLUGINSDIR\app\MsgAT-Windows-1.0.0.jar"'
 SectionEnd

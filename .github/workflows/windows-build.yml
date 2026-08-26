@@ -64,31 +64,32 @@ jobs:
           if (-not (Test-Path "dist\MsgAT-Portable.exe")) { throw "NSIS build failed - no output" }
           Get-Item "dist\MsgAT-Portable.exe" | Select-Object Name, @{n='SizeMB';e={[math]::Round($_.Length/1MB,1)}}
 
-      - name: Smoke test - SFX must open the real app window (title check + screenshot)
+      - name: Smoke test - portable EXE must open the real app window
         shell: pwsh
         continue-on-error: true
         run: |
           $p = Start-Process -FilePath "./dist/MsgAT-Portable.exe" -PassThru
-          Start-Sleep -Seconds 30
-          $alive = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
-          if (-not $alive) {
-            "PACKED_EXE_CRASHED"
-          } else {
-            $title = $alive.MainWindowTitle
-            "WINDOW_TITLE=[$title]"
-            if ($title -match "无法|Error|入口|错误|InitCommonControls|7-Zip|Failed") {
-              "PACKED_EXE_ERROR_DIALOG"
-              Add-Type -AssemblyName System.Windows.Forms, System.Drawing
-              $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
-              $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
-              $g = [System.Drawing.Graphics]::FromImage($bmp)
-              $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
-              $bmp.Save("errshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
-              "ERR_SCREENSHOT_SAVED"
-            } else {
-              "PACKED_EXE_RUNNING_OK"
-            }
+          Start-Sleep -Seconds 35
+          $procs = Get-Process -Name "MsgAT-Portable" -ErrorAction SilentlyContinue
+          Write-Host ("PROCESS_COUNT=" + @($procs).Count)
+          $ok = $false
+          $err = $false
+          foreach ($pr in @($procs)) {
+            $t = $pr.MainWindowTitle
+            Write-Host ("PROC: " + $pr.Id + " title=[" + $t + "]")
+            if ($t -match "无法|Error|入口|错误|InitCommonControls|7-Zip|Failed") { $err = $true }
+            if ($t -match "MsgAT$") { $ok = $true }
           }
+          if ($ok) { "PACKED_EXE_RUNNING_OK" }
+          elseif ($err) { "PACKED_EXE_ERROR_DIALOG" }
+          else { "PACKED_EXE_AMBIGUOUS" }
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap($b.Width, $b.Height)
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("shot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          "SHOT_SAVED"
           Stop-Process -Name "MsgAT-Portable" -Force -ErrorAction SilentlyContinue
 
       - name: Upload error screenshot (when present)

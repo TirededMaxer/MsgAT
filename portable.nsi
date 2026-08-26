@@ -1,4 +1,4 @@
-; MsgAT portable single EXE (NSIS)
+; MsgAT portable single EXE (NSIS) - extract to EXPLICIT fixed temp dir, run launcher
 Unicode true
 RequestExecutionLevel user
 SilentInstall silent
@@ -17,11 +17,15 @@ VIAddVersionKey /LANG=1033 "ProductVersion" "1.1.0.0"
 VIAddVersionKey /LANG=1033 "LegalCopyright" "(c) 2026 MsgAT Team"
 
 Section "Portable"
-  SetOutPath "$PLUGINSDIR"
-  File /r "dist\MsgAT-Portable\*"
-  ; dump resolved paths for diagnostics (written to $EXEDIR which is the workspace)
-  FileOpen $9 "$EXEDIR\nsis-paths.txt" w
-  FileWrite $9 "PLUGINSDIR=$PLUGINSDIR$\r$\nEXEDIR=$EXEDIR$\r$\nINSTDIR=$INSTDIR$\r$\nTEMP=$TEMP$\r$\n"
+  StrCpy $0 "$TEMP\MsgATPortable"
+  ; paths dump into $TEMP (readable by the CI step afterwards)
+  FileOpen $9 "$TEMP\nsis-paths.txt" w
+  FileWrite $9 "TEMP=$TEMP$\r$\nAPPDIR=$0$\r$\nEXEDIR=$EXEDIR$\r$\n"
   FileClose $9
-  ExecWait '"$PLUGINSDIR\MsgAT-Portable.exe"'
+  IfFileExists "$0\MsgAT-Portable.exe" skipExtract
+  CreateDirectory "$0"
+  SetOutPath "$0"
+  File /r "dist\MsgAT-Portable\*"
+skipExtract:
+  ExecWait '"$0\MsgAT-Portable.exe"'
 SectionEnd

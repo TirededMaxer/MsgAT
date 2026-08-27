@@ -60,10 +60,13 @@ fun main() = application {
         }
     }
 
+    // remember 固定 WindowState：内联创建会在每次重组时重置窗口尺寸（点击聊天时的"瞬移"bug）
+    val windowState = remember { WindowState(width = 1000.dp, height = 700.dp) }
+
     Window(
         onCloseRequest = ::exitApplication,
         title = "MsgAT",
-        state = WindowState(width = 1000.dp, height = 700.dp),
+        state = windowState,
         icon = appIcon?.let { BitmapPainter(it) }
     ) {
         MsgAtTheme {

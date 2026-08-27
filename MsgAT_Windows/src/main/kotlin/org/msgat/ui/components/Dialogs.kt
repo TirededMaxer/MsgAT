@@ -159,7 +159,7 @@ fun SettingsDialog(
                 modifier = Modifier.padding(bottom = 8.dp)
             )
             Text(
-                text = "留空即纯 P2P 直连；当双端对称 NAT 打洞失败时可填一台自有 coturn 兜底。",
+                text = "Leave empty for pure P2P. TURN is only used as a last resort when direct paths fail.",
                 color = Color.Gray,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(bottom = 10.dp)
@@ -207,7 +207,7 @@ fun SettingsDialog(
                     onCheckedChange = { turnUseTls = it },
                     colors = CheckboxDefaults.colors(checkedColor = Color(0xFF00FF00), uncheckedColor = Color.Gray)
                 )
-                Text("使用 TLS (turns://)", color = Color.Gray, fontSize = 13.sp)
+                Text("Use TLS (turns://)", color = Color.Gray, fontSize = 13.sp)
             }
 
             Spacer(modifier = Modifier.height(24.dp))
@@ -247,7 +247,7 @@ fun SettingsDialog(
     }
 }
 
-/** 服务器连接 + 可选 TURN 中继设置（与 Android/macOS 一致） */
+/** Server connection + optional TURN relay settings (aligned with Android/macOS) */
 data class ServerSettings(
     val ip: String,
     val port: String,

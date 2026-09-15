@@ -80,7 +80,7 @@ dependencies {
     implementation("com.google.code.gson:gson:2.10.1")
     // Android secure storage
     implementation("androidx.compose.material:material-icons-extended:1.5.0")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
     // Room database
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

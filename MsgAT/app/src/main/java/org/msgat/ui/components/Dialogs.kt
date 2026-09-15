@@ -1,6 +1,7 @@
 package org.msgat.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -12,27 +13,53 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+
+// Bundles all connection settings (relay server + optional TURN fallback).
+data class ServerSettings(
+    val ip: String,
+    val port: String,
+    val uuid: String,
+    val turnServer: String,
+    val turnPort: String,
+    val turnUsername: String,
+    val turnPassword: String,
+    val turnUseTls: Boolean,
+    val serverCertificateSha256: String = "",
+    val allowDevelopmentCertificate: Boolean = true
+)
 
 @Composable
 // Shows a dialog for initiating a new chat conversation using a target UUID.
-fun AddConversationDialog(onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
+fun AddConversationDialog(myUuid: String, onDismiss: () -> Unit, onConfirm: (String) -> Unit) {
     var uuid by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        containerColor = Color(0xFF1E1E1E), 
+        containerColor = Color(0xFF1E1E1E),
         titleContentColor = Color.White,
         title = { Text("Add Friend") },
         text = {
             Column {
                 OutlinedTextField(
-                    value = uuid, onValueChange = { uuid = it },
+                    value = uuid, onValueChange = { uuid = it; error = null },
                     label = { Text("Target UUID", color = Color.Gray) },
+                    isError = error != null,
+                    supportingText = error?.let { message -> { Text(message) } },
                     colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
                 )
             }
         },
-        confirmButton = { TextButton(onClick = { if(uuid.isNotBlank()) onConfirm(uuid.trim()) }) { Text("Add", color = Color(0xFF00FF00)) } },
+        confirmButton = { TextButton(onClick = {
+            val normalized = uuid.trim().lowercase()
+            error = when {
+                !normalized.matches(Regex("[a-f0-9]{64}")) -> "A friend UUID must contain exactly 64 hexadecimal characters."
+                normalized == myUuid.lowercase() -> "You cannot add your own UUID."
+                else -> null
+            }
+            if (error == null) onConfirm(normalized)
+        }) { Text("Add", color = Color(0xFF00FF00)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel", color = Color.Gray) } }
     )
 }
@@ -45,28 +72,47 @@ fun SettingsDialog(
     initialUuid: String,
     initialAvatarPath: String? = null,
     initialNickname: String? = null,
+    initialTurnServer: String = "",
+    initialTurnPort: String = "3478",
+    initialTurnUsername: String = "",
+    initialTurnPassword: String = "",
+    initialTurnUseTls: Boolean = false,
     onDismiss: () -> Unit,
-    onConfirm: (String, String, String) -> Unit,
+    onConfirm: (ServerSettings) -> Unit,
     onResetIdentity: () -> Unit
 ) {
 
     var ip by remember { mutableStateOf(initialIp) }
     var port by remember { mutableStateOf(initialPort) }
     var uuid by remember { mutableStateOf(initialUuid) }
+    var turnServer by remember { mutableStateOf(initialTurnServer) }
+    var turnPort by remember { mutableStateOf(initialTurnPort) }
+    var turnUsername by remember { mutableStateOf(initialTurnUsername) }
+    var turnPassword by remember { mutableStateOf(initialTurnPassword) }
+    var turnUseTls by remember { mutableStateOf(initialTurnUseTls) }
+    val prefs = org.msgat.MsgATApp.instance.securePrefs
+    var certificatePin by remember { mutableStateOf(prefs.serverCertificateSha256.orEmpty()) }
+    var allowDevelopmentCertificate by remember { mutableStateOf(prefs.allowDevelopmentCertificate) }
+    val normalizedPin = certificatePin.replace(":", "").replace(" ", "").lowercase()
+    val validSettings = ip.isNotBlank() && (port.toIntOrNull() ?: 0) in 1..65535 &&
+        (turnServer.isBlank() || (turnPort.toIntOrNull() ?: 0) in 1..65535) &&
+        (normalizedPin.isEmpty() || normalizedPin.matches(Regex("[a-f0-9]{64}")))
+    var showAdvancedNetwork by remember { mutableStateOf(false) }
 
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
-            usePlatformDefaultWidth = false 
+            usePlatformDefaultWidth = false
         )
     ) {
 
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.9f) 
+                .fillMaxWidth(0.9f)
+                .verticalScroll(androidx.compose.foundation.rememberScrollState())
                 .background(
                     color = Color(0xFF1E1E1E),
-                    shape = RoundedCornerShape(24.dp) 
+                    shape = RoundedCornerShape(24.dp)
                 )
                 .padding(24.dp)
         ) {
@@ -125,7 +171,86 @@ fun SettingsDialog(
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(modifier = Modifier.height(8.dp))
+
+            TextButton(onClick = { showAdvancedNetwork = !showAdvancedNetwork }) {
+                Text(if (showAdvancedNetwork) "Hide Advanced Network Settings" else "Advanced Network Settings")
+            }
+
+            androidx.compose.animation.AnimatedVisibility(visible = showAdvancedNetwork) {
+                Column {
+                    Text(
+                        text = "TURN Relay (Optional — P2P fallback. Leave empty for pure P2P.)",
+                        color = Color(0xFFAAAAAA),
+                        fontSize = 12.sp,
+                        modifier = Modifier.padding(vertical = 4.dp)
+                    )
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = turnServer,
+                    onValueChange = { turnServer = it },
+                    label = { Text("TURN Server", color = Color.Gray) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.weight(0.6f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = turnPort,
+                    onValueChange = { turnPort = it },
+                    label = { Text("TURN Port", color = Color.Gray) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.weight(0.4f)
+                )
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                OutlinedTextField(
+                    value = turnUsername,
+                    onValueChange = { turnUsername = it },
+                    label = { Text("TURN Username", color = Color.Gray) },
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.weight(0.5f)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                OutlinedTextField(
+                    value = turnPassword,
+                    onValueChange = { turnPassword = it },
+                    label = { Text("TURN Password", color = Color.Gray) },
+                    visualTransformation = PasswordVisualTransformation(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedTextColor = Color.White,
+                        unfocusedTextColor = Color.White
+                    ),
+                    modifier = Modifier.weight(0.5f)
+                )
+                    }
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Use TLS (turns://)", color = Color.Gray, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.weight(1f))
+                        Switch(checked = turnUseTls, onCheckedChange = { turnUseTls = it })
+                    }
+                    OutlinedTextField(value = certificatePin, onValueChange = { certificatePin = it },
+                        label = { Text("TLS SHA-256 pin") }, modifier = Modifier.fillMaxWidth())
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = allowDevelopmentCertificate, onCheckedChange = { allowDevelopmentCertificate = it })
+                        Text("Allow untrusted development certificate", color = Color.Gray)
+                    }
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+
             val context = androidx.compose.ui.platform.LocalContext.current
+            @Suppress("DEPRECATION")
             val clipboardManager = androidx.compose.ui.platform.LocalClipboardManager.current
 
             Button(
@@ -160,7 +285,7 @@ fun SettingsDialog(
                     Text("Cancel", color = Color.Gray)
                 }
 
-                TextButton(onClick = { onConfirm(ip, port, uuid) }) {
+                TextButton(enabled = validSettings, onClick = { onConfirm(ServerSettings(ip.trim(), port, uuid, turnServer, turnPort, turnUsername, turnPassword, turnUseTls, normalizedPin, allowDevelopmentCertificate)) }) {
                     Text("Save", color = Color(0xFF00FF00))
                 }
             }

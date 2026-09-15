@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>MsgAT WebRTC Host</title></head>
+<body>
+<audio id="remoteAudio" autoplay></audio>
+<script>
+(() => {
+  'use strict';
+  let pc = null;
+  let stream = null;
+  let pendingIce = [];
+  let localIce = [];
+  let descriptionSent = false;
+  let commandQueue = Promise.resolve();
+  const remoteAudio = document.getElementById("remoteAudio");
+  const post = value => chrome.webview.postMessage(value);
+
+  async function close() {
+    pendingIce = [];
+    localIce = [];
+    descriptionSent = false;
+    remoteAudio.srcObject = null;
+    if (pc) { pc.ontrack = null; pc.onicecandidate = null; pc.onconnectionstatechange = null; pc.close(); pc = null; }
+    if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+  }
+
+  async function create(iceServers) {
+    await close();
+    const configuration = { iceServers, sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" };
+    pc = new RTCPeerConnection(configuration);
+    pc.ontrack = event => {
+      remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
+      remoteAudio.play().catch(error => post({ type: 'state', state: 'failed', detail: String(error) }));
+    };
+    const connection = pc;
+    pc.onicecandidate = event => {
+      if (pc !== connection || !event.candidate) return;
+      const candidate = { type: 'ice', sdpMid: event.candidate.sdpMid ?? '0',
+        sdpMLineIndex: event.candidate.sdpMLineIndex ?? 0, candidate: event.candidate.candidate };
+      if (descriptionSent) post(candidate);
+      else localIce.push(candidate);
+    };
+    pc.onconnectionstatechange = () => post({ type: 'state', state: pc.connectionState });
+    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+      echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+      channelCount: 1, sampleRate: 48000
+    }, video: false });
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+  }
+
+  function publishDescription(type) {
+    post({ type, sdp: pc.localDescription.sdp });
+    descriptionSent = true;
+    localIce.forEach(post);
+    localIce = [];
+  }
+
+  async function flushIce() {
+    if (!pc || !pc.remoteDescription) return;
+    const candidates = pendingIce.splice(0);
+    for (const candidate of candidates) await addIce(candidate);
+  }
+
+  async function addIce(candidate) {
+    try { await pc.addIceCandidate(candidate); }
+    catch (error) { post({ type: 'ice-warning', detail: String(error) }); }
+  }
+
+  async function execute(command) {
+      const p = command.payload;
+      try {
+        if (command.type === 'offer') {
+          await create(p.iceServers);
+          const offer = await pc.createOffer({ offerToReceiveAudio: true });
+          await pc.setLocalDescription(offer);
+          publishDescription('offer');
+        } else if (command.type === 'accept') {
+          await create(p.iceServers);
+          await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp });
+          await flushIce();
+          const answer = await pc.createAnswer();
+          await pc.setLocalDescription(answer);
+          publishDescription('answer');
+        } else if (command.type === 'answer') {
+          await pc.setRemoteDescription({ type: 'answer', sdp: p.sdp });
+          await flushIce();
+        } else if (command.type === 'ice') {
+          const candidate = { sdpMid: p.sdpMid, sdpMLineIndex: p.sdpMLineIndex, candidate: p.candidate };
+          if (pc && pc.remoteDescription) await addIce(candidate);
+          else if (pendingIce.length < 256) pendingIce.push(candidate);
+        } else if (command.type === 'mute') {
+          if (stream) stream.getAudioTracks().forEach(track => track.enabled = !p.muted);
+        } else if (command.type === 'stats') {
+          let value = null;
+          if (pc) {
+            const stats = await pc.getStats();
+            stats.forEach(report => {
+              if (report.type === 'candidate-pair' && report.state === 'succeeded' &&
+                  typeof report.currentRoundTripTime === 'number' && report.currentRoundTripTime > 0) {
+                value = Math.round(report.currentRoundTripTime * 1000);
+              }
+            });
+          }
+          post({ type: 'rtt', value });
+        } else if (command.type === 'close') {
+          await close();
+        }
+      } catch (error) {
+        post({ type: 'state', state: 'failed', detail: String(error) });
+      }
+  }
+  window.msgat = {
+    command: command => {
+      commandQueue = commandQueue.then(() => execute(command));
+      return commandQueue;
+    }
+  };
+  post({ type: 'ready' });
+})();
+</script>
+</body>
+</html>

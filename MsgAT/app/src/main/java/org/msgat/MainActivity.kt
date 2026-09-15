@@ -11,14 +11,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
-import android.content.Context
-import android.content.Intent
-import android.net.Uri
-import android.os.PowerManager
-import android.provider.Settings
 import org.msgat.core.network.NettyClient
 import org.msgat.core.crypto.securestorage.SecurePrefs
-import org.msgat.data.db.AppDatabase 
+import org.msgat.data.db.AppDatabase
 import org.msgat.ui.chat.ChatScreen
 import org.msgat.ui.chat.ChatViewModel
 import org.msgat.ui.sessionlist.SessionListScreen
@@ -50,19 +45,9 @@ class MainActivity : ComponentActivity() {
             permissionsToRequest.add(android.Manifest.permission.POST_NOTIFICATIONS)
         }
         permissionsToRequest.add(android.Manifest.permission.RECORD_AUDIO)
-        
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M && permissionsToRequest.isNotEmpty()) {
-            requestPermissions(permissionsToRequest.toTypedArray(), 1001)
-        }
 
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
-                }
-                startActivity(intent)
-            }
+        if (permissionsToRequest.isNotEmpty()) {
+            requestPermissions(permissionsToRequest.toTypedArray(), 1001)
         }
 
         val serviceIntent = android.content.Intent(this, org.msgat.core.network.MsgATService::class.java)
@@ -105,16 +90,21 @@ class MainActivity : ComponentActivity() {
                                 initialUuid = viewModel.currentUuid,
                                 initialAvatarPath = viewModel.currentAvatarPath.collectAsState().value,
                                 initialNickname = viewModel.currentNickname.collectAsState().value,
+                                initialTurnServer = viewModel.currentTurnServer,
+                                initialTurnPort = viewModel.currentTurnPort,
+                                initialTurnUsername = viewModel.currentTurnUsername,
+                                initialTurnPassword = viewModel.currentTurnPassword,
+                                initialTurnUseTls = viewModel.currentTurnUseTls,
                                 isIdentityMissing = viewModel.isIdentityMissing,
                                 onNavigateToChat = { uuid -> navController.navigate("chat/$uuid") },
                                 onAddConversation = viewModel::addConversation,
                                 onSaveSettings = viewModel::saveSettings,
                                 onDeleteConversation = viewModel::deleteConversation,
                                 onClearMessages = viewModel::clearMessages,
-                                onResetIdentity = { 
-                                    viewModel.resetIdentity(onFail = { 
-                                        android.widget.Toast.makeText(this@MainActivity, "Must be online to reset", android.widget.Toast.LENGTH_SHORT).show() 
-                                    }) 
+                                onResetIdentity = {
+                                    viewModel.resetIdentity(onFail = {
+                                        android.widget.Toast.makeText(this@MainActivity, "Must be online to reset", android.widget.Toast.LENGTH_SHORT).show()
+                                    })
                                 },
                                 onSaveIdentity = viewModel::saveIdentity,
                                 onAcceptFriendRequest = viewModel::acceptFriendRequest,
@@ -135,7 +125,7 @@ class MainActivity : ComponentActivity() {
 
                             val syncState = chatViewModel.syncState.collectAsState().value
                             val messages = chatViewModel.messagesPagingData.collectAsLazyPagingItems()
-                            
+
 
 
                             val alias = chatViewModel.alias.collectAsState().value
@@ -143,6 +133,8 @@ class MainActivity : ComponentActivity() {
 
                             ChatScreen(
                                 alias = alias,
+                                myUuid = securePrefs.myUuid,
+                                peerUuid = targetUuid,
                                 syncState = syncState,
                                 messages = messages,
                                 onBack = { navController.popBackStack() },
@@ -157,7 +149,7 @@ class MainActivity : ComponentActivity() {
                                         org.msgat.core.call.CallSignalingHandler.getInstance()
                                         org.msgat.core.call.CallManager.getInstance().startOutgoingCall(targetUuid)
                                     } else {
-                                        android.widget.Toast.makeText(this@MainActivity, "需要麦克风权限才能进行语音通话", android.widget.Toast.LENGTH_SHORT).show()
+                                        android.widget.Toast.makeText(this@MainActivity, "Microphone permission is required for voice calls.", android.widget.Toast.LENGTH_SHORT).show()
                                     }
                                 },
                                 onMarkAsRead = {
@@ -171,7 +163,7 @@ class MainActivity : ComponentActivity() {
                             )
                         }
                     }
-                    
+
                     CallOverlay()
                 }
             }

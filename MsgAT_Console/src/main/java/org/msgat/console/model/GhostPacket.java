@@ -28,6 +28,8 @@ public class GhostPacket {
     public static final byte TYPE_CALL_REJECT = 0x16;
     public static final byte TYPE_CALL_END = 0x17;
     public static final byte TYPE_CALL_BUSY = 0x18;
+    public static final byte TYPE_CALL_SYNC = 0x19;
+
     private final byte type;
     private final String targetMailboxId;
     private final byte[] nonceOrIv;
@@ -47,19 +49,19 @@ public class GhostPacket {
 
     // Returns the packet type identifier.
     public byte getType() { return type; }
-    
+
     // Returns the target mailbox identifier.
     public String getTargetMailboxId() { return targetMailboxId; }
-    
+
     // Returns the initialization vector or challenge nonce array.
     public byte[] getNonceOrIv() { return nonceOrIv; }
-    
+
     // Returns the length of the encrypted payload data.
     public int getPayloadLen() { return payloadLen; }
-    
+
     // Returns the encrypted payload data array.
     public byte[] getEncryptedData() { return encryptedData; }
-    
+
     // Returns the GCM authentication tag array.
     public byte[] getAuthTag() { return authTag; }
 
@@ -93,17 +95,17 @@ public class GhostPacket {
         byte[] targetBytes = new byte[targetLen];
         buffer.get(targetBytes);
         String targetMailboxId = new String(targetBytes, java.nio.charset.StandardCharsets.UTF_8);
-        
+
         byte[] nonceOrIv = new byte[16];
         buffer.get(nonceOrIv);
-        
+
         int payloadLen = buffer.getInt();
         byte[] encryptedData = new byte[payloadLen];
         buffer.get(encryptedData);
-        
+
         byte[] authTag = new byte[16];
         buffer.get(authTag);
-        
+
         return new GhostPacket(type, targetMailboxId, nonceOrIv, encryptedData, authTag);
     }
 }

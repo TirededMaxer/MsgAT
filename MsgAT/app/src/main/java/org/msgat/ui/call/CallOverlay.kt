@@ -10,8 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CallEnd
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.MicOff
-import androidx.compose.material.icons.filled.VolumeOff
-import androidx.compose.material.icons.filled.VolumeUp
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
 import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material3.*
@@ -22,7 +21,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -166,7 +164,7 @@ fun IncomingCallScreen(
                     val rejectInteraction = remember { MutableInteractionSource() }
                     val isRejectPressed by rejectInteraction.collectIsPressedAsState()
                     val rejectScale by animateFloatAsState(targetValue = if (isRejectPressed) 0.85f else 1f, label = "rejectScale")
-                    
+
                     IconButton(
                         onClick = onReject,
                         interactionSource = rejectInteraction,
@@ -185,7 +183,7 @@ fun IncomingCallScreen(
                     val acceptInteraction = remember { MutableInteractionSource() }
                     val isAcceptPressed by acceptInteraction.collectIsPressedAsState()
                     val acceptScale by animateFloatAsState(targetValue = if (isAcceptPressed) 0.85f else 1f, label = "acceptScale")
-                    
+
                     IconButton(
                         onClick = onAccept,
                         interactionSource = acceptInteraction,
@@ -247,10 +245,10 @@ fun CallScreen(
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 // Connection quality indicator
-                val color = if (rtt < 150) Color.Green else if (rtt < 300) Color.Yellow else Color.Red
+                val color = if (rtt <= 0) Color.Gray else if (rtt < 150) Color.Green else if (rtt < 300) Color.Yellow else Color.Red
                 Box(modifier = Modifier.size(8.dp).background(color, CircleShape))
                 Spacer(modifier = Modifier.width(4.dp))
-                Text(text = "${rtt}ms", color = Color.White, fontSize = 12.sp)
+                Text(text = if (rtt > 0) "${rtt}ms" else "—", color = Color.White, fontSize = 12.sp)
             }
         }
 
@@ -293,7 +291,7 @@ fun CallScreen(
                 val muteInteraction = remember { MutableInteractionSource() }
                 val isMutePressed by muteInteraction.collectIsPressedAsState()
                 val muteScale by animateFloatAsState(targetValue = if (isMutePressed) 0.85f else 1f, label = "muteScale")
-                
+
                 IconButton(
                     onClick = onToggleMute,
                     interactionSource = muteInteraction,
@@ -304,7 +302,7 @@ fun CallScreen(
                 ) {
                     Icon(
                         imageVector = if (isMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                        contentDescription = "Mute",
+                        contentDescription = if (isMuted) "Unmute" else "Mute",
                         tint = if (isMuted) Color.Black else Color.White,
                         modifier = Modifier.size(32.dp)
                     )
@@ -323,8 +321,8 @@ fun CallScreen(
                         .background(if (isSpeakerOn) Color.White else Color(0x33FFFFFF), CircleShape)
                 ) {
                     Icon(
-                        imageVector = if (isSpeakerOn) Icons.Default.VolumeUp else Icons.Default.VolumeUp,
-                        contentDescription = "Speaker",
+                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                        contentDescription = if (isSpeakerOn) "Turn speaker off" else "Turn speaker on",
                         tint = if (isSpeakerOn) Color.Black else Color.White,
                         modifier = Modifier.size(32.dp)
                     )
@@ -359,25 +357,26 @@ fun MinimizedCallOverlay(
     avatar: String,
     onExpand: () -> Unit
 ) {
-    val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp
-    val screenHeight = configuration.screenHeightDp
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val density = LocalDensity.current
+        val screenWidth = maxWidth.value
+        val screenHeight = maxHeight.value
+        var offsetX by remember(screenWidth) { mutableStateOf((screenWidth - 80).coerceAtLeast(0f)) }
+        var offsetY by remember(screenHeight) { mutableStateOf(100f.coerceAtMost((screenHeight - 80).coerceAtLeast(0f))) }
 
-    var offsetX by remember { mutableStateOf((screenWidth - 80).toFloat()) } // 80 is roughly width
-    var offsetY by remember { mutableStateOf(100f) } // Top margin
-
-    Box(
-        modifier = Modifier.fillMaxSize() // Full size to capture gestures only on the overlay bounds
-    ) {
-        val density = LocalDensity.current.density
         Box(
             modifier = Modifier
-                .offset(x = offsetX.dp, y = offsetY.dp)
+                .offset {
+                    IntOffset(
+                        with(density) { offsetX.dp.roundToPx() },
+                        with(density) { offsetY.dp.roundToPx() }
+                    )
+                }
                 .size(80.dp)
                 .clip(RoundedCornerShape(16.dp))
                 .background(Color(0xCC000000))
                 .clickable { onExpand() }
-                .pointerInput(density) {
+                .pointerInput(density.density, screenWidth, screenHeight) {
                     detectDragGestures(
                         onDragEnd = {
                             // Snap to edges
@@ -389,8 +388,8 @@ fun MinimizedCallOverlay(
                         }
                     ) { change, dragAmount ->
                         change.consume()
-                        offsetX = (offsetX + (dragAmount.x / density)).coerceIn(0f, (screenWidth - 80).toFloat())
-                        offsetY = (offsetY + (dragAmount.y / density)).coerceIn(0f, (screenHeight - 80).toFloat())
+                        offsetX = (offsetX + (dragAmount.x / density.density)).coerceIn(0f, (screenWidth - 80).coerceAtLeast(0f))
+                        offsetY = (offsetY + (dragAmount.y / density.density)).coerceIn(0f, (screenHeight - 80).coerceAtLeast(0f))
                     }
                 },
             contentAlignment = Alignment.Center

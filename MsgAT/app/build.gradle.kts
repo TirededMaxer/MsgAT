@@ -13,7 +13,7 @@ android {
         applicationId = "org.msgat"
         minSdk = 29
         targetSdk = 36
-        versionCode = 6
+        versionCode = 7
         versionName = "1.5"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -36,19 +36,16 @@ android {
         compose = true
     }
     lint {
-        // 禁用导致崩溃的特定检查规则
         disable.add("StateFlowValueCalledInComposition")
-
-        // 【强烈建议加上这两行】：防止以后其他的 Google Lint Bug 再次阻断我们的 Release 打包
-        checkReleaseBuilds = false
-        abortOnError = false
+        checkReleaseBuilds = true
+        abortOnError = true
     }
     packaging {
         resources {
-            // 排除冲突的 INDEX.LIST 文件
+            // Exclude duplicate metadata contributed by shaded dependencies.
             excludes += "META-INF/INDEX.LIST"
 
-            // 为了保险起见，建议把 Netty 经常冲突的另一个版本声明文件也排除了
+            // Netty dependency metadata also conflicts in the final package.
             excludes += "META-INF/io.netty.versions.properties"
             excludes += "META-INF/DEPENDENCIES"
         }
@@ -75,34 +72,36 @@ dependencies {
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
 
-    // Netty 通讯底层
+    // Networking
     implementation("io.netty:netty-all:4.1.107.Final")
-    // BouncyCastle 密码学库 (提供 Ed25519 和 Argon2)
+    // Cryptography (Ed25519, X25519, and AES-GCM primitives)
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
-    // Gson 用于 JSON 序列化
+    // JSON serialization
     implementation("com.google.code.gson:gson:2.10.1")
-    // AndroidX 安全增强存储
+    // Android secure storage
     implementation("androidx.compose.material:material-icons-extended:1.5.0")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
-    // Room 数据库
+    // Room database
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     implementation("androidx.room:room-paging:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
-    // SQLCipher 数据库加密引擎
-    implementation("net.zetetic:android-database-sqlcipher:4.5.4")
-    // 生命周期监控 (用于前后台切换)
+    // SQLCipher database encryption engine with current Android page-size support.
+    // 4.17 is the newest release compatible with this project's compileSdk 36 toolchain.
+    implementation("net.zetetic:sqlcipher-android:4.17.0@aar")
+    implementation("androidx.sqlite:sqlite:2.6.2")
+    // Process lifecycle monitoring
     implementation("androidx.lifecycle:lifecycle-process:2.7.0")
-    // 图片加载
+    // Image loading
     implementation("io.coil-kt:coil-compose:2.6.0")
-    // 图片裁剪
+    // Image cropping
     implementation("com.github.yalantis:ucrop:2.2.8")
     // WebRTC Engine for Voice Calls
     implementation("io.github.webrtc-sdk:android:144.7559.09")
     // Paging 3
     implementation("androidx.paging:paging-runtime-ktx:3.3.0")
     implementation("androidx.paging:paging-compose:3.3.0")
-    
+
     // ExoPlayer for Video Playback
     implementation("androidx.media3:media3-exoplayer:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")

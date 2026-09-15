@@ -1,0 +1,432 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		5EB1B9F1A92C4BC0A89EA816 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C733243B64F4FCF8216A54C /* MainWindow.swift */; };
+		069ECC9FF86547F1A7C8312D /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FA426B7E534F3D8D47538D /* ChatViewModel.swift */; };
+		5B54A764A9CD43EC86AE464B /* InAppMediaViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1BFD75976644D5B0F74B38 /* InAppMediaViewer.swift */; };
+		F1756860D4C9415B822CCB4D /* ChatBubbleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FC03B9FEA2A4A29ACA3F314 /* ChatBubbleView.swift */; };
+		4AF2A6139D88457B989B438D /* ChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC2A5B42B51A48558E65783E /* ChatView.swift */; };
+		CF12BBC6E6C545C09C4F2EB3 /* Dialogs.swift in Sources */ = {isa = PBXBuildFile; fileRef = D38E866DB9AD49CDB005C7EB /* Dialogs.swift */; };
+		6CC7034D5F804DFC8B0BA523 /* AvatarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B8D72ABFA8440E9B1AABD1C /* AvatarView.swift */; };
+		36DCA20AE9CF4B53B7EEF72C /* CallOverlayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 486A5E35EAF64F64B100B0F5 /* CallOverlayView.swift */; };
+		6E79EE86CC65422F86B35640 /* MsgATTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E84AD4EA658849FAB57681E4 /* MsgATTheme.swift */; };
+		84F8124E44BA4B1D85558C28 /* SessionListViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A7766AFA91748A6ABC085BE /* SessionListViewModel.swift */; };
+		9D7D33B3B73B494B9DA34391 /* SessionListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 82FADCEB000A4BDC9CB604C4 /* SessionListView.swift */; };
+		8E32D0D55B154043BD4AC793 /* KeychainManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 53928534645C4F55B25E0B2A /* KeychainManager.swift */; };
+		A8BE7CE257C449C185EBAB80 /* Blake2b.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C549986DF714F27997F1128 /* Blake2b.swift */; };
+		FF9DBA300E704930A4FDAD30 /* CryptoManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060B9AA1D5524431A81E5C11 /* CryptoManager.swift */; };
+		00F3C9A887AB46A3ABB92570 /* GhostPacketCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E19C403857E43139F785AB0 /* GhostPacketCodec.swift */; };
+		0BEB712E286246B58514C618 /* GhostPacket.swift in Sources */ = {isa = PBXBuildFile; fileRef = D70E33827103435DA154E202 /* GhostPacket.swift */; };
+		FE8E140DEB6C4FEC88CFBC16 /* MessageResender.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7699E12703F41A6A80058D7 /* MessageResender.swift */; };
+		FC72CAEDCE224CE0B3B7608D /* NWClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE98D53728D148B5A3FCECC1 /* NWClient.swift */; };
+		4E98513CCB9144F5BEBBD0B9 /* GhostClientHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F89B1147D204EBB8C586933 /* GhostClientHandler.swift */; };
+		62899511183F46B7A7CDB30D /* NotificationHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = E503A7198FCB4B0E9B666372 /* NotificationHelper.swift */; };
+		A2B7C4B1D936496B87504A58 /* CallManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 842BA56195C846FB99F3492F /* CallManager.swift */; };
+		89DAA2DC62A04F15854019C3 /* CallSignalingHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 96E441E6BA684DEEBB1F05D2 /* CallSignalingHandler.swift */; };
+		9B582B4CF6D44BDB83A36DCC /* OpusCodecHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = C9DE5289463E4E3EA2229CFC /* OpusCodecHelper.swift */; };
+		BAD0AAE36EEE476F8343C91D /* MediaStorageManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8B8B34DF9A9B44F986FAA3D0 /* MediaStorageManager.swift */; };
+		D94475EC9DBC48B3885C7102 /* MsgATApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = E7F8475573E14E0588231A63 /* MsgATApp.swift */; };
+		9A07DCD1520D43DCABBD9CAB /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A882D6B2E31C47E994A094B9 /* AppDelegate.swift */; };
+		62F55772A8AA4D7CB4C1C951 /* AppDatabase.swift in Sources */ = {isa = PBXBuildFile; fileRef = F96A7085A41E4AF2BA2DF8EF /* AppDatabase.swift */; };
+		B4F02206E55E4FF2AE300A86 /* MsgDao.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2B2C11FB3D44DA698BA0BA2 /* MsgDao.swift */; };
+		BBD5C40D9C2446FB9876412B /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0DBC3856F97D408383BEFA6E /* Models.swift */; };
+		34D855302FC744C7B24677EB /* blake2b-ref.c in Sources */ = {isa = PBXBuildFile; fileRef = CB82944B39EC45ECA24B7E18 /* blake2b-ref.c */; };
+		71A61F0C13CB48D49C42DF7D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A18E79EC718842629D5D7E4A /* Assets.xcassets */; };
+		823C3B6F701848BF88E1203A /* SQLCipher in Frameworks */ = {isa = PBXBuildFile; productRef = C321670B59FF4AEDA7833BFA /* SQLCipher */; };
+		A7E233908FCF4AFDA2A89234 /* WebRTC in Frameworks */ = {isa = PBXBuildFile; productRef = EC197DF71AE14FACB374393D /* WebRTC */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		62BA06A366D441C09FC7A6D0 /* MsgAT.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MsgAT.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		3C733243B64F4FCF8216A54C /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/MainWindow.swift"; sourceTree = "<group>"; };
+		14FA426B7E534F3D8D47538D /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Chat/ChatViewModel.swift"; sourceTree = "<group>"; };
+		2E1BFD75976644D5B0F74B38 /* InAppMediaViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Chat/InAppMediaViewer.swift"; sourceTree = "<group>"; };
+		6FC03B9FEA2A4A29ACA3F314 /* ChatBubbleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Chat/ChatBubbleView.swift"; sourceTree = "<group>"; };
+		DC2A5B42B51A48558E65783E /* ChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Chat/ChatView.swift"; sourceTree = "<group>"; };
+		D38E866DB9AD49CDB005C7EB /* Dialogs.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Components/Dialogs.swift"; sourceTree = "<group>"; };
+		7B8D72ABFA8440E9B1AABD1C /* AvatarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Components/AvatarView.swift"; sourceTree = "<group>"; };
+		486A5E35EAF64F64B100B0F5 /* CallOverlayView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Call/CallOverlayView.swift"; sourceTree = "<group>"; };
+		E84AD4EA658849FAB57681E4 /* MsgATTheme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Theme/MsgATTheme.swift"; sourceTree = "<group>"; };
+		4A7766AFA91748A6ABC085BE /* SessionListViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/SessionList/SessionListViewModel.swift"; sourceTree = "<group>"; };
+		82FADCEB000A4BDC9CB604C4 /* SessionListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/SessionList/SessionListView.swift"; sourceTree = "<group>"; };
+		53928534645C4F55B25E0B2A /* KeychainManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/KeychainManager.swift"; sourceTree = "<group>"; };
+		3C549986DF714F27997F1128 /* Blake2b.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/Blake2b.swift"; sourceTree = "<group>"; };
+		060B9AA1D5524431A81E5C11 /* CryptoManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/CryptoManager.swift"; sourceTree = "<group>"; };
+		2E19C403857E43139F785AB0 /* GhostPacketCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/GhostPacketCodec.swift"; sourceTree = "<group>"; };
+		D70E33827103435DA154E202 /* GhostPacket.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/GhostPacket.swift"; sourceTree = "<group>"; };
+		F7699E12703F41A6A80058D7 /* MessageResender.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/MessageResender.swift"; sourceTree = "<group>"; };
+		DE98D53728D148B5A3FCECC1 /* NWClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/NWClient.swift"; sourceTree = "<group>"; };
+		3F89B1147D204EBB8C586933 /* GhostClientHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/GhostClientHandler.swift"; sourceTree = "<group>"; };
+		E503A7198FCB4B0E9B666372 /* NotificationHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/NotificationHelper.swift"; sourceTree = "<group>"; };
+		842BA56195C846FB99F3492F /* CallManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/CallManager.swift"; sourceTree = "<group>"; };
+		96E441E6BA684DEEBB1F05D2 /* CallSignalingHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/CallSignalingHandler.swift"; sourceTree = "<group>"; };
+		C9DE5289463E4E3EA2229CFC /* OpusCodecHelper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/OpusCodecHelper.swift"; sourceTree = "<group>"; };
+		8B8B34DF9A9B44F986FAA3D0 /* MediaStorageManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Media/MediaStorageManager.swift"; sourceTree = "<group>"; };
+		E7F8475573E14E0588231A63 /* MsgATApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/MsgATApp.swift"; sourceTree = "<group>"; };
+		A882D6B2E31C47E994A094B9 /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "App/AppDelegate.swift"; sourceTree = "<group>"; };
+		F96A7085A41E4AF2BA2DF8EF /* AppDatabase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Data/DB/AppDatabase.swift"; sourceTree = "<group>"; };
+		C2B2C11FB3D44DA698BA0BA2 /* MsgDao.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Data/DB/MsgDao.swift"; sourceTree = "<group>"; };
+		0DBC3856F97D408383BEFA6E /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Data/DB/Models.swift"; sourceTree = "<group>"; };
+		CB82944B39EC45ECA24B7E18 /* blake2b-ref.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = "CBlake2/blake2b-ref.c"; sourceTree = "<group>"; };
+		A18E79EC718842629D5D7E4A /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "App/Assets.xcassets"; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		519A05AD713D4798A3824AB3 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				823C3B6F701848BF88E1203A /* SQLCipher in Frameworks */,
+				A7E233908FCF4AFDA2A89234 /* WebRTC in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		EAB5BEF4B53F4823AF0F4A96 = {
+			isa = PBXGroup;
+			children = (
+				46380A9C67094CF7BF30A0D8 /* Sources */,
+				ACE69864A77749408724A6DE /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		46380A9C67094CF7BF30A0D8 /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				3C733243B64F4FCF8216A54C /* MainWindow.swift */,
+				14FA426B7E534F3D8D47538D /* ChatViewModel.swift */,
+				2E1BFD75976644D5B0F74B38 /* InAppMediaViewer.swift */,
+				6FC03B9FEA2A4A29ACA3F314 /* ChatBubbleView.swift */,
+				DC2A5B42B51A48558E65783E /* ChatView.swift */,
+				D38E866DB9AD49CDB005C7EB /* Dialogs.swift */,
+				7B8D72ABFA8440E9B1AABD1C /* AvatarView.swift */,
+				486A5E35EAF64F64B100B0F5 /* CallOverlayView.swift */,
+				E84AD4EA658849FAB57681E4 /* MsgATTheme.swift */,
+				4A7766AFA91748A6ABC085BE /* SessionListViewModel.swift */,
+				82FADCEB000A4BDC9CB604C4 /* SessionListView.swift */,
+				53928534645C4F55B25E0B2A /* KeychainManager.swift */,
+				3C549986DF714F27997F1128 /* Blake2b.swift */,
+				060B9AA1D5524431A81E5C11 /* CryptoManager.swift */,
+				2E19C403857E43139F785AB0 /* GhostPacketCodec.swift */,
+				D70E33827103435DA154E202 /* GhostPacket.swift */,
+				F7699E12703F41A6A80058D7 /* MessageResender.swift */,
+				DE98D53728D148B5A3FCECC1 /* NWClient.swift */,
+				3F89B1147D204EBB8C586933 /* GhostClientHandler.swift */,
+				E503A7198FCB4B0E9B666372 /* NotificationHelper.swift */,
+				842BA56195C846FB99F3492F /* CallManager.swift */,
+				96E441E6BA684DEEBB1F05D2 /* CallSignalingHandler.swift */,
+				C9DE5289463E4E3EA2229CFC /* OpusCodecHelper.swift */,
+				8B8B34DF9A9B44F986FAA3D0 /* MediaStorageManager.swift */,
+				E7F8475573E14E0588231A63 /* MsgATApp.swift */,
+				A882D6B2E31C47E994A094B9 /* AppDelegate.swift */,
+				F96A7085A41E4AF2BA2DF8EF /* AppDatabase.swift */,
+				C2B2C11FB3D44DA698BA0BA2 /* MsgDao.swift */,
+				0DBC3856F97D408383BEFA6E /* Models.swift */,
+				CB82944B39EC45ECA24B7E18 /* blake2b-ref.c */,
+				A18E79EC718842629D5D7E4A /* Assets.xcassets */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		ACE69864A77749408724A6DE /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				62BA06A366D441C09FC7A6D0 /* MsgAT.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		249F93229244403B9308B7FD /* MsgAT */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 44E9649F38584A8DB8924180 /* Build configuration list for PBXNativeTarget "MsgAT" */;
+			buildPhases = (
+				E79B1CC9B9294984971BA541 /* Sources */,
+				519A05AD713D4798A3824AB3 /* Frameworks */,
+				D3ACAB92B06E41E3B612D799 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MsgAT;
+			packageProductDependencies = (
+				C321670B59FF4AEDA7833BFA /* SQLCipher */,
+				EC197DF71AE14FACB374393D /* WebRTC */,
+			);
+			productName = MsgAT;
+			productReference = 62BA06A366D441C09FC7A6D0 /* MsgAT.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		313CB438440F4105B0A4B7F4 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					249F93229244403B9308B7FD = {
+						CreatedOnToolsVersion = 15.0;
+					};
+				};
+			};
+			buildConfigurationList = E4DD6929478A4FC288D2C223 /* Build configuration list for PBXProject "MsgAT" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = EAB5BEF4B53F4823AF0F4A96;
+			packageReferences = (
+				AE9C219BACFA4757BD84EF65 /* XCRemoteSwiftPackageReference "SQLCipher.swift" */,
+				E53914B65B24403B9823D01F /* XCRemoteSwiftPackageReference "WebRTC" */,
+			);
+			productRefGroup = ACE69864A77749408724A6DE /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				249F93229244403B9308B7FD /* MsgAT */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		D3ACAB92B06E41E3B612D799 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				71A61F0C13CB48D49C42DF7D /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		E79B1CC9B9294984971BA541 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				5EB1B9F1A92C4BC0A89EA816 /* MainWindow.swift in Sources */,
+				069ECC9FF86547F1A7C8312D /* ChatViewModel.swift in Sources */,
+				5B54A764A9CD43EC86AE464B /* InAppMediaViewer.swift in Sources */,
+				F1756860D4C9415B822CCB4D /* ChatBubbleView.swift in Sources */,
+				4AF2A6139D88457B989B438D /* ChatView.swift in Sources */,
+				CF12BBC6E6C545C09C4F2EB3 /* Dialogs.swift in Sources */,
+				6CC7034D5F804DFC8B0BA523 /* AvatarView.swift in Sources */,
+				36DCA20AE9CF4B53B7EEF72C /* CallOverlayView.swift in Sources */,
+				6E79EE86CC65422F86B35640 /* MsgATTheme.swift in Sources */,
+				84F8124E44BA4B1D85558C28 /* SessionListViewModel.swift in Sources */,
+				9D7D33B3B73B494B9DA34391 /* SessionListView.swift in Sources */,
+				8E32D0D55B154043BD4AC793 /* KeychainManager.swift in Sources */,
+				A8BE7CE257C449C185EBAB80 /* Blake2b.swift in Sources */,
+				FF9DBA300E704930A4FDAD30 /* CryptoManager.swift in Sources */,
+				00F3C9A887AB46A3ABB92570 /* GhostPacketCodec.swift in Sources */,
+				0BEB712E286246B58514C618 /* GhostPacket.swift in Sources */,
+				FE8E140DEB6C4FEC88CFBC16 /* MessageResender.swift in Sources */,
+				FC72CAEDCE224CE0B3B7608D /* NWClient.swift in Sources */,
+				4E98513CCB9144F5BEBBD0B9 /* GhostClientHandler.swift in Sources */,
+				62899511183F46B7A7CDB30D /* NotificationHelper.swift in Sources */,
+				A2B7C4B1D936496B87504A58 /* CallManager.swift in Sources */,
+				89DAA2DC62A04F15854019C3 /* CallSignalingHandler.swift in Sources */,
+				9B582B4CF6D44BDB83A36DCC /* OpusCodecHelper.swift in Sources */,
+				BAD0AAE36EEE476F8343C91D /* MediaStorageManager.swift in Sources */,
+				D94475EC9DBC48B3885C7102 /* MsgATApp.swift in Sources */,
+				9A07DCD1520D43DCABBD9CAB /* AppDelegate.swift in Sources */,
+				62F55772A8AA4D7CB4C1C951 /* AppDatabase.swift in Sources */,
+				B4F02206E55E4FF2AE300A86 /* MsgDao.swift in Sources */,
+				BBD5C40D9C2446FB9876412B /* Models.swift in Sources */,
+				34D855302FC744C7B24677EB /* blake2b-ref.c in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		AE9C219BACFA4757BD84EF65 /* XCRemoteSwiftPackageReference "SQLCipher.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sqlcipher/SQLCipher.swift.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 4.10.0;
+			};
+		};
+		E53914B65B24403B9823D01F /* XCRemoteSwiftPackageReference "WebRTC" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/stasel/WebRTC.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 125.0.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C321670B59FF4AEDA7833BFA /* SQLCipher */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = AE9C219BACFA4757BD84EF65 /* XCRemoteSwiftPackageReference "SQLCipher.swift" */;
+			productName = SQLCipher;
+		};
+		EC197DF71AE14FACB374393D /* WebRTC */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = E53914B65B24403B9823D01F /* XCRemoteSwiftPackageReference "WebRTC" */;
+			productName = WebRTC;
+		};
+/* End XCSwiftPackageProductDependency section */
+
+/* Begin XCBuildConfiguration section */
+		93F3B784066D44A480904A4B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		B5C3F080628A4445AA4D1E4B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_NO_COMMON_BLOCKS = YES;
+				MACOSX_DEPLOYMENT_TARGET = 13.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		F0F8C064CFA64F67AD49A3E4 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/App/MsgAT.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 7;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"SQLITE_HAS_CODEC=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Sources/CBlake2/include",
+				);
+				INFOPLIST_FILE = Sources/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C3536F4AA69D4545A21CFC5E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Sources/App/MsgAT.entitlements;
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 7;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"SQLITE_HAS_CODEC=1",
+				);
+				HEADER_SEARCH_PATHS = (
+					"$(inherited)",
+					"$(PROJECT_DIR)/Sources/CBlake2/include",
+				);
+				INFOPLIST_FILE = Sources/App/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		E4DD6929478A4FC288D2C223 /* Build configuration list for PBXProject "MsgAT" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				93F3B784066D44A480904A4B /* Debug */,
+				B5C3F080628A4445AA4D1E4B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		44E9649F38584A8DB8924180 /* Build configuration list for PBXNativeTarget "MsgAT" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F0F8C064CFA64F67AD49A3E4 /* Debug */,
+				C3536F4AA69D4545A21CFC5E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+	};
+	rootObject = 313CB438440F4105B0A4B7F4 /* Project object */;
+}

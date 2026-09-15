@@ -1,0 +1,4 @@
+module CBlake2 [system] {
+    header "blake2.h"
+    export *
+}

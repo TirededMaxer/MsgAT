@@ -2,7 +2,8 @@ package org.msgat.console.core;
 
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.*;
-import io.netty.channel.nio.NioEventLoopGroup;
+import io.netty.channel.MultiThreadIoEventLoopGroup;
+import io.netty.channel.nio.NioIoHandler;
 import io.netty.channel.socket.SocketChannel;
 import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
@@ -11,6 +12,7 @@ import io.netty.handler.ssl.util.SelfSignedCertificate;
 import org.msgat.console.routing.BlindRoutingTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import java.io.File;
 
 public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
 
@@ -18,11 +20,10 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
 
     // Starts the Netty server, sets up dynamic TLS, configures the channel pipeline, and binds to the specified port.
     public void start() throws Exception {
-        SelfSignedCertificate ssc = new SelfSignedCertificate("ghost-node.local");
-        final SslContext sslCtx = SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey()).build();
+        final SslContext sslCtx = createSslContext();
 
-        EventLoopGroup bossGroup = new NioEventLoopGroup(1);
-        EventLoopGroup workerGroup = new NioEventLoopGroup();
+        EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
+        EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -50,6 +51,29 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
         } finally {
             workerGroup.shutdownGracefully();
             bossGroup.shutdownGracefully();
+        }
+    }
+
+    @SuppressWarnings("deprecation") // Netty retains this helper only for explicit local-development certificates.
+    private SslContext createSslContext() throws Exception {
+        String certificatePath = System.getenv("MSGAT_TLS_CERT");
+        String privateKeyPath = System.getenv("MSGAT_TLS_KEY");
+        if (certificatePath != null && !certificatePath.isBlank()
+                && privateKeyPath != null && !privateKeyPath.isBlank()) {
+            return SslContextBuilder.forServer(new File(certificatePath), new File(privateKeyPath)).build();
+        }
+        if ((certificatePath == null || certificatePath.isBlank())
+                != (privateKeyPath == null || privateKeyPath.isBlank())) {
+            throw new IllegalStateException("MSGAT_TLS_CERT and MSGAT_TLS_KEY must be configured together");
+        }
+        log.warn("Using an ephemeral self-signed certificate. Configure MSGAT_TLS_CERT and MSGAT_TLS_KEY for deployment.");
+        SelfSignedCertificate certificate = SelfSignedCertificate.builder()
+                .fqdn("ghost-node.local")
+                .build();
+        try {
+            return SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey()).build();
+        } finally {
+            certificate.delete();
         }
     }
 }

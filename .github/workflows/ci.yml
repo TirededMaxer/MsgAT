@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+      - working-directory: MsgAT
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+      - working-directory: MsgAT_Windows
+        run: dotnet test MsgAT.Windows.slnx -c Release
+      - working-directory: MsgAT_Windows
+        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - working-directory: MsgAT_macOS
+        run: swift test
+      - working-directory: MsgAT_macOS
+        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+
+  relay:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - working-directory: MsgAT_Console
+        run: mvn --batch-mode package

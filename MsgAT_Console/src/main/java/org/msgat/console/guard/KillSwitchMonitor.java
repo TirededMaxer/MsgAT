@@ -78,7 +78,8 @@ public class KillSwitchMonitor {
                     break;
                 }
             }
-        } catch (Exception e) {
+        } catch (java.io.IOException | NumberFormatException e) {
+            log.debug("Unable to read ptrace status", e);
         }
     }
 

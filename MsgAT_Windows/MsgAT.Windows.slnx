@@ -1,0 +1,5 @@
+<Solution>
+  <Project Path="src/MsgAT.Windows.Core/MsgAT.Windows.Core.csproj" />
+  <Project Path="src/MsgAT.Windows/MsgAT.Windows.csproj" />
+  <Project Path="tests/MsgAT.Windows.Core.Tests/MsgAT.Windows.Core.Tests.csproj" />
+</Solution>

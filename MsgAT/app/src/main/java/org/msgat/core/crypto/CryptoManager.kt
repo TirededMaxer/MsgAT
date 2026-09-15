@@ -114,29 +114,4 @@ object CryptoManager {
         return cipher.doFinal(combined)
     }
 
-    // Encrypts a payload using a shared symmetric group key.
-    fun encryptGroupPayload(symmetricKeyBase64: String, iv: ByteArray, plaintext: ByteArray): Pair<ByteArray, ByteArray> {
-        val keyBytes = android.util.Base64.decode(symmetricKeyBase64, android.util.Base64.NO_WRAP)
-        val key = SecretKeySpec(keyBytes, "AES")
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val spec = GCMParameterSpec(128, iv)
-        cipher.init(Cipher.ENCRYPT_MODE, key, spec)
-        val cipherTextWithTag = cipher.doFinal(plaintext)
-
-        val cipherText = cipherTextWithTag.copyOfRange(0, cipherTextWithTag.size - 16)
-        val authTag = cipherTextWithTag.copyOfRange(cipherTextWithTag.size - 16, cipherTextWithTag.size)
-        return Pair(cipherText, authTag)
-    }
-
-    // Decrypts a payload using a shared symmetric group key.
-    fun decryptGroupPayload(symmetricKeyBase64: String, iv: ByteArray, cipherText: ByteArray, authTag: ByteArray): ByteArray {
-        val keyBytes = android.util.Base64.decode(symmetricKeyBase64, android.util.Base64.NO_WRAP)
-        val key = SecretKeySpec(keyBytes, "AES")
-        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
-        val spec = GCMParameterSpec(128, iv)
-        cipher.init(Cipher.DECRYPT_MODE, key, spec)
-
-        val combined = cipherText + authTag
-        return cipher.doFinal(combined)
-    }
 }

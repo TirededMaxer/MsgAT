@@ -41,6 +41,9 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.flow.first
 import androidx.compose.animation.togetherWith
 
 import java.text.SimpleDateFormat
@@ -54,6 +57,8 @@ enum class SyncState { DISCONNECTED, SYNCING, SYNCED }
 // Renders the main chat interface including the message history and input fields.
 fun ChatScreen(
     alias: String,
+    myUuid: String,
+    peerUuid: String,
     syncState: SyncState,
     messages: androidx.paging.compose.LazyPagingItems<MessageUIModel>,
     onBack: () -> Unit,
@@ -68,6 +73,7 @@ fun ChatScreen(
     var inputText by remember { mutableStateOf("") }
     var replyingToMessage by remember { mutableStateOf<MessageUIModel?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
+    var quoteJumpJob by remember { mutableStateOf<Job?>(null) }
     var editingMsg by remember { mutableStateOf<MessageUIModel?>(null) }
     var editingText by remember { mutableStateOf("") }
     val context = LocalContext.current
@@ -85,7 +91,7 @@ fun ChatScreen(
             onSendReadAck(firstMessage.id)
         }
     }
-    
+
     LaunchedEffect(firstMessage?.id) {
         if (firstMessage != null) {
             if (previousMessageId == null) {
@@ -109,9 +115,10 @@ fun ChatScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            val replyId = replyingToMessage?.id
-            val replySender = if (replyingToMessage?.isMine == true) "Me" else alias
-            val replyContent = if (replyingToMessage?.ext == "txt") replyingToMessage?.content else "[${replyingToMessage?.ext?.uppercase()}]"
+            val reply = replyingToMessage
+            val replyId = reply?.id
+            val replySender = reply?.let { if (it.isMine) myUuid else peerUuid }
+            val replyContent = reply?.let { if (it.ext == "txt") it.content else "[${it.ext.uppercase(Locale.ROOT)}]" }
             replyingToMessage = null
             onSelectMedia(uri, replyId, replySender, replyContent) {
                 android.widget.Toast.makeText(context, "Send content Failed", android.widget.Toast.LENGTH_SHORT).show()
@@ -243,9 +250,10 @@ fun ChatScreen(
                         onClick = {
                             if (inputText.isNotEmpty()) {
                                 val textToSend = inputText
-                                val replyId = replyingToMessage?.id
-                                val replySender = if (replyingToMessage?.isMine == true) "Me" else alias
-                                val replyContent = if (replyingToMessage?.ext == "txt") replyingToMessage?.content else "[${replyingToMessage?.ext?.uppercase()}]"
+                                val reply = replyingToMessage
+                                val replyId = reply?.id
+                                val replySender = reply?.let { if (it.isMine) myUuid else peerUuid }
+                                val replyContent = reply?.let { if (it.ext == "txt") it.content else "[${it.ext.uppercase(Locale.ROOT)}]" }
                                 inputText = ""
                                 replyingToMessage = null
                                 onSendMessage(textToSend, replyId, replySender, replyContent) {
@@ -315,9 +323,9 @@ fun ChatScreen(
                     reverseLayout = true,
                     contentPadding = PaddingValues(vertical = 16.dp)
                 ) {
-                    items(messages.itemCount, key = { index -> 
+                    items(messages.itemCount, key = { index ->
                         val msg = messages.peek(index)
-                        if (msg != null) "${msg.id}_${msg.status}_${msg.isRevoked}_${msg.isEdited}" else index 
+                        if (msg != null) "${msg.id}_${msg.status}_${msg.isRevoked}_${msg.isEdited}" else index
                     }) { index ->
                         val msg = messages[index]
                         if (msg != null) {
@@ -326,19 +334,37 @@ fun ChatScreen(
                                 onMediaClick = { selectedMedia = it },
                                 onReply = { replyingToMessage = it },
                                 onQuotedClick = { targetId ->
-                                    val items = messages.itemSnapshotList.items
-                                    val targetIndex = items.indexOfFirst { it.id == targetId }
-                                    if (targetIndex != -1) {
-                                        highlightedMessageId = targetId
-                                        coroutineScope.launch {
-                                            listState.animateScrollToItem(targetIndex)
-                                            kotlinx.coroutines.delay(1500)
-                                            if (highlightedMessageId == targetId) {
-                                                highlightedMessageId = null
+                                    quoteJumpJob?.cancel()
+                                    highlightedMessageId = null
+                                    quoteJumpJob = coroutineScope.launch {
+                                        var targetIndex: Int
+                                        while (true) {
+                                            targetIndex = messages.itemSnapshotList.items.indexOfFirst { it.id == targetId }
+                                            if (targetIndex >= 0) break
+                                            val append = messages.loadState.append
+                                            val count = messages.itemCount
+                                            if (count == 0 || append is androidx.paging.LoadState.Error ||
+                                                (append is androidx.paging.LoadState.NotLoading && append.endOfPaginationReached)) {
+                                                android.widget.Toast.makeText(context, "Quoted message not found", android.widget.Toast.LENGTH_SHORT).show()
+                                                return@launch
+                                            }
+                                            // Access the boundary item to ask Paging for the next local history page.
+                                            messages[count - 1]
+                                            val progressed = withTimeoutOrNull(10_000) {
+                                                snapshotFlow { messages.itemCount to messages.loadState.append }.first { (size, state) ->
+                                                    size != count || state is androidx.paging.LoadState.Error ||
+                                                        (state is androidx.paging.LoadState.NotLoading && state.endOfPaginationReached)
+                                                }
+                                            }
+                                            if (progressed == null) {
+                                                android.widget.Toast.makeText(context, "Quoted message not found", android.widget.Toast.LENGTH_SHORT).show()
+                                                return@launch
                                             }
                                         }
-                                    } else {
-                                        android.widget.Toast.makeText(context, "Quoted message not found", android.widget.Toast.LENGTH_SHORT).show()
+                                        highlightedMessageId = targetId
+                                        listState.animateScrollToItem(targetIndex)
+                                        delay(1500)
+                                        if (highlightedMessageId == targetId) highlightedMessageId = null
                                     }
                                 },
                                 isHighlighted = msg.id == highlightedMessageId,
@@ -360,7 +386,7 @@ fun ChatScreen(
             }
 
             val showScrollToBottom = !isAtBottom
-            
+
             androidx.compose.animation.AnimatedVisibility(
                 visible = showScrollToBottom,
                 modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 16.dp, end = 8.dp),
@@ -488,7 +514,7 @@ fun ChatBubble(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White) 
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
                 }
             }
         }
@@ -721,7 +747,7 @@ fun ChatBubble(
             ) {
                 Text(
                     text = if (msg.isEdited) "$timeString (edited)" else timeString,
-                    color = Color.DarkGray, 
+                    color = Color.DarkGray,
                     fontSize = 10.sp
                 )
                 if (isMe) {
@@ -756,7 +782,7 @@ fun ChatBubble(
                         modifier = Modifier.fillMaxSize()
                     )
                 } else {
-                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White) 
+                    Icon(Icons.Default.Add, contentDescription = null, tint = Color.White)
                 }
             }
         }
@@ -766,6 +792,7 @@ fun ChatBubble(
 
 @Composable
 fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
+    androidx.activity.compose.BackHandler(onBack = onDismiss)
     val context = androidx.compose.ui.platform.LocalContext.current
     androidx.compose.foundation.layout.Box(
         modifier = androidx.compose.ui.Modifier
@@ -824,7 +851,7 @@ fun InAppMediaViewer(msg: MessageUIModel, onDismiss: () -> Unit) {
 @Composable
 fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
     val context = androidx.compose.ui.platform.LocalContext.current
-    val exoPlayer = remember {
+    val exoPlayer = remember(videoFile.absolutePath) {
         androidx.media3.exoplayer.ExoPlayer.Builder(context).build().apply {
             val mediaItem = androidx.media3.common.MediaItem.fromUri(android.net.Uri.fromFile(videoFile))
             setMediaItem(mediaItem)
@@ -838,14 +865,17 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
     var currentPosition by remember { mutableStateOf(0L) }
     var totalDuration by remember { mutableStateOf(0L) }
 
-    DisposableEffect(Unit) {
+    DisposableEffect(exoPlayer) {
         val listener = object : androidx.media3.common.Player.Listener {
             override fun onIsPlayingChanged(isPlayingNow: Boolean) {
                 isPlaying = isPlayingNow
+                currentPosition = if (exoPlayer.playbackState == androidx.media3.common.Player.STATE_ENDED) totalDuration else exoPlayer.currentPosition
             }
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == androidx.media3.common.Player.STATE_READY) {
                     totalDuration = exoPlayer.duration.coerceAtLeast(0)
+                } else if (playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                    currentPosition = totalDuration
                 }
             }
         }
@@ -856,7 +886,7 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
         }
     }
 
-    LaunchedEffect(isPlaying) {
+    LaunchedEffect(exoPlayer, isPlaying) {
         while (isActive && isPlaying) {
             currentPosition = exoPlayer.currentPosition
             delay(100)
@@ -886,7 +916,17 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
             Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                 Box(
                     modifier = Modifier
-                        .clickable { if (isPlaying) exoPlayer.pause() else exoPlayer.play() }
+                        .clickable {
+                            if (isPlaying) {
+                                exoPlayer.pause()
+                            } else {
+                                if (exoPlayer.playbackState == androidx.media3.common.Player.STATE_ENDED) {
+                                    exoPlayer.seekTo(0)
+                                    currentPosition = 0
+                                }
+                                exoPlayer.play()
+                            }
+                        }
                         .padding(8.dp)
                 ) {
                     Icon(
@@ -896,8 +936,8 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
                     )
                 }
                 Spacer(modifier = Modifier.width(8.dp))
-                val currentText = String.format("%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(currentPosition), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(currentPosition) % 60)
-                val totalText = String.format("%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(totalDuration), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(totalDuration) % 60)
+                val currentText = String.format(Locale.ROOT, "%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(currentPosition), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(currentPosition) % 60)
+                val totalText = String.format(Locale.ROOT, "%02d:%02d", java.util.concurrent.TimeUnit.MILLISECONDS.toMinutes(totalDuration), java.util.concurrent.TimeUnit.MILLISECONDS.toSeconds(totalDuration) % 60)
                 Text("$currentText / $totalText", color = Color.White, fontSize = 12.sp)
             }
             androidx.compose.material3.Slider(

@@ -56,7 +56,7 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     // Verifies the client's signed authentication response; if valid, registers the client and pushes offline messages.
     private void handleAuthResponse(ChannelHandlerContext ctx, GhostPacket packet) {
         byte[] payload = packet.getEncryptedData();
-        if (payload == null || payload.length != 96) {
+        if (currentChallengeNonce == null || pendingMailboxId == null || payload == null || payload.length != 96) {
             ctx.close();
             return;
         }
@@ -64,29 +64,28 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
         byte[] publicKey = Arrays.copyOfRange(payload, 0, 32);
         byte[] signature = Arrays.copyOfRange(payload, 32, 96);
 
-        if (verifySignature(publicKey, currentChallengeNonce, signature)) {
+        String uuid = CryptoUtils.identityUuid(publicKey);
+        if (pendingMailboxId.equals(CryptoUtils.calculateMailboxId(uuid))
+                && verifySignature(publicKey, currentChallengeNonce, signature)) {
             this.isAuthenticated = true;
-            routingTable.register(this.pendingMailboxId, ctx.channel());
-            ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).set(this.pendingMailboxId);
+            synchronized (routingTable) {
+                routingTable.register(this.pendingMailboxId, ctx.channel());
+                ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).set(this.pendingMailboxId);
 
-            var offlineMsgs = routingTable.retrieveOfflineMessages(this.pendingMailboxId);
-            if (offlineMsgs != null && !offlineMsgs.isEmpty()) {
-                for (GhostPacket msg : offlineMsgs) {
-                    ctx.writeAndFlush(msg);
+                var offlineMsgs = routingTable.retrieveOfflineMessages(this.pendingMailboxId);
+                if (offlineMsgs != null && !offlineMsgs.isEmpty()) {
+                    for (GhostPacket msg : offlineMsgs) {
+                        ctx.writeAndFlush(msg);
+                    }
                 }
+                ctx.writeAndFlush(new GhostPacket(GhostPacket.TYPE_OFFLINE_END, this.pendingMailboxId,
+                        new byte[16], new byte[0], new byte[16]));
             }
         } else {
             ctx.close();
+            return;
         }
 
-        GhostPacket endPacket = new GhostPacket(
-                GhostPacket.TYPE_OFFLINE_END,
-                this.pendingMailboxId,
-                new byte[16],
-                new byte[0],
-                new byte[16]
-        );
-        ctx.writeAndFlush(endPacket);
     }
 
     // Validates an Ed25519 signature against a public key and the original challenge nonce.
@@ -106,7 +105,7 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     @Override
     public void channelInactive(ChannelHandlerContext ctx) {
         if (isAuthenticated && pendingMailboxId != null) {
-            routingTable.remove(pendingMailboxId);
+            routingTable.remove(pendingMailboxId, ctx.channel());
         }
         ctx.fireChannelInactive();
     }

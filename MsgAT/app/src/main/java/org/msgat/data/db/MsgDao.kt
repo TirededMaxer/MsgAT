@@ -15,8 +15,8 @@ interface MsgDao {
     fun getAllConversations(): Flow<List<Conversation>>
 
     @Query("""
-        SELECT c.*, 
-        (SELECT COUNT(*) FROM messages m WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0) as unreadCount 
+        SELECT c.*,
+        (SELECT COUNT(*) FROM messages m WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0) as unreadCount
         FROM conversations c
     """)
     fun getAllConversationsWithUnread(): Flow<List<ConversationWithUnreadCount>>
@@ -47,7 +47,7 @@ interface MsgDao {
     // Retrieves a PagingSource of messages belonging to a specific conversation.
     fun getPagingMessages(uuid: String): androidx.paging.PagingSource<Int, ChatMessage>
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
     // Inserts a new chat message into the database.
     suspend fun insertMessage(message: ChatMessage)
 
@@ -60,7 +60,7 @@ interface MsgDao {
     @Query("UPDATE messages SET status = :status WHERE conversationUuid = :targetUuid AND timestamp <= :timestamp AND isMine = 1 AND status < :status")
     suspend fun updateMessageStatusUpTo(targetUuid: String, timestamp: Long, status: Int)
 
-    @Query("SELECT * FROM messages WHERE status = 0 AND isMine = 1")
+    @Query("SELECT * FROM messages WHERE status < 2 AND isMine = 1 AND isRevoked = 0 ORDER BY timestamp")
     suspend fun getPendingMessages(): List<ChatMessage>
 
     @Query("UPDATE messages SET isRevoked = 1 WHERE messageId = :messageId")

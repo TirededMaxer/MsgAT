@@ -1,5 +1,6 @@
 package org.msgat.core.call
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.*
@@ -9,6 +10,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import org.msgat.MsgATApp
 import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
+import java.util.Locale
 
 enum class CallState {
     IDLE,
@@ -40,10 +42,13 @@ class CallManager private constructor(private val context: Context) {
     private var durationJob: Job? = null
     private var rttJob: Job? = null
     private var timeoutJob: Job? = null
-    
+    private var disconnectGraceJob: Job? = null
+
     var currentPeerUuid: String? = null
         private set
-    
+
+    fun isCurrentPeer(peerUuid: String): Boolean = currentPeerUuid == peerUuid
+
     private var isCaller: Boolean = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
 
@@ -78,47 +83,109 @@ class CallManager private constructor(private val context: Context) {
             .setOptions(options)
             .setAudioDeviceModule(audioDeviceModule)
             .createPeerConnectionFactory()
-            
+
         audioDeviceModule.release()
     }
 
-    private fun createPeerConnection() {
-        val iceServers = listOf(
-            PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer()
-            // Turn server will be added here later
-        )
+    /**
+     * P2P-first ICE configuration.
+     * - Multiple STUN servers (Google + Cloudflare + China-reachable endpoints) so both
+     *   peers can always learn their server-reflexive candidates for direct hole punching.
+     * - Optional TURN relay only when configured in Settings (empty = pure P2P).
+     *   ICE always prefers the direct path; TURN is a last-resort fallback.
+     */
+    private fun buildIceServers(): List<PeerConnection.IceServer> {
+        val servers = mutableListOf<PeerConnection.IceServer>()
 
-        val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
+        listOf(
+            "stun:stun.l.google.com:19302",
+            "stun:stun1.l.google.com:19302",
+            "stun:stun.cloudflare.com:3478",
+            "stun:stun.miwifi.com:3478",
+            "stun:stun.chat.bilibili.com:3478"
+        ).forEach { url ->
+            servers += PeerConnection.IceServer.builder(url).createIceServer()
+        }
+
+        val prefs = MsgATApp.instance.securePrefs
+        val turnHost = prefs.turnServer?.trim() ?: ""
+        if (turnHost.isNotEmpty()) {
+            val turnPort = if (prefs.turnPort > 0) prefs.turnPort else 3478
+            val user = prefs.turnUsername ?: ""
+            val pass = prefs.turnPassword ?: ""
+            val endpoints = mutableListOf(
+                "turn:$turnHost:$turnPort",
+                "turn:$turnHost:$turnPort?transport=tcp"
+            )
+            if (prefs.turnUseTls) {
+                endpoints += "turns:$turnHost:$turnPort?transport=tcp"
+            }
+            endpoints.forEach { url ->
+                servers += PeerConnection.IceServer.builder(url)
+                    .setUsername(user)
+                    .setPassword(pass)
+                    .createIceServer()
+            }
+        }
+        return servers
+    }
+
+    private var peerGeneration = 0
+
+    private fun createPeerConnection() {
+        val generation = ++peerGeneration
+        val rtcConfig = PeerConnection.RTCConfiguration(buildIceServers()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
+            continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         }
 
         peerConnection = factory?.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onSignalingChange(newState: PeerConnection.SignalingState?) {}
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
+                if (generation != peerGeneration || _callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
                 Log.d("MsgAT-Call", "ICE Connection State: $newState")
-                if (newState == PeerConnection.IceConnectionState.CONNECTED || newState == PeerConnection.IceConnectionState.COMPLETED) {
-                    if (_callState.value != CallState.CONNECTED) {
-                        _callState.value = CallState.CONNECTED
-                        startCallTimers()
-                        try {
-                            peerConnection?.senders?.forEach { sender ->
-                                if (sender.track()?.kind() == "audio") {
-                                    val params = sender.parameters
-                                    params.encodings.forEach { encoding ->
-                                        encoding.maxBitrateBps = 32_000
+                when (newState) {
+                    PeerConnection.IceConnectionState.CONNECTED,
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        disconnectGraceJob?.cancel()
+                        disconnectGraceJob = null
+                        if (_callState.value != CallState.CONNECTED) {
+                            _callState.value = CallState.CONNECTED
+                            startCallTimers()
+                            try {
+                                peerConnection?.senders?.forEach { sender ->
+                                    if (sender.track()?.kind() == "audio") {
+                                        val params = sender.parameters
+                                        params.encodings.forEach { encoding ->
+                                            encoding.maxBitrateBps = 32_000
+                                        }
+                                        sender.parameters = params
+                                        Log.d("MsgAT-Call", "Enforced audio RTP Sender max bitrate to 32 kbps")
                                     }
-                                    sender.parameters = params
-                                    Log.d("MsgAT-Call", "Enforced audio RTP Sender max bitrate to 32 kbps")
                                 }
+                            } catch (e: Exception) {
+                                Log.e("MsgAT-Call", "Failed to set audio sender max bitrate", e)
                             }
-                        } catch (e: Exception) {
-                            Log.e("MsgAT-Call", "Failed to set audio sender max bitrate", e)
                         }
                     }
-                } else if (newState == PeerConnection.IceConnectionState.DISCONNECTED || newState == PeerConnection.IceConnectionState.FAILED) {
-                    endCall()
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        // Long-distance links can transiently drop ICE; give a 10s recovery
+                        // window before treating the call as dead (prevents instant hang-up).
+                        if (disconnectGraceJob == null) {
+                            disconnectGraceJob = scope.launch {
+                                delay(10_000)
+                                disconnectGraceJob = null
+                                val st = peerConnection?.iceConnectionState()
+                                if (st != PeerConnection.IceConnectionState.CONNECTED &&
+                                    st != PeerConnection.IceConnectionState.COMPLETED) {
+                                    endCall()
+                                }
+                            }
+                        }
+                    }
+                    PeerConnection.IceConnectionState.FAILED -> endCall()
+                    else -> {}
                 }
             }
 
@@ -127,6 +194,7 @@ class CallManager private constructor(private val context: Context) {
             override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) {}
 
             override fun onIceCandidate(candidate: IceCandidate?) {
+                if (generation != peerGeneration) return
                 candidate?.let {
                     signalingHandler?.sendIceCandidate(it, currentPeerUuid ?: return)
                 }
@@ -163,7 +231,7 @@ class CallManager private constructor(private val context: Context) {
     fun startOutgoingCall(peerUuid: String) {
         if (_callState.value != CallState.IDLE) return
         _callState.value = CallState.CONNECTING // Lock state immediately to prevent double clicks
-        
+
         scope.launch {
             val db = org.msgat.data.db.AppDatabase.getInstance(context).msgDao()
             val conv = db.getConversationByUuid(peerUuid)
@@ -174,7 +242,7 @@ class CallManager private constructor(private val context: Context) {
                 }
                 return@launch
             }
-            
+
             withContext(Dispatchers.Main) {
                 if (_callState.value == CallState.CONNECTING) {
                     isCaller = true
@@ -182,7 +250,7 @@ class CallManager private constructor(private val context: Context) {
                     _callState.value = CallState.OUTGOING_RINGING
                     startTimeoutTimer()
                     AudioDeviceManager.getInstance().startCallMode()
-                    
+
                     createPeerConnection()
 
                     peerConnection?.createOffer(object : SdpObserver {
@@ -213,7 +281,7 @@ class CallManager private constructor(private val context: Context) {
         currentPeerUuid = peerUuid
         _callState.value = CallState.INCOMING_RINGING
         startTimeoutTimer()
-        
+
         val db = org.msgat.data.db.AppDatabase.getInstance(context).msgDao()
         scope.launch(Dispatchers.IO) {
             val conv = db.getConversationByUuid(peerUuid)
@@ -231,11 +299,12 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun acceptCall() {
-        if (_callState.value != CallState.INCOMING_RINGING) return
+        val rawOffer = signalingHandler?.pendingOffer
+        if (_callState.value != CallState.INCOMING_RINGING || rawOffer == null) return
         _callState.value = CallState.CONNECTING
-        timeoutJob?.cancel()
+        startTimeoutTimer()
         AudioDeviceManager.getInstance().startCallMode()
-        
+
         val intent = android.content.Intent(context, org.msgat.core.network.CallService::class.java).apply {
             putExtra("peerUuid", currentPeerUuid)
             putExtra("isIncoming", true)
@@ -249,10 +318,9 @@ class CallManager private constructor(private val context: Context) {
         } catch (e: Exception) {
             e.printStackTrace()
         }
-        
+
         createPeerConnection()
 
-        val rawOffer = signalingHandler?.pendingOffer ?: return
         val optimizedOfferSdp = OpusCodecHelper.modifySdpForOpus(rawOffer.description, maxBitrateKbps = 32)
         val offer = SessionDescription(rawOffer.type, optimizedOfferSdp)
 
@@ -261,7 +329,7 @@ class CallManager private constructor(private val context: Context) {
             override fun onSetSuccess() {
                 pendingIceCandidates.forEach { peerConnection?.addIceCandidate(it) }
                 pendingIceCandidates.clear()
-                
+
                 peerConnection?.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(answer: SessionDescription?) {
                         answer?.let { origAnswer ->
@@ -287,6 +355,7 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun handleRemoteAnswer(answer: SessionDescription) {
+        if (!isCaller || _callState.value != CallState.OUTGOING_RINGING) return
         val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32)
         val finalAnswer = SessionDescription(answer.type, optimizedAnswerSdp)
         peerConnection?.setRemoteDescription(object : SdpObserver {
@@ -297,14 +366,14 @@ class CallManager private constructor(private val context: Context) {
             }
             override fun onCreateFailure(s: String?) {}
             override fun onSetFailure(s: String?) {}
-        }, answer)
+        }, finalAnswer)
         _callState.value = CallState.CONNECTING
-        timeoutJob?.cancel()
+        startTimeoutTimer()
     }
 
     fun handleRemoteIceCandidate(candidate: IceCandidate) {
         if (peerConnection?.remoteDescription == null) {
-            pendingIceCandidates.add(candidate)
+            if (pendingIceCandidates.size < 256) pendingIceCandidates.add(candidate)
         } else {
             peerConnection?.addIceCandidate(candidate)
         }
@@ -312,7 +381,7 @@ class CallManager private constructor(private val context: Context) {
 
     fun endCall() {
         if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
-        
+
         val finalDuration = _callDurationSeconds.value
         // Save Call Record
         saveCallRecord(durationOverride = finalDuration)
@@ -323,7 +392,7 @@ class CallManager private constructor(private val context: Context) {
 
     fun remoteEndedCall(remoteDuration: Long) {
         if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
-        
+
         saveCallRecord(durationOverride = if (remoteDuration >= 0) remoteDuration else null)
         resetState()
     }
@@ -333,11 +402,13 @@ class CallManager private constructor(private val context: Context) {
     }
 
     fun remoteRejectedCall() {
+        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
         saveCallRecord(rejected = true)
         resetState()
     }
-    
+
     fun remoteBusyCall() {
+        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
         saveCallRecord(busy = true)
         resetState()
     }
@@ -353,34 +424,37 @@ class CallManager private constructor(private val context: Context) {
             else -> {
                 val minutes = duration / 60
                 val seconds = duration % 60
-                String.format("[Voice Call: %02d:%02d]", minutes, seconds)
+                String.format(Locale.ROOT, "[Voice Call: %02d:%02d]", minutes, seconds)
             }
         }
         currentPeerUuid?.let { signalingHandler?.sendCallRecordMessage(it, recordText) }
     }
 
     private fun resetState() {
+        peerGeneration++
         _callState.value = CallState.ENDED
-        
+
         durationJob?.cancel()
         rttJob?.cancel()
         timeoutJob?.cancel()
-        
+        disconnectGraceJob?.cancel()
+        disconnectGraceJob = null
+
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
-        
+
         localAudioTrack?.dispose()
         localAudioTrack = null
-        
+
         localAudioSource?.dispose()
         localAudioSource = null
-        
+
         AudioDeviceManager.getInstance().endCallMode()
-        
+
         currentPeerUuid = null
         pendingIceCandidates.clear()
-        
+
         scope.launch {
             delay(1500)
             _callState.value = CallState.IDLE
@@ -440,7 +514,7 @@ class CallManager private constructor(private val context: Context) {
         timeoutJob?.cancel()
         timeoutJob = scope.launch {
             delay(30000) // 30 seconds max ringing time
-            if (_callState.value == CallState.OUTGOING_RINGING || _callState.value == CallState.INCOMING_RINGING) {
+            if (_callState.value == CallState.OUTGOING_RINGING || _callState.value == CallState.INCOMING_RINGING || _callState.value == CallState.CONNECTING) {
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "Time out", android.widget.Toast.LENGTH_SHORT).show()
                 }
@@ -454,6 +528,7 @@ class CallManager private constructor(private val context: Context) {
     }
 
     companion object {
+        @SuppressLint("StaticFieldLeak")
         @Volatile
         private var INSTANCE: CallManager? = null
 

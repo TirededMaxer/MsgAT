@@ -55,9 +55,9 @@ class AudioDeviceManager private constructor(context: Context) {
         } else {
             audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS).toList()
         }
-        
+
         // Filter out non-communication devices if needed, but for simplicity we keep all valid outputs
-        val validDevices = devices.filter { 
+        val validDevices = devices.filter {
             it.type in listOf(
                 AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
                 AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
@@ -68,9 +68,9 @@ class AudioDeviceManager private constructor(context: Context) {
                 AudioDeviceInfo.TYPE_USB_HEADSET
             )
         }
-        
+
         _availableDevices.value = validDevices
-        
+
         // Auto-select logic if current device was removed
         if (_selectedDevice.value == null || !validDevices.any { it.id == _selectedDevice.value?.id }) {
             val bluetooth = validDevices.find { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP }
@@ -84,9 +84,9 @@ class AudioDeviceManager private constructor(context: Context) {
     private fun updateProximityWakeLock() {
         val deviceType = _selectedDevice.value?.type
         val shouldHold = inCallMode && deviceType == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-        
+
         if (shouldHold && proximityWakeLock?.isHeld == false) {
-            proximityWakeLock?.acquire()
+            proximityWakeLock?.acquire(4 * 60 * 60 * 1000L)
         } else if (!shouldHold && proximityWakeLock?.isHeld == true) {
             proximityWakeLock?.release()
         }
@@ -94,7 +94,7 @@ class AudioDeviceManager private constructor(context: Context) {
 
     fun selectDevice(device: AudioDeviceInfo?) {
         if (device == null) return
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             audioManager.setCommunicationDevice(device)
         } else {
@@ -115,6 +115,7 @@ class AudioDeviceManager private constructor(context: Context) {
                     audioManager.startBluetoothSco()
                     audioManager.isBluetoothScoOn = true
                 }
+                else -> Unit
             }
         }
         _selectedDevice.value = device

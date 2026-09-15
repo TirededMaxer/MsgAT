@@ -1,0 +1,24 @@
+{
+  "originHash" : "7400f11a0d9bd7919a86d00d4e8f165791951aa0d15a1b1f3133ad0502d1442e",
+  "pins" : [
+    {
+      "identity" : "sqlcipher.swift",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/sqlcipher/SQLCipher.swift.git",
+      "state" : {
+        "revision" : "f879fffaaa3ad3541a77830daad4a28726dfa927",
+        "version" : "4.18.0"
+      }
+    },
+    {
+      "identity" : "webrtc",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/stasel/WebRTC.git",
+      "state" : {
+        "revision" : "b4f5a90c887bde68512b8f1a6d684b27b5597b76",
+        "version" : "125.0.0"
+      }
+    }
+  ],
+  "version" : 3
+}

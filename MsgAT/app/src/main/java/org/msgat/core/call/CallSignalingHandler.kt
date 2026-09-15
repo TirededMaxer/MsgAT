@@ -41,16 +41,16 @@ class CallSignalingHandler private constructor(context: Context) {
     private fun sendSignalingPacket(peerUuid: String, type: Byte, payload: JSONObject) {
         scope.launch {
             val peerPubKey = getPeerPublicKey(peerUuid) ?: return@launch
-            
+
             payload.put("senderUuid", securePrefs.myUuid)
             val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-            
+
             val iv = ByteArray(16)
             SecureRandom().nextBytes(iv)
-            
+
             val myPrivateKey = securePrefs.getX25519PrivateKey()
             val (cipherText, authTag) = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPubKey, iv, payloadBytes)
-            
+
             val targetMailboxId = CryptoManager.calculateMailboxId(peerUuid)
             val packet = GhostPacket(type, targetMailboxId, iv, cipherText, authTag)
             nettyClient.sendPacket(packet)
@@ -101,9 +101,13 @@ class CallSignalingHandler private constructor(context: Context) {
     // Handlers called by GhostClientHandler when packets arrive
 
     fun onOfferReceived(senderUuid: String, sdp: String) {
-        val offer = SessionDescription(SessionDescription.Type.OFFER, sdp)
-        pendingOffer = offer
         scope.launch(Dispatchers.Main) {
+            if (callManager.callState.value != CallState.IDLE) {
+                sendBusy(senderUuid)
+                return@launch
+            }
+            val offer = SessionDescription(SessionDescription.Type.OFFER, sdp)
+            pendingOffer = offer
             callManager.handleIncomingOffer(offer, senderUuid)
         }
     }
@@ -111,6 +115,7 @@ class CallSignalingHandler private constructor(context: Context) {
     fun onAnswerReceived(senderUuid: String, sdp: String) {
         val answer = SessionDescription(SessionDescription.Type.ANSWER, sdp)
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.handleRemoteAnswer(answer)
         }
     }
@@ -118,24 +123,28 @@ class CallSignalingHandler private constructor(context: Context) {
     fun onIceCandidateReceived(senderUuid: String, sdpMid: String, sdpMLineIndex: Int, sdp: String) {
         val candidate = IceCandidate(sdpMid, sdpMLineIndex, sdp)
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.handleRemoteIceCandidate(candidate)
         }
     }
 
     fun onRejectReceived(senderUuid: String) {
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.remoteRejectedCall()
         }
     }
 
     fun onEndReceived(senderUuid: String, duration: Long) {
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.remoteEndedCall(duration)
         }
     }
 
     fun onBusyReceived(senderUuid: String) {
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.remoteBusyCall()
         }
     }
@@ -149,6 +158,7 @@ class CallSignalingHandler private constructor(context: Context) {
 
     fun onSyncReceived(senderUuid: String, duration: Long) {
         scope.launch(Dispatchers.Main) {
+            if (!callManager.isCurrentPeer(senderUuid)) return@launch
             callManager.remoteSyncReceived(duration)
         }
     }
@@ -181,7 +191,7 @@ class CallSignalingHandler private constructor(context: Context) {
 
                 val myPrivateKey = securePrefs.getX25519PrivateKey()
                 val pair = org.msgat.core.crypto.CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
-                
+
                 val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(peerUuid)
                 val packet = org.msgat.model.GhostPacket(
                     type = org.msgat.model.GhostPacket.TYPE_MESSAGE,

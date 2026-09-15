@@ -33,8 +33,8 @@ fun SessionListScreen(
     conversations: List<ConversationUIModel>,
     friendRequests: List<org.msgat.data.db.FriendRequest>,
     onNavigateToChat: (String) -> Unit,
-    onAddConversation: (uuid: String, alias: String) -> Unit,
-    onSaveSettings: (ip: String, port: String) -> Unit,
+    onAddConversation: (uuid: String) -> Unit,
+    onSaveSettings: (org.msgat.ui.components.ServerSettings) -> Unit,
     onDeleteConversation: (String) -> Unit,
     onClearMessages: (String) -> Unit,
     onResetIdentity: () -> Unit,
@@ -44,6 +44,11 @@ fun SessionListScreen(
     initialUuid: String,
     initialAvatarPath: String? = null,
     initialNickname: String? = null,
+    initialTurnServer: String = "",
+    initialTurnPort: String = "3478",
+    initialTurnUsername: String = "",
+    initialTurnPassword: String = "",
+    initialTurnUseTls: Boolean = false,
     isIdentityMissing: Boolean = false,
     onAcceptFriendRequest: (String, String, String) -> Unit = {_,_,_->},
     onDeclineFriendRequest: (String) -> Unit = {}
@@ -109,13 +114,13 @@ fun SessionListScreen(
         }
     }
 
-    if (showAddDialog) AddConversationDialog(onDismiss = { showAddDialog = false }, onConfirm = { u -> onAddConversation(u, "Unknown"); showAddDialog = false })
-    if (showSettingsDialog) SettingsDialog(initialIp = initialIp, initialPort = initialPort, initialUuid = initialUuid, initialAvatarPath = initialAvatarPath, initialNickname = initialNickname, onResetIdentity = {showSettingsDialog = false; showResetConfirm = true;}, onDismiss = { showSettingsDialog = false }, onConfirm = { i, p, _ -> onSaveSettings(i, p); showSettingsDialog = false })
+    if (showAddDialog) AddConversationDialog(myUuid = initialUuid, onDismiss = { showAddDialog = false }, onConfirm = { u -> onAddConversation(u); showAddDialog = false })
+    if (showSettingsDialog) SettingsDialog(initialIp = initialIp, initialPort = initialPort, initialUuid = initialUuid, initialAvatarPath = initialAvatarPath, initialNickname = initialNickname, initialTurnServer = initialTurnServer, initialTurnPort = initialTurnPort, initialTurnUsername = initialTurnUsername, initialTurnPassword = initialTurnPassword, initialTurnUseTls = initialTurnUseTls, onResetIdentity = {showSettingsDialog = false; showResetConfirm = true;}, onDismiss = { showSettingsDialog = false }, onConfirm = { s -> onSaveSettings(s); showSettingsDialog = false })
     if (showResetConfirm) ConfirmDialog("Reset your identity?", onDismiss = { showResetConfirm = false }, onConfirm = { onResetIdentity(); showResetConfirm = false })
     if (showIdentityDialog) {
         org.msgat.ui.components.IdentitySetupDialog(
-            onDismiss = {}, 
-            onConfirm = { n, a -> 
+            onDismiss = {},
+            onConfirm = { n, a ->
                 onSaveIdentity(n, a?.toString() ?: "")
                 showIdentityDialog = false
             }
@@ -144,7 +149,7 @@ fun ConversationItem(
     var showClearConfirm by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
-    Box(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).pointerInput(Unit) {
+    Box(modifier = Modifier.fillMaxWidth().pointerInput(Unit) {
         detectTapGestures(onLongPress = { showActionMenu = true }, onTap = { onClick() })
     }.padding(horizontal = 16.dp, vertical = 12.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -167,21 +172,31 @@ fun ConversationItem(
                         }
                     }
                 }
-                if (convo.hasUnread) {
-                    Box(
-                        modifier = Modifier
-                            .size(10.dp)
-                            .align(Alignment.TopEnd)
-                            .offset(x = 2.dp, y = (-2).dp)
-                            .background(Color.Red, CircleShape)
-                    )
-                }
+
             }
             Spacer(modifier = Modifier.width(16.dp))
-            Column {
-                Text(text = convo.alias, color = MaterialTheme.colorScheme.onBackground, fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
+            Column(modifier = Modifier.weight(1f)) {
+                Text(text = convo.alias, color = MaterialTheme.colorScheme.onBackground, fontSize = 18.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(text = convo.uuid.take(12) + "...", color = Color.Gray, fontSize = 13.sp)
+            }
+            if (convo.unreadCount > 0) {
+                Spacer(modifier = Modifier.width(12.dp))
+                Box(
+                    modifier = Modifier
+                        .background(Color(0xFFF22626), CircleShape)
+                        .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
+                        .padding(horizontal = 6.dp, vertical = 2.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = convo.unreadCount.toString(),
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        maxLines = 1
+                    )
+                }
             }
         }
         DropdownMenu(expanded = showActionMenu, onDismissRequest = { showActionMenu = false }, modifier = Modifier.background(MaterialTheme.colorScheme.surface)) {

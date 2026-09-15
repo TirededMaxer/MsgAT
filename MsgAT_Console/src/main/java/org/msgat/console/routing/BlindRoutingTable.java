@@ -17,70 +17,88 @@ public class BlindRoutingTable {
     public BlindRoutingTable() {
     }
 
-    // Stores an encrypted offline message into the database bounded by a max cap per mailbox.
-    public void storeOfflineMessage(String mailboxHash, GhostPacket packet) {
-        try (java.sql.Connection conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
-             java.sql.PreparedStatement countStmt = conn.prepareStatement("SELECT COUNT(*) FROM offline_messages WHERE target_mailbox = ?");
-             java.sql.PreparedStatement delStmt = conn.prepareStatement("DELETE FROM offline_messages WHERE id IN (SELECT id FROM offline_messages WHERE target_mailbox = ? ORDER BY created_at ASC LIMIT 1)");
-             java.sql.PreparedStatement insertStmt = conn.prepareStatement("INSERT INTO offline_messages (target_mailbox, packet_data) VALUES (?, ?)")) {
-             
-            countStmt.setString(1, mailboxHash);
-            java.sql.ResultSet rs = countStmt.executeQuery();
-            if (rs.next() && rs.getInt(1) >= 50) {
-                delStmt.setString(1, mailboxHash);
-                delStmt.executeUpdate();
+    // Persist before delivery. A single 100 MB attachment needs more than 2,000 packets.
+    public synchronized void storeOfflineMessage(String mailboxHash, GhostPacket packet) {
+        try (var conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
+             var existing = conn.prepareStatement("SELECT packet_data FROM offline_messages WHERE target_mailbox = ? AND (packet_hash = ? OR packet_hash IS NULL)");
+             var size = conn.prepareStatement("SELECT COALESCE(SUM(length(packet_data)), 0) FROM offline_messages WHERE target_mailbox = ?");
+             var insert = conn.prepareStatement("INSERT INTO offline_messages(target_mailbox, packet_data, packet_hash) VALUES (?, ?, ?)")) {
+            byte[] serialized = packet.serialize();
+            String hash = packetHash(packet);
+            existing.setString(1, mailboxHash);
+            existing.setString(2, hash);
+            try (var rs = existing.executeQuery()) {
+                while (rs.next()) {
+                    // The ACK digest narrows candidates; only identical envelopes share storage.
+                    byte[] stored = org.msgat.console.core.CryptoUtils.decryptField(rs.getBytes(1));
+                    if (java.util.Arrays.equals(serialized, stored)) return;
+                }
             }
-
-            insertStmt.setString(1, mailboxHash);
-            insertStmt.setBytes(2, org.msgat.console.core.CryptoUtils.encryptField(packet.serialize()));
-            insertStmt.executeUpdate();
+            size.setString(1, mailboxHash);
+            byte[] encrypted = org.msgat.console.core.CryptoUtils.encryptField(serialized);
+            if (encrypted == null) throw new IllegalStateException("Packet encryption failed");
+            try (var rs = size.executeQuery()) {
+                if (rs.next() && rs.getLong(1) + encrypted.length > 256L * 1024 * 1024) {
+                    throw new IllegalStateException("Recipient mailbox is full");
+                }
+            }
+            insert.setString(1, mailboxHash);
+            insert.setBytes(2, encrypted);
+            insert.setString(3, hash);
+            insert.executeUpdate();
         } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Unable to persist packet", e);
         }
     }
 
-    // Retrieves and subsequently deletes all pending offline messages for a specific mailbox.
-    public List<GhostPacket> retrieveOfflineMessages(String mailboxHash) {
+    private static String packetHash(GhostPacket packet) {
+        return org.msgat.console.core.CryptoUtils.identityUuid(packet.getEncryptedData());
+    }
+
+    // Retain packets until the recipient confirms them; reconnects may replay them.
+    public synchronized List<GhostPacket> retrieveOfflineMessages(String mailboxHash) {
         List<GhostPacket> result = new ArrayList<>();
-        try (java.sql.Connection conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
-             java.sql.PreparedStatement selectStmt = conn.prepareStatement("SELECT packet_data FROM offline_messages WHERE target_mailbox = ? ORDER BY created_at ASC");
-             java.sql.PreparedStatement delStmt = conn.prepareStatement("DELETE FROM offline_messages WHERE target_mailbox = ?")) {
-             
-            selectStmt.setString(1, mailboxHash);
-            java.sql.ResultSet rs = selectStmt.executeQuery();
-            while (rs.next()) {
-                byte[] data = rs.getBytes("packet_data");
-                if (data != null) {
-                    byte[] decryptedData = org.msgat.console.core.CryptoUtils.decryptField(data);
-                    if (decryptedData != null) {
-                        result.add(GhostPacket.deserialize(decryptedData));
+        try (var conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
+             var select = conn.prepareStatement("SELECT id, packet_data, packet_hash FROM offline_messages WHERE target_mailbox = ? ORDER BY id");
+             var migrate = conn.prepareStatement("UPDATE offline_messages SET packet_hash = ? WHERE id = ?")) {
+            select.setString(1, mailboxHash);
+            try (var rs = select.executeQuery()) {
+                while (rs.next()) {
+                    byte[] bytes = org.msgat.console.core.CryptoUtils.decryptField(rs.getBytes("packet_data"));
+                    if (bytes == null) throw new IllegalStateException("Stored packet cannot be decrypted");
+                    GhostPacket packet = GhostPacket.deserialize(bytes);
+                    result.add(packet);
+                    if (rs.getString("packet_hash") == null) {
+                        migrate.setString(1, packetHash(packet));
+                        migrate.setLong(2, rs.getLong("id"));
+                        migrate.addBatch();
                     }
                 }
             }
-
-            if (!result.isEmpty()) {
-                delStmt.setString(1, mailboxHash);
-                delStmt.executeUpdate();
-            }
+            migrate.executeBatch();
         } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Unable to retrieve packets", e);
         }
-        return result.isEmpty() ? null : result;
+        return result;
     }
 
-
-
-    // Forcibly deletes all pending offline messages associated with a given mailbox.
-    public void clearAndWipeOfflineMessages(String mailboxHash) {
-        try (java.sql.Connection conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
-             java.sql.PreparedStatement stmt = conn.prepareStatement("DELETE FROM offline_messages WHERE target_mailbox = ?")) {
-            stmt.setString(1, mailboxHash);
-            stmt.executeUpdate();
+    // ACK payload is one SHA-256 digest of the encrypted payload. Never trust its target mailbox.
+    public synchronized void acknowledge(String mailboxHash, byte[] digest) {
+        if (digest == null || digest.length != 32) return; // Legacy empty ACKs are non-destructive.
+        try (var conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
+             var delete = conn.prepareStatement("DELETE FROM offline_messages WHERE target_mailbox = ? AND packet_hash = ?")) {
+            delete.setString(1, mailboxHash);
+            delete.setString(2, java.util.HexFormat.of().formatHex(digest));
+            delete.executeUpdate();
         } catch (java.sql.SQLException e) {
+            throw new IllegalStateException("Unable to acknowledge packet", e);
         }
     }
 
     // Maps a specific mailbox ID to a connected Netty channel.
     public void register(String mailboxHashHex, Channel channel) {
-        activeChannels.put(mailboxHashHex, channel);
+        Channel previous = activeChannels.put(mailboxHashHex, channel);
+        if (previous != null && previous != channel) previous.close();
     }
 
     // Looks up and returns the active Netty channel linked to the given mailbox ID.
@@ -89,16 +107,18 @@ public class BlindRoutingTable {
     }
 
     // Unregisters and removes a specific mailbox ID mapping from the active channels registry.
-    public void remove(String mailboxHashHex) {
-        activeChannels.remove(mailboxHashHex);
+    public void remove(String mailboxHashHex, Channel channel) {
+        activeChannels.remove(mailboxHashHex, channel);
     }
 
-    // Erases all memory state by shutting down tasks, closing connections, and dropping all offline DB records.
-    public void secureWipe() {
+    public void closeConnections() {
         activeChannels.values().forEach(Channel::close);
         activeChannels.clear();
+    }
 
-        // Directly delete the database file during JVM shutdown to bypass JDBC limitations
+    // Emergency wipe is distinct from an ordinary server restart.
+    public synchronized void secureWipe() {
+        closeConnections();
         org.msgat.console.db.DatabaseManager.wipeOfflineDatabaseFile();
     }
 }

@@ -65,6 +65,10 @@ object OpusCodecHelper {
                     lines[i] = "$targetFmtpPrefix$opusParams;${lines[i].removePrefix(targetFmtpPrefix)}"
                     fmtpFound = true
                     break
+                } else if (lines[i].startsWith("a=fmtp:$opusPayloadType")) {
+                    lines[i] = "$targetFmtpPrefix$opusParams"
+                    fmtpFound = true
+                    break
                 }
             }
 

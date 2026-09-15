@@ -26,6 +26,16 @@ class SessionListViewModel(
 
     val currentUuid: String get() = securePrefs.myUuid
 
+    val currentTurnServer: String get() = securePrefs.turnServer ?: ""
+
+    val currentTurnPort: String get() = if (securePrefs.turnPort > 0) securePrefs.turnPort.toString() else "3478"
+
+    val currentTurnUsername: String get() = securePrefs.turnUsername ?: ""
+
+    val currentTurnPassword: String get() = securePrefs.turnPassword ?: ""
+
+    val currentTurnUseTls: Boolean get() = securePrefs.turnUseTls
+
     private val _currentAvatarPath = kotlinx.coroutines.flow.MutableStateFlow(securePrefs.myAvatarPath)
     val currentAvatarPath: StateFlow<String?> = _currentAvatarPath
 
@@ -37,7 +47,7 @@ class SessionListViewModel(
     val connectionState = nettyClient.connectionState
 
     val conversations: StateFlow<List<ConversationUIModel>> = msgDao.getAllConversationsWithUnread()
-        .map { list -> list.map { ConversationUIModel(it.conversation.uuid, it.conversation.alias, it.conversation.avatarPath, it.unreadCount > 0) } }
+        .map { list -> list.map { ConversationUIModel(it.conversation.uuid, it.conversation.alias, it.conversation.avatarPath, it.unreadCount) } }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     val friendRequests: StateFlow<List<org.msgat.data.db.FriendRequest>> = msgDao.getAllFriendRequests()
@@ -45,11 +55,11 @@ class SessionListViewModel(
 
     // Accepts an incoming friend request and creates a new local conversation.
     fun acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
+        if (nettyClient.connectionState.value != org.msgat.ui.chat.SyncState.SYNCED) return
         viewModelScope.launch {
-            val request = msgDao.getFriendRequestByUuid(senderUuid)
-            val peerPub = request?.peerPublicKey ?: ""
-            msgDao.insertConversation(Conversation(senderUuid, nickname, avatarPath, peerPub))
-            msgDao.deleteFriendRequest(senderUuid)
+            val request = msgDao.getFriendRequestByUuid(senderUuid) ?: return@launch
+            val peerPub = request.peerPublicKey
+            if (peerPub.isEmpty()) return@launch
 
             try {
                 val payloadJson = """{"senderUuid":"${securePrefs.myUuid}","senderPublicKey":"${securePrefs.myX25519PublicKeyBase64}"}"""
@@ -66,7 +76,10 @@ class SessionListViewModel(
                     encryptedData = cipherText,
                     authTag = authTag
                 )
-                nettyClient.sendPacket(packet)
+                if (nettyClient.sendPacket(packet)) {
+                    msgDao.insertConversation(Conversation(senderUuid, nickname, avatarPath, peerPub))
+                    msgDao.deleteFriendRequest(senderUuid)
+                }
             } catch (e: Exception) {
                 e.printStackTrace()
             }
@@ -80,14 +93,21 @@ class SessionListViewModel(
         }
     }
 
-    // Manually adds a new conversation thread with a specific alias.
-    fun addConversation(rawUuid: String, alias: String) {
-        val uuid = rawUuid.trim()
+    // Adds a new conversation thread by target UUID.
+    fun addConversation(rawUuid: String, initialDisplayName: String = "Unknown") {
+        if (nettyClient.connectionState.value != org.msgat.ui.chat.SyncState.SYNCED) return
+        val uuid = rawUuid.trim().lowercase()
+        if (!uuid.matches(Regex("[a-f0-9]{64}")) || uuid == securePrefs.myUuid) return
         viewModelScope.launch {
-            msgDao.insertConversation(Conversation(uuid, alias))
+            if (msgDao.getConversationByUuid(uuid) != null) return@launch
+            msgDao.insertConversation(Conversation(uuid, initialDisplayName))
 
             try {
-                val payloadJson = """{"senderUuid":"${securePrefs.myUuid}","nickname":"${securePrefs.myNickname ?: "Unknown"}","senderPublicKey":"${securePrefs.myX25519PublicKeyBase64}"}"""
+                val payloadJson = org.json.JSONObject().apply {
+                    put("senderUuid", securePrefs.myUuid)
+                    put("nickname", securePrefs.myNickname ?: "Unknown")
+                    put("senderPublicKey", securePrefs.myX25519PublicKeyBase64)
+                }.toString()
                 val iv = ByteArray(16)
                 java.security.SecureRandom().nextBytes(iv)
 
@@ -101,17 +121,10 @@ class SessionListViewModel(
                     encryptedData = cipherText,
                     authTag = authTag
                 )
-                nettyClient.sendPacket(packet)
+                if (!nettyClient.sendPacket(packet)) msgDao.deleteConversation(uuid)
             } catch (e: Exception) {
                 e.printStackTrace()
             }
-        }
-    }
-
-    // Updates the local display alias for a specific contact UUID.
-    fun updateAlias(uuid: String, newAlias: String) {
-        viewModelScope.launch {
-            msgDao.insertConversation(Conversation(uuid, newAlias))
         }
     }
 
@@ -124,7 +137,7 @@ class SessionListViewModel(
                 val iv = ByteArray(16)
                 java.security.SecureRandom().nextBytes(iv)
                 val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(uuid)
-                
+
                 if (peerPublicKeyBase64.isNotEmpty()) {
                     // Send TYPE_FRIEND_DELETED
                     val myPrivateKey = securePrefs.getX25519PrivateKey()
@@ -172,7 +185,7 @@ class SessionListViewModel(
             onFail()
             return
         }
-        
+
         viewModelScope.launch(Dispatchers.IO) {
             val friends = msgDao.getConversationList()
             for (friend in friends) {
@@ -188,19 +201,18 @@ class SessionListViewModel(
                     nettyClient.sendPacket(packet)
                 }
             }
-            
-            // Send TYPE_DELETE_ACCOUNT to server
-            val myMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(securePrefs.myUuid)
-            val packet = org.msgat.model.GhostPacket(org.msgat.model.GhostPacket.TYPE_DELETE_ACCOUNT, myMailboxId, ByteArray(16), ByteArray(0), ByteArray(16))
-            nettyClient.sendPacket(packet)
-            
-            kotlinx.coroutines.delay(1000) // wait for packets to be sent
-            
+
+            if (!nettyClient.deleteAccount()) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
+                return@launch
+            }
+            nettyClient.disconnect()
+
             msgDao.clearAllMessages()
             msgDao.clearAllConversations()
             msgDao.clearAllFriendRequests()
             org.msgat.core.media.MediaStorageManager.deleteAllMedia(org.msgat.MsgATApp.instance.applicationContext)
-            
+
             kotlinx.coroutines.withContext(Dispatchers.Main) {
                 securePrefs.myNickname = ""
                 securePrefs.myAvatarPath = ""
@@ -217,12 +229,20 @@ class SessionListViewModel(
         securePrefs.myAvatarPath = avatarUri
         _currentNickname.value = nickname
         _currentAvatarPath.value = avatarUri
+        nettyClient.sendProfile()
     }
 
-    // Updates and saves the server connection settings (IP and port).
-    fun saveSettings(ip: String, port: String) {
-        securePrefs.serverIp = ip
-        securePrefs.serverPort = port.toIntOrNull() ?: 0
+    // Updates and saves the server connection settings (relay + optional TURN fallback).
+    fun saveSettings(settings: org.msgat.ui.components.ServerSettings) {
+        securePrefs.serverCertificateSha256 = settings.serverCertificateSha256.ifBlank { null }
+        securePrefs.allowDevelopmentCertificate = settings.allowDevelopmentCertificate
+        securePrefs.serverIp = settings.ip.trim()
+        securePrefs.serverPort = settings.port.toIntOrNull() ?: 0
+        securePrefs.turnServer = settings.turnServer.trim().ifEmpty { null }
+        securePrefs.turnPort = settings.turnPort.toIntOrNull() ?: 3478
+        securePrefs.turnUsername = settings.turnUsername.trim().ifEmpty { null }
+        securePrefs.turnPassword = settings.turnPassword.ifEmpty { null }
+        securePrefs.turnUseTls = settings.turnUseTls
 
         nettyClient.disconnect()
         nettyClient.connect()

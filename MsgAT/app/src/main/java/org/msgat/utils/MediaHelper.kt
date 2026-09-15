@@ -13,23 +13,21 @@ object MediaHelper {
 
     // Reads a file from a Uri and splits it into manageable Base64 encoded chunks.
     fun uriToBase64Chunks(context: Context, uri: Uri): List<String> {
-        val chunks = mutableListOf<String>()
-        try {
-            val inputStream = context.contentResolver.openInputStream(uri) ?: return chunks
-            val bytes = inputStream.readBytes()
-            inputStream.close()
-
-            var offset = 0
-            while (offset < bytes.size) {
-                val length = CHUNK_SIZE.coerceAtMost(bytes.size - offset)
-                val chunkBytes = bytes.copyOfRange(offset, offset + length)
-                chunks.add(Base64.encodeToString(chunkBytes, Base64.NO_WRAP))
-                offset += length
+        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+            val output = java.io.ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                require(output.size().toLong() + count <= 100L * 1024 * 1024) { "Files cannot exceed 100 MB." }
+                output.write(buffer, 0, count)
             }
-        } catch (e: Exception) {
-            e.printStackTrace()
+            output.toByteArray()
+        } ?: throw IllegalArgumentException("Cannot open media")
+        if (bytes.isEmpty()) return listOf("")
+        return (bytes.indices step CHUNK_SIZE).map { offset ->
+            Base64.encodeToString(bytes, offset, minOf(CHUNK_SIZE, bytes.size - offset), Base64.NO_WRAP)
         }
-        return chunks
     }
 
     // Determines the total byte size of a file referenced by a Uri.

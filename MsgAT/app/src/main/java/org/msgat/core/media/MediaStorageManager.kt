@@ -28,6 +28,7 @@ object MediaStorageManager {
      */
     fun getMediaFile(context: Context, msgId: String, ext: String): File {
         val cleanExt = ext.lowercase().removePrefix(".")
+        require(msgId.matches(Regex("[A-Fa-f0-9-]{36}")) && cleanExt.matches(Regex("[a-z0-9]{1,10}")))
         return File(getMediaDir(context), "$msgId.$cleanExt")
     }
 
@@ -35,8 +36,12 @@ object MediaStorageManager {
      * Saves raw byte array directly into internal sandbox storage.
      */
     fun saveMediaBytes(context: Context, msgId: String, ext: String, bytes: ByteArray): File {
+        require(bytes.size <= 100 * 1024 * 1024)
         val file = getMediaFile(context, msgId, ext)
-        FileOutputStream(file).use { it.write(bytes) }
+        val atomic = android.util.AtomicFile(file)
+        val output = atomic.startWrite()
+        try { output.write(bytes); atomic.finishWrite(output) }
+        catch (e: Exception) { atomic.failWrite(output); throw e }
         return file
     }
 
@@ -46,8 +51,22 @@ object MediaStorageManager {
     fun saveMediaFromUri(context: Context, msgId: String, ext: String, uri: Uri): File {
         val targetFile = getMediaFile(context, msgId, ext)
         context.contentResolver.openInputStream(uri)?.use { input ->
-            FileOutputStream(targetFile).use { output ->
-                input.copyTo(output)
+            val atomic = android.util.AtomicFile(targetFile)
+            val output = atomic.startWrite()
+            try {
+                val buffer = ByteArray(8192)
+                var size = 0L
+                while (true) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    size += count
+                    require(size <= 100L * 1024 * 1024) { "Files cannot exceed 100 MB." }
+                    output.write(buffer, 0, count)
+                }
+                atomic.finishWrite(output)
+            } catch (e: Exception) {
+                atomic.failWrite(output)
+                throw e
             }
         } ?: throw IllegalArgumentException("Cannot open stream for Uri: $uri")
         return targetFile
@@ -63,20 +82,21 @@ object MediaStorageManager {
         // 1. If content is already a local file path
         if (content.startsWith("/")) {
             val file = File(content)
-            if (file.exists() && file.length() > 0) {
+            if (file.isFile) {
                 return file
             }
             // Fallback check in default media dir
             val mediaFile = getMediaFile(context, msgId, ext)
-            if (mediaFile.exists() && mediaFile.length() > 0) {
+            if (mediaFile.isFile) {
                 return mediaFile
             }
+            return null
         }
 
         // 2. If it's a legacy Base64 string or file not yet extracted
         return try {
             val targetFile = getMediaFile(context, msgId, ext)
-            if (targetFile.exists() && targetFile.length() > 0) {
+            if (targetFile.isFile) {
                 return targetFile
             }
 
@@ -97,8 +117,10 @@ object MediaStorageManager {
      * Saves a local sandbox file into the device public gallery (MediaStore).
      */
     fun saveToGallery(context: Context, file: File, ext: String): Uri? {
+        val resolver = context.contentResolver
+        var pendingUri: Uri? = null
         return try {
-            if (!file.exists()) return null
+            if (!file.isFile) return null
 
             val cleanExt = ext.lowercase().removePrefix(".")
             val fileName = "${System.currentTimeMillis()}.$cleanExt"
@@ -120,24 +142,29 @@ object MediaStorageManager {
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }
 
-            val resolver = context.contentResolver
-            val uri = resolver.insert(collectionUri, contentValues)
-
-            if (uri != null) {
-                resolver.openOutputStream(uri)?.use { output ->
-                    FileInputStream(file).use { input ->
-                        input.copyTo(output)
-                    }
-                }
-                contentValues.clear()
-                contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
-                resolver.update(uri, contentValues, null, null)
-                uri
-            } else {
-                null
+            val uri = resolver.insert(collectionUri, contentValues) ?: return null
+            pendingUri = uri
+            val output = resolver.openOutputStream(uri)
+                ?: throw java.io.IOException("Gallery output stream is unavailable")
+            output.use { destination ->
+                FileInputStream(file).use { input -> input.copyTo(destination) }
             }
+            contentValues.clear()
+            contentValues.put(MediaStore.MediaColumns.IS_PENDING, 0)
+            if (resolver.update(uri, contentValues, null, null) != 1) {
+                throw java.io.IOException("Gallery entry could not be published")
+            }
+            pendingUri = null
+            uri
         } catch (e: Exception) {
             Log.e(TAG, "Failed to save file to gallery", e)
+            pendingUri?.let { uri ->
+                try {
+                    resolver.delete(uri, null, null)
+                } catch (cleanupError: Exception) {
+                    Log.e(TAG, "Failed to remove incomplete gallery entry", cleanupError)
+                }
+            }
             null
         }
     }

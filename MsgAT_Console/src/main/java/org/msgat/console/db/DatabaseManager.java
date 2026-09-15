@@ -11,7 +11,7 @@ import java.sql.Statement;
 
 public class DatabaseManager {
     private static final Logger log = LoggerFactory.getLogger(DatabaseManager.class);
-    private static final String DB_DIR = "data";
+    private static final String DB_DIR = System.getProperty("msgat.data.dir", "data");
     private static final String DB_URL = "jdbc:sqlite:" + DB_DIR + "/msgat.db";
     private static final String OFFLINE_DB_URL = "jdbc:sqlite:" + DB_DIR + "/msgat_offline.db";
 
@@ -19,7 +19,9 @@ public class DatabaseManager {
     public static void init() {
         File dataDir = new File(DB_DIR);
         if (!dataDir.exists()) {
-            dataDir.mkdirs();
+            if (!dataDir.mkdirs()) {
+                throw new IllegalStateException("Unable to create database directory: " + dataDir.getAbsolutePath());
+            }
         }
 
         try (Connection conn = getConnection();
@@ -35,13 +37,12 @@ public class DatabaseManager {
 
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_users_mailbox ON users(mailbox_id)");
 
-            try {
+            if (!hasColumn(conn, "users", "avatar_data")) {
                 stmt.execute("ALTER TABLE users ADD COLUMN avatar_data TEXT");
-            } catch (SQLException e) {
             }
 
         } catch (SQLException e) {
-            log.error("DB init failed", e);
+            throw new IllegalStateException("DB init failed", e);
         }
 
         try (Connection conn = getOfflineConnection();
@@ -53,21 +54,52 @@ public class DatabaseManager {
                     "packet_data BLOB, " +
                     "created_at DATETIME DEFAULT CURRENT_TIMESTAMP)");
 
+            if (!hasColumn(conn, "offline_messages", "packet_hash")) {
+                stmt.execute("ALTER TABLE offline_messages ADD COLUMN packet_hash TEXT");
+            }
+            stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_packet ON offline_messages(target_mailbox, packet_hash)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_mailbox ON offline_messages(target_mailbox)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_created ON offline_messages(created_at)");
 
         } catch (SQLException e) {
-            log.error("Offline DB init failed", e);
+            throw new IllegalStateException("Offline DB init failed", e);
+        }
+    }
+
+    private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {
+        try (java.sql.ResultSet result = connection.getMetaData().getColumns(null, null, table, column)) {
+            return result.next();
         }
     }
 
     // Opens and returns a new SQL database connection to the SQLite instance.
     public static Connection getConnection() throws SQLException {
-        return DriverManager.getConnection(DB_URL);
+        return openConnection(DB_URL);
     }
 
     public static Connection getOfflineConnection() throws SQLException {
-        return DriverManager.getConnection(OFFLINE_DB_URL);
+        return openConnection(OFFLINE_DB_URL);
+    }
+
+    private static Connection openConnection(String url) throws SQLException {
+        Connection connection = DriverManager.getConnection(url);
+        try (Statement statement = connection.createStatement()) {
+            statement.execute("PRAGMA busy_timeout = 5000");
+            return connection;
+        } catch (SQLException error) {
+            connection.close();
+            throw error;
+        }
+    }
+
+    public static String uuidForMailbox(String mailboxId) {
+        try (Connection connection = getConnection();
+             var statement = connection.prepareStatement("SELECT uuid FROM users WHERE mailbox_id = ? LIMIT 1")) {
+            statement.setString(1, mailboxId);
+            try (var result = statement.executeQuery()) { return result.next() ? result.getString(1) : null; }
+        } catch (SQLException error) {
+            throw new IllegalStateException("Unable to resolve mailbox", error);
+        }
     }
 
     public static void wipeOfflineDatabaseFile() {
@@ -90,6 +122,7 @@ public class DatabaseManager {
             stmt.setString(5, org.msgat.console.core.CryptoUtils.encryptString(avatarData));
             stmt.executeUpdate();
         } catch (SQLException e) {
+            throw new IllegalStateException("Unable to save profile", e);
         }
     }
 
@@ -102,13 +135,13 @@ public class DatabaseManager {
                 return rs.next();
             }
         } catch (SQLException e) {
+            throw new IllegalStateException("Unable to query mailbox", e);
         }
-        return false;
     }
 
     public static class UserProfile {
         public String uuid, nickname, avatarPath, avatarData;
-        
+
         // Constructor for creating a new UserProfile instance.
         public UserProfile(String u, String n, String a, String d) { this.uuid = u; this.nickname = n; this.avatarPath = a; this.avatarData = d; }
     }
@@ -127,23 +160,33 @@ public class DatabaseManager {
                 }
             }
         } catch (SQLException e) {
+            log.error("Failed to load profile {}", uuid, e);
         }
         return null;
     }
 
     // Deletes all records associated with a specific mailbox ID.
     public static void deleteUserAndData(String mailboxId) {
-        try (Connection conn = getConnection();
-             java.sql.PreparedStatement stmtUsers = conn.prepareStatement("DELETE FROM users WHERE mailbox_id = ?");
-             java.sql.PreparedStatement stmtOffline = conn.prepareStatement("DELETE FROM offline_messages WHERE target_mailbox = ?")) {
-            stmtUsers.setString(1, mailboxId);
-            stmtUsers.executeUpdate();
-            
-            stmtOffline.setString(1, mailboxId);
-            stmtOffline.executeUpdate();
+        // Both SQLite files participate in one transaction (rollback journals, same filesystem).
+        try (Connection connection = getConnection();
+             var attach = connection.prepareStatement("ATTACH DATABASE ? AS offline")) {
+            attach.setString(1, new File(DB_DIR, "msgat_offline.db").getAbsolutePath());
+            attach.execute();
+            connection.setAutoCommit(false);
+            try (var users = connection.prepareStatement("DELETE FROM users WHERE mailbox_id = ?");
+                 var packets = connection.prepareStatement("DELETE FROM offline.offline_messages WHERE target_mailbox = ?")) {
+                users.setString(1, mailboxId);
+                packets.setString(1, mailboxId);
+                users.executeUpdate();
+                packets.executeUpdate();
+                connection.commit();
+            } catch (SQLException error) {
+                connection.rollback();
+                throw error;
+            }
             log.info("Deleted all data for mailbox: {}", mailboxId);
-        } catch (SQLException e) {
-            log.error("Failed to delete user data", e);
+        } catch (SQLException error) {
+            throw new IllegalStateException("Unable to delete account data", error);
         }
     }
 
@@ -153,6 +196,7 @@ public class DatabaseManager {
              Statement stmt = conn.createStatement()) {
             stmt.executeUpdate("DELETE FROM offline_messages WHERE created_at < datetime('now', '-3 days')");
         } catch (SQLException e) {
+            log.error("Failed to clean up old offline messages", e);
         }
     }
 }

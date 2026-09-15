@@ -3,6 +3,11 @@ package org.msgat.core.network
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.msgat.MsgATApp
 import org.msgat.NotificationHelper
@@ -10,10 +15,12 @@ import org.msgat.NotificationHelper
 class MsgATService : Service() {
 
     private var networkMonitor: NetworkMonitor? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var connectionObserverJob: Job? = null
 
     // Returns null as this foreground service does not support IPC binding.
     override fun onBind(intent: Intent?): IBinder? {
-        return null 
+        return null
     }
 
     // Starts the service in the foreground and connects the Netty client.
@@ -30,10 +37,12 @@ class MsgATService : Service() {
             app.nettyClient.connect()
         }
 
-        kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
-            app.nettyClient.connectionState.collect { state ->
-                if (state == org.msgat.ui.chat.SyncState.SYNCED) {
-                    MessageResender.resendPendingMessages()
+        if (connectionObserverJob == null) {
+            connectionObserverJob = serviceScope.launch {
+                app.nettyClient.connectionState.collect { state ->
+                    if (state == org.msgat.ui.chat.SyncState.SYNCED) {
+                        MessageResender.resendPendingMessages()
+                    }
                 }
             }
         }
@@ -46,6 +55,9 @@ class MsgATService : Service() {
         super.onDestroy()
         networkMonitor?.stopMonitoring()
         networkMonitor = null
+        connectionObserverJob?.cancel()
+        connectionObserverJob = null
+        serviceScope.cancel()
         MsgATApp.instance.nettyClient.disconnect()
     }
 }

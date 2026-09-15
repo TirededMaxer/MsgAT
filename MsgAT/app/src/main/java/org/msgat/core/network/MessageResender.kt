@@ -29,6 +29,7 @@ object MessageResender {
                 for (msg in pendingMessages) {
                     val convo = msgDao.getConversationByUuid(msg.conversationUuid) ?: continue
                     val peerPublicKeyBase64 = convo.peerPublicKey
+                    if (peerPublicKeyBase64.isEmpty()) continue
 
                     if (msg.ext == "txt") {
                         val payload = MessagePayload(
@@ -47,23 +48,13 @@ object MessageResender {
                         val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
                         val iv = ByteArray(16)
                         SecureRandom().nextBytes(iv)
-                        
-                        val cipherText: ByteArray
-                        val authTag: ByteArray
-                        
-                        if (peerPublicKeyBase64.isNotEmpty()) {
-                            val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
-                            cipherText = pair.first
-                            authTag = pair.second
-                        } else {
-                            val pair = CryptoManager.encryptPayloadFallback(myUuid, msg.conversationUuid, iv, jsonBytes)
-                            cipherText = pair.first
-                            authTag = pair.second
-                        }
+
+                        val (cipherText, authTag) = CryptoManager.encryptPayloadECDH(
+                            myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
 
                         val targetMailboxId = CryptoManager.calculateMailboxId(msg.conversationUuid)
                         val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, cipherText, authTag)
-                        
+
                         val success = nettyClient.sendPacket(packet)
                         if (success) {
                             msgDao.updateMessageStatus(msg.messageId, 1)
@@ -71,29 +62,8 @@ object MessageResender {
                     } else {
                         val context = app.applicationContext
                         val mediaFile = org.msgat.core.media.MediaStorageManager.getOrExtractMediaFile(context, msg.messageId, msg.ext, msg.content)
-                        val chunks = if (mediaFile != null && mediaFile.exists()) {
-                            val bytes = mediaFile.readBytes()
-                            val chunkList = mutableListOf<String>()
-                            var offset = 0
-                            val chunkSize = 45000
-                            while (offset < bytes.size) {
-                                val length = chunkSize.coerceAtMost(bytes.size - offset)
-                                val chunkBytes = bytes.copyOfRange(offset, offset + length)
-                                chunkList.add(Base64.encodeToString(chunkBytes, Base64.NO_WRAP))
-                                offset += length
-                            }
-                            chunkList
-                        } else {
-                            val contentLen = msg.content.length
-                            val actualChunkSize = 40000
-                            val chunksCount = (contentLen + actualChunkSize - 1) / actualChunkSize
-                            val chunkList = mutableListOf<String>()
-                            for (i in 0 until chunksCount) {
-                                val end = kotlin.math.min(contentLen, (i + 1) * actualChunkSize)
-                                chunkList.add(msg.content.substring(i * actualChunkSize, end))
-                            }
-                            chunkList
-                        }
+                        if (mediaFile == null || !mediaFile.isFile) continue
+                        val chunks = org.msgat.utils.MediaHelper.uriToBase64Chunks(context, android.net.Uri.fromFile(mediaFile))
 
                         if (chunks.isEmpty()) continue
                         val totalChunks = chunks.size
@@ -113,27 +83,17 @@ object MessageResender {
                                 replyToSender = msg.replyToSender,
                                 replyToContent = msg.replyToContent
                             )
-                            
+
                             val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
                             val iv = ByteArray(16)
                             SecureRandom().nextBytes(iv)
-                            
-                            val cipherText: ByteArray
-                            val authTag: ByteArray
-                            
-                            if (peerPublicKeyBase64.isNotEmpty()) {
-                                val pair = CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
-                                cipherText = pair.first
-                                authTag = pair.second
-                            } else {
-                                val pair = CryptoManager.encryptPayloadFallback(myUuid, msg.conversationUuid, iv, jsonBytes)
-                                cipherText = pair.first
-                                authTag = pair.second
-                            }
-                            
+
+                            val (cipherText, authTag) = CryptoManager.encryptPayloadECDH(
+                                myPrivateKey, peerPublicKeyBase64, iv, jsonBytes)
+
                             val targetMailboxId = CryptoManager.calculateMailboxId(msg.conversationUuid)
                             val packet = GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, cipherText, authTag)
-                            
+
                             val success = nettyClient.sendPacket(packet)
                             if (!success) {
                                 allSent = false

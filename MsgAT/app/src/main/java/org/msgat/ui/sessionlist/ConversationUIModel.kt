@@ -4,5 +4,5 @@ data class ConversationUIModel(
     val uuid: String,
     val alias: String,
     val avatarPath: String = "",
-    val hasUnread: Boolean = false
+    val unreadCount: Int = 0
 )

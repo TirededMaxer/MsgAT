@@ -73,7 +73,7 @@ dependencies {
     debugImplementation(libs.androidx.ui.test.manifest)
 
     // Networking
-    implementation("io.netty:netty-all:4.1.107.Final")
+    implementation("io.netty:netty-all:4.2.18.Final")
     // Cryptography (Ed25519, X25519, and AES-GCM primitives)
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
     // JSON serialization

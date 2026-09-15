@@ -103,6 +103,6 @@ dependencies {
     implementation("androidx.paging:paging-compose:3.3.0")
 
     // ExoPlayer for Video Playback
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-ui:1.11.1")
 }

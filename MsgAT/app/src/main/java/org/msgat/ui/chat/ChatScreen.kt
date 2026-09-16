@@ -755,11 +755,8 @@ fun ChatBubble(
                     when (msg.status) {
                         0 -> CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = Color.Gray)
                         1 -> Icon(Icons.Default.Check, contentDescription = "Sent", tint = Color.Gray, modifier = Modifier.size(12.dp))
-                        2 -> Box(modifier = Modifier.width(16.dp), contentAlignment = Alignment.CenterStart) {
-                            Icon(Icons.Default.Check, contentDescription = null, tint = Color.Gray, modifier = Modifier.size(12.dp))
-                            Icon(Icons.Default.Check, contentDescription = "Delivered", tint = Color.Gray, modifier = Modifier.size(12.dp).offset(x = 4.dp))
-                        }
-                        else -> Box(modifier = Modifier.width(16.dp), contentAlignment = Alignment.CenterStart) {
+                        2 -> Icon(Icons.Default.Check, contentDescription = "Delivered", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
+                        3 -> Box(modifier = Modifier.width(16.dp), contentAlignment = Alignment.CenterStart) {
                             Icon(Icons.Default.Check, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp))
                             Icon(Icons.Default.Check, contentDescription = "Read", tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(12.dp).offset(x = 4.dp))
                         }

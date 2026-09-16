@@ -15,6 +15,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.layout
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -185,6 +186,16 @@ fun ConversationItem(
                 Box(
                     modifier = Modifier
                         .background(Color(0xFFF22626), CircleShape)
+                        .layout { measurable, constraints ->
+                            val placeable = measurable.measure(constraints)
+                            val diameter = maxOf(placeable.width, placeable.height)
+                            layout(diameter, diameter) {
+                                placeable.placeRelative(
+                                    (diameter - placeable.width) / 2,
+                                    (diameter - placeable.height) / 2
+                                )
+                            }
+                        }
                         .defaultMinSize(minWidth = 20.dp, minHeight = 20.dp)
                         .padding(horizontal = 6.dp, vertical = 2.dp),
                     contentAlignment = Alignment.Center

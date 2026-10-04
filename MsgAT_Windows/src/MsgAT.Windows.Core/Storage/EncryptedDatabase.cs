@@ -49,7 +49,7 @@ public sealed class EncryptedDatabase : IDisposable
                 SELECT c.uuid, c.alias, c.avatarPath, c.peerPublicKey,
                   (SELECT COUNT(*) FROM messages m
                    WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0)
-                FROM conversations c ORDER BY c.alias COLLATE NOCASE
+                FROM conversations c ORDER BY c.rowid
                 """);
             using var reader = command.ExecuteReader();
             var rows = new List<ConversationWithUnread>();
@@ -108,7 +108,7 @@ public sealed class EncryptedDatabase : IDisposable
                 SELECT messageId, conversationUuid, isMine, content, ext, timestamp, isRead,
                        replyToId, replyToSender, replyToContent, status, isRevoked, isEdited
                 FROM messages WHERE conversationUuid = $uuid
-                ORDER BY timestamp DESC LIMIT $limit OFFSET $offset
+                ORDER BY timestamp DESC, messageId DESC LIMIT $limit OFFSET $offset
                 """);
             command.Parameters.AddWithValue("$uuid", conversationUuid);
             command.Parameters.AddWithValue("$limit", limit);
@@ -197,11 +197,23 @@ public sealed class EncryptedDatabase : IDisposable
             """, ("$status", status), ("$uuid", conversationUuid), ("$timestamp", timestamp));
     }
 
-    public void MarkMessagesRead(string conversationUuid)
+    public ChatMessage? MarkConversationRead(string conversationUuid)
     {
-        ExecuteChanged(
-            "UPDATE messages SET isRead = 1 WHERE conversationUuid = $uuid AND isMine = 0 AND isRead = 0",
-            ("$uuid", conversationUuid));
+        ChatMessage? unread;
+        lock (_gate)
+        {
+            using (var command = Command("SELECT messageId FROM messages WHERE conversationUuid = $uuid AND isMine = 0 AND isRead = 0 ORDER BY timestamp DESC, messageId DESC LIMIT 1"))
+            {
+                command.Parameters.AddWithValue("$uuid", conversationUuid);
+                unread = command.ExecuteScalar() is string id ? GetMessage(id) : null;
+            }
+            if (unread is null) { return null; }
+            using var update = Command("UPDATE messages SET isRead = 1 WHERE conversationUuid = $uuid AND isMine = 0 AND isRead = 0");
+            update.Parameters.AddWithValue("$uuid", conversationUuid);
+            update.ExecuteNonQuery();
+        }
+        OnChanged();
+        return unread;
     }
 
     public IReadOnlyList<ChatMessage> GetPendingMessages()

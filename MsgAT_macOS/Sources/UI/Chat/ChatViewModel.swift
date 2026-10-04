@@ -11,9 +11,19 @@ public final class ChatViewModel: ObservableObject {
     @Published public var messages: [ChatMessage] = []
     @Published public var replyAuthors: [String: String] = [:]
 
-    @Published public var currentLimit: Int = 100
+    @Published public var currentLimit: Int = 50
     @Published public var hasMoreOlderMessages: Bool = true
 
+    @Published public private(set) var isViewingLatest = false
+    public var isMediaPresented = false
+    public var isChatMounted = false
+    private var isContentVisible: Bool {
+        guard isChatMounted, !isMediaPresented, NSApp.isActive,
+              let window = NSApp.keyWindow, window === NotificationHelper.mainWindow,
+              window.isVisible, !window.isMiniaturized, window.attachedSheet == nil,
+              NSApp.modalWindow == nil else { return false }
+        return CallManager.shared.callState == .idle || CallManager.shared.isMinimized
+    }
     private var cancellables = Set<AnyCancellable>()
 
     public init(targetUuid: String) {
@@ -22,12 +32,21 @@ public final class ChatViewModel: ObservableObject {
         loadConversation()
         loadMessages()
 
+        CallManager.shared.$callState.combineLatest(CallManager.shared.$isMinimized)
+            .receive(on: RunLoop.main).sink { [weak self] _ in self?.loadMessages() }.store(in: &cancellables)
+
         NotificationCenter.default.publisher(for: MsgDao.didChangeNotification)
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.loadConversation(); self?.loadMessages() }
             .store(in: &cancellables)
 
         NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)
+            .receive(on: RunLoop.main)
+            .sink { [weak self] _ in self?.loadMessages() }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)
+            .merge(with: NotificationCenter.default.publisher(for: NSWindow.didEndSheetNotification))
             .receive(on: RunLoop.main)
             .sink { [weak self] _ in self?.loadMessages() }
             .store(in: &cancellables)
@@ -58,21 +77,30 @@ public final class ChatViewModel: ObservableObject {
             }
             self.hasMoreOlderMessages = (msgs.count >= currentLimit)
 
-            // If latest message is incoming and unread, mark as read & send ack
-            if NSApp.isActive, let last = msgs.last(where: { !$0.isMine && !$0.isRead }) {
-                markAsRead()
-                sendReadAck(messageId: last.messageId)
-            }
+            markAsRead()
         }
     }
 
     public func loadMoreMessages() {
-        currentLimit += 100
+        currentLimit += 50
         loadMessages()
     }
 
+    public func revealMessage(_ id: String) -> Bool {
+        guard let target = try? MsgDao.shared.getMessageById(id), target.conversationUuid == targetUuid else { return false }
+        while !messages.contains(where: { $0.messageId == id }) && hasMoreOlderMessages { loadMoreMessages() }
+        return messages.contains(where: { $0.messageId == id })
+    }
+
+    public func setViewingLatest(_ visible: Bool) {
+        isViewingLatest = visible
+        markAsRead()
+    }
+
     public func markAsRead() {
-        try? MsgDao.shared.markMessagesAsRead(conversationUuid: targetUuid)
+        guard isViewingLatest, isContentVisible else { return }
+        guard let last = try? MsgDao.shared.markConversationRead(conversationUuid: targetUuid) else { return }
+        sendReadAck(messageId: last.messageId)
     }
 
     public func sendMessage(
@@ -80,8 +108,8 @@ public final class ChatViewModel: ObservableObject {
         replyTo: ChatMessage? = nil,
         onFail: (() -> Void)? = nil
     ) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
+        let trimmed = text
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
 
         let myUuid = KeychainManager.shared.myUuid
         let myPrivKey = KeychainManager.shared.x25519PrivateKey
@@ -170,10 +198,12 @@ public final class ChatViewModel: ObservableObject {
         let msgId = UUID().uuidString
         let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
 
-        guard let savedUrl = try? MediaStorageManager.shared.saveMediaFromUrl(msgId: msgId, ext: ext, sourceUrl: sourceUrl) else {
-            onFail?()
-            return
+        let savedUrl: URL
+        do { savedUrl = try MediaStorageManager.shared.saveMediaFromUrl(msgId: msgId, ext: ext, sourceUrl: sourceUrl) }
+        catch let error as CocoaError where error.code == .fileReadTooLarge {
+            NoticeCenter.shared.show("Files cannot exceed 100 MB."); return
         }
+        catch { onFail?(); return }
 
         let chatMsg = ChatMessage(
             messageId: msgId,
@@ -333,9 +363,7 @@ public final class ChatViewModel: ObservableObject {
                 }
             } catch {
                 await MainActor.run {
-                    let alert = NSAlert()
-                    alert.messageText = "The message change could not be sent."
-                    alert.runModal()
+                    NoticeCenter.shared.show("The message change could not be sent.")
                 }
             }
         }

@@ -1,6 +1,22 @@
 package org.msgat.ui.chat
 
 import android.content.Context
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.content.ReceiveContentListener
+import androidx.compose.foundation.content.TransferableContent
+import androidx.compose.foundation.content.MediaType
+import androidx.compose.foundation.content.hasMediaType
+import androidx.compose.foundation.content.consume
+import androidx.compose.foundation.content.contentReceiver
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.input.rememberTextFieldState
+import androidx.compose.foundation.text.input.setTextAndPlaceCursorAtEnd
+import androidx.compose.foundation.text.input.clearText
+import androidx.compose.foundation.text.input.TextFieldLineLimits
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -52,7 +68,7 @@ import java.util.Locale
 
 enum class SyncState { DISCONNECTED, SYNCING, SYNCED }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
 // Renders the main chat interface including the message history and input fields.
 fun ChatScreen(
@@ -63,14 +79,18 @@ fun ChatScreen(
     messages: androidx.paging.compose.LazyPagingItems<MessageUIModel>,
     onBack: () -> Unit,
     onSendMessage: (text: String, replyToId: String?, replyToSender: String?, replyToContent: String?, onFail: () -> Unit) -> Unit,
-    onSelectMedia: (uri: android.net.Uri, replyToId: String?, replyToSender: String?, replyToContent: String?, onFail: () -> Unit) -> Unit,
+    onSelectMedia: (uri: android.net.Uri, replyToId: String?, replyToSender: String?, replyToContent: String?, onFail: () -> Unit, onComplete: () -> Unit) -> Unit,
     onStartCall: () -> Unit,
     onMarkAsRead: () -> Unit,
-    onSendReadAck: (messageId: String) -> Unit = {},
     onRevokeMessage: (messageId: String) -> Unit = {},
     onEditMessage: (messageId: String, newContent: String) -> Unit = { _, _ -> }
 ) {
-    var inputText by remember { mutableStateOf("") }
+    val composerState = rememberTextFieldState()
+    val inputText = composerState.text.toString()
+    var composerFocused by remember { mutableStateOf(false) }
+    var showAttachmentMenu by remember { mutableStateOf(false) }
+    val composerInteraction = remember { MutableInteractionSource() }
+    val sendSelectedMedia by rememberUpdatedState(onSelectMedia)
     var replyingToMessage by remember { mutableStateOf<MessageUIModel?>(null) }
     var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var quoteJumpJob by remember { mutableStateOf<Job?>(null) }
@@ -83,13 +103,23 @@ fun ChatScreen(
     var previousMessageId by remember { mutableStateOf<String?>(null) }
     val firstMessage = messages.itemSnapshotList.items.firstOrNull()
     val isNewUnread = firstMessage != null && !firstMessage.isMine && !firstMessage.isRead
+    val callManager = remember { org.msgat.core.call.CallManager.getInstance() }
+    val callState by callManager.callState.collectAsState()
+    val isCallMinimized by callManager.isMinimized.collectAsState()
+    val isChatVisible = selectedMedia == null && (callState == org.msgat.core.call.CallState.IDLE || isCallMinimized)
     val isAtBottom by remember { derivedStateOf { listState.firstVisibleItemIndex <= 2 } }
 
-    LaunchedEffect(isAtBottom, isNewUnread, firstMessage?.id) {
-        if (isAtBottom && firstMessage != null && !firstMessage.isMine) {
-            onMarkAsRead()
-            onSendReadAck(firstMessage.id)
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var isResumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) }
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, _ ->
+            isResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+    LaunchedEffect(isAtBottom, isNewUnread, firstMessage?.id, isResumed, isChatVisible) {
+        if (isAtBottom && isResumed && isChatVisible && firstMessage != null) onMarkAsRead()
     }
 
     LaunchedEffect(firstMessage?.id) {
@@ -111,6 +141,30 @@ fun ChatScreen(
         }
     }
 
+    LaunchedEffect(inputText) { if (inputText.isNotEmpty()) showAttachmentMenu = false }
+    val receiveImages = remember(peerUuid, myUuid) {
+        ReceiveContentListener { content ->
+            if (!composerFocused || !isResumed) return@ReceiveContentListener content
+            content.consume { item ->
+                val uri = item.uri
+                val mime = uri?.let { runCatching { context.contentResolver.getType(it) }.getOrNull() }
+                val image = mime?.startsWith("image/") == true ||
+                    (mime == null && content.clipEntry.clipData.itemCount == 1 && content.hasMediaType(MediaType.Image))
+                if (uri == null || uri.scheme !in listOf("content", "file") || !image) return@consume false
+                val reply = replyingToMessage
+                replyingToMessage = null
+                showAttachmentMenu = false
+                // Keep the input-method permission owner alive until the asynchronous media import finishes.
+                val lease = ImagePasteLease(content)
+                sendSelectedMedia(uri, reply?.id, reply?.let { if (it.isMine) myUuid else peerUuid },
+                    reply?.let { if (it.ext == "txt") it.content else "[${it.ext.uppercase(Locale.ROOT)}]" }, {
+                        android.widget.Toast.makeText(context, "Send content failed", android.widget.Toast.LENGTH_SHORT).show()
+                    }, { lease.release() })
+                true
+            }
+        }
+    }
+
     val photoPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
@@ -120,9 +174,9 @@ fun ChatScreen(
             val replySender = reply?.let { if (it.isMine) myUuid else peerUuid }
             val replyContent = reply?.let { if (it.ext == "txt") it.content else "[${it.ext.uppercase(Locale.ROOT)}]" }
             replyingToMessage = null
-            onSelectMedia(uri, replyId, replySender, replyContent) {
-                android.widget.Toast.makeText(context, "Send content Failed", android.widget.Toast.LENGTH_SHORT).show()
-            }
+            onSelectMedia(uri, replyId, replySender, replyContent, {
+                android.widget.Toast.makeText(context, "Send content failed", android.widget.Toast.LENGTH_SHORT).show()
+            }, {})
         }
     }
 
@@ -186,7 +240,6 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            var showAttachmentMenu by remember { mutableStateOf(false) }
             Column(modifier = Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface).navigationBarsPadding()) {
                 androidx.compose.animation.AnimatedVisibility(
                     visible = replyingToMessage != null,
@@ -232,42 +285,55 @@ fun ChatScreen(
                 }
 
                 Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.Bottom) {
-                    TextField(
-                        value = inputText,
-                        onValueChange = { inputText = it; if (it.isNotEmpty()) showAttachmentMenu = false },
-                        modifier = Modifier.weight(1f).padding(end = 8.dp),
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.background, unfocusedContainerColor = MaterialTheme.colorScheme.background,
-                            focusedTextColor = MaterialTheme.colorScheme.onBackground, unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
-                            focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent
-                        ),
-                        maxLines = 5,
-                        shape = RoundedCornerShape(20.dp),
-                        placeholder = { Text("Message...", color = Color.Gray) }
+                    BasicTextField(
+                        state = composerState,
+                        modifier = Modifier.weight(1f).padding(end = 8.dp)
+                            .defaultMinSize(minHeight = TextFieldDefaults.MinHeight)
+                            .onFocusChanged { composerFocused = it.isFocused }
+                            .contentReceiver(receiveImages),
+                        lineLimits = TextFieldLineLimits.MultiLine(maxHeightInLines = 5),
+                        textStyle = MaterialTheme.typography.bodyLarge.copy(color = MaterialTheme.colorScheme.onBackground),
+                        cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
+                        interactionSource = composerInteraction,
+                        decorator = { innerTextField ->
+                            TextFieldDefaults.DecorationBox(
+                                value = inputText, innerTextField = innerTextField,
+                                enabled = true, singleLine = false,
+                                visualTransformation = VisualTransformation.None,
+                                interactionSource = composerInteraction,
+                                colors = TextFieldDefaults.colors(
+                                    focusedContainerColor = MaterialTheme.colorScheme.background, unfocusedContainerColor = MaterialTheme.colorScheme.background,
+                                    focusedTextColor = MaterialTheme.colorScheme.onBackground, unfocusedTextColor = MaterialTheme.colorScheme.onBackground,
+                                    focusedIndicatorColor = Color.Transparent, unfocusedIndicatorColor = Color.Transparent
+                                ),
+                                shape = RoundedCornerShape(20.dp),
+                                placeholder = { Text("Message...", color = Color.Gray) }
+                            )
+                        }
                     )
 
                     IconButton(
                         onClick = {
-                            if (inputText.isNotEmpty()) {
+                            if (inputText.isNotBlank()) {
                                 val textToSend = inputText
                                 val reply = replyingToMessage
                                 val replyId = reply?.id
                                 val replySender = reply?.let { if (it.isMine) myUuid else peerUuid }
                                 val replyContent = reply?.let { if (it.ext == "txt") it.content else "[${it.ext.uppercase(Locale.ROOT)}]" }
-                                inputText = ""
+                                composerState.clearText()
                                 replyingToMessage = null
                                 onSendMessage(textToSend, replyId, replySender, replyContent) {
-                                    inputText = textToSend
+                                    if (composerState.text.isEmpty()) composerState.setTextAndPlaceCursorAtEnd(textToSend)
                                     android.widget.Toast.makeText(context, "Send content failed", android.widget.Toast.LENGTH_SHORT).show()
                                 }
                             } else {
                                 showAttachmentMenu = !showAttachmentMenu
                             }
                         },
-                        modifier = Modifier.background(if (inputText.isNotEmpty()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(50))
+                        modifier = Modifier.background(if (inputText.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.secondaryContainer, RoundedCornerShape(50))
                     ) {
                         androidx.compose.animation.AnimatedContent(
-                            targetState = inputText.isNotEmpty(),
+                            targetState = inputText.isNotBlank(),
                             transitionSpec = {
                                 (androidx.compose.animation.fadeIn() + androidx.compose.animation.scaleIn(initialScale = 0.5f))
                                     .togetherWith(androidx.compose.animation.fadeOut() + androidx.compose.animation.scaleOut(targetScale = 0.5f))
@@ -283,7 +349,7 @@ fun ChatScreen(
                     }
                 }
 
-                androidx.compose.animation.AnimatedVisibility(visible = showAttachmentMenu && inputText.isEmpty()) {
+                androidx.compose.animation.AnimatedVisibility(visible = showAttachmentMenu && inputText.isBlank()) {
                     Row(
                         modifier = Modifier.fillMaxWidth().padding(16.dp),
                         horizontalArrangement = Arrangement.SpaceEvenly
@@ -370,7 +436,7 @@ fun ChatScreen(
                                 isHighlighted = msg.id == highlightedMessageId,
                                 onRevoke = { onRevokeMessage(it.id) },
                                 onEdit = { msgToEdit -> editingMsg = msgToEdit; editingText = msgToEdit.content },
-                                onReEdit = { textToRestore -> inputText = textToRestore }
+                                onReEdit = { textToRestore -> composerState.setTextAndPlaceCursorAtEnd(textToRestore) }
                             )
                             Spacer(modifier = Modifier.height(24.dp))
                         }
@@ -547,7 +613,8 @@ fun ChatBubble(
                             }
                         )
                     }
-                    val canRevokeOrEdit = isMe && (System.currentTimeMillis() - msg.timestamp <= 120_000L)
+                    val elapsed = System.currentTimeMillis() - msg.timestamp
+                    val canRevokeOrEdit = isMe && elapsed in 0L..120_000L
                     if (canRevokeOrEdit && !msg.isRevoked) {
                         DropdownMenuItem(
                             text = { Text("Revoke") },
@@ -953,4 +1020,10 @@ fun VideoPlayer(videoFile: java.io.File, onDismiss: () -> Unit) {
             )
         }
     }
+}
+
+
+@OptIn(ExperimentalFoundationApi::class)
+private class ImagePasteLease(private var content: TransferableContent?) {
+    fun release() { content = null }
 }

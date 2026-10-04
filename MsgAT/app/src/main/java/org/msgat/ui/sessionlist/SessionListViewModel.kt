@@ -224,12 +224,30 @@ class SessionListViewModel(
     }
 
     // Persists the user's nickname and avatar choice to the secure preferences.
-    fun saveIdentity(nickname: String, avatarUri: String) {
-        securePrefs.myNickname = nickname
-        securePrefs.myAvatarPath = avatarUri
-        _currentNickname.value = nickname
-        _currentAvatarPath.value = avatarUri
-        nettyClient.sendProfile()
+    fun saveIdentity(nickname: String, avatarUri: String, onSaved: () -> Unit) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = org.msgat.MsgATApp.instance.applicationContext
+            try {
+                val target = java.io.File(org.msgat.core.media.MediaStorageManager.getMediaDir(context), "avatar_self.jpg")
+                val source = android.net.Uri.parse(avatarUri)
+                context.contentResolver.openInputStream(source)?.use { input ->
+                    val atomic = android.util.AtomicFile(target)
+                    val output = atomic.startWrite()
+                    try { input.copyTo(output); atomic.finishWrite(output) }
+                    catch (e: Exception) { atomic.failWrite(output); throw e }
+                } ?: throw java.io.IOException("Cannot open avatar")
+                securePrefs.myNickname = nickname
+                securePrefs.myAvatarPath = target.absolutePath
+                _currentNickname.value = nickname
+                _currentAvatarPath.value = target.absolutePath
+                nettyClient.sendProfile()
+                kotlinx.coroutines.withContext(Dispatchers.Main) { onSaved() }
+            } catch (e: Exception) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    android.widget.Toast.makeText(context, "Failed to save", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
     }
 
     // Updates and saves the server connection settings (relay + optional TURN fallback).

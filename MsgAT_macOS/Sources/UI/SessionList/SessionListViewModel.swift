@@ -20,7 +20,7 @@ public final class SessionListViewModel: ObservableObject {
     public var currentTurnUsername: String { KeychainManager.shared.turnUsername ?? "" }
     public var currentTurnPassword: String { KeychainManager.shared.turnPassword ?? "" }
     public var currentTurnUseTls: Bool { KeychainManager.shared.turnUseTls }
-    public var isIdentityMissing: Bool { (KeychainManager.shared.myNickname?.isEmpty ?? true) || (KeychainManager.shared.myAvatarPath?.isEmpty ?? true) }
+    public var isIdentityMissing: Bool { (KeychainManager.shared.myNickname?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) || (KeychainManager.shared.myAvatarPath?.isEmpty ?? true) }
 
     private var cancellables = Set<AnyCancellable>()
 
@@ -99,7 +99,7 @@ public final class SessionListViewModel: ObservableObject {
 
     public func acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
         guard syncState == .synced else { return }
-        guard let req = try? MsgDao.shared.getFriendRequestByUuid(senderUuid) else { return }
+        guard let req = try? MsgDao.shared.getFriendRequestByUuid(senderUuid), !req.peerPublicKey.isEmpty else { return }
         let conv = Conversation(uuid: senderUuid, alias: nickname, avatarPath: avatarPath, peerPublicKey: req.peerPublicKey)
 
         let myUuid = KeychainManager.shared.myUuid
@@ -209,7 +209,7 @@ public final class SessionListViewModel: ObservableObject {
 
     public func resetIdentity(onFail: (() -> Void)? = nil) {
         guard NWClient.shared.connectionState == .synced else {
-            resetErrorMessage = "Cannot reset identity: Must be connected to the relay server to broadcast deletion."
+            resetErrorMessage = "Must be online to reset"
             onFail?()
             return
         }
@@ -286,7 +286,8 @@ public final class SessionListViewModel: ObservableObject {
         KeychainManager.shared.serverPort = Int(settings.port) ?? 0
         KeychainManager.shared.turnServer = trimmedTurnServer.isEmpty ? nil : trimmedTurnServer
         KeychainManager.shared.turnPort = Int(settings.turnPort) ?? 3478
-        KeychainManager.shared.turnUsername = settings.turnUsername.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : settings.turnUsername
+        let turnUsername = settings.turnUsername.trimmingCharacters(in: .whitespacesAndNewlines)
+        KeychainManager.shared.turnUsername = turnUsername.isEmpty ? nil : turnUsername
         KeychainManager.shared.turnPassword = settings.turnPassword.isEmpty ? nil : settings.turnPassword
         KeychainManager.shared.turnUseTls = settings.turnUseTls
 
@@ -296,26 +297,30 @@ public final class SessionListViewModel: ObservableObject {
         objectWillChange.send()
     }
 
-    public func saveIdentity(nickname: String, avatarUrl: URL? = nil) {
-        KeychainManager.shared.myNickname = nickname
+    @discardableResult public func saveIdentity(nickname: String, avatarUrl: URL? = nil) -> Bool {
         if let url = avatarUrl {
-            updateMyAvatar(from: url)
-        } else {
-            broadcastProfileUpdate()
+            guard updateMyAvatar(from: url, broadcast: false) else { return false }
+            if url.lastPathComponent.hasPrefix("msgat-avatar-") { try? FileManager.default.removeItem(at: url) }
         }
+        KeychainManager.shared.myNickname = nickname
+        broadcastProfileUpdate()
         objectWillChange.send()
+        return true
     }
 
-    public func updateMyAvatar(from sourceUrl: URL) {
+    @discardableResult public func updateMyAvatar(from sourceUrl: URL, broadcast: Bool = true) -> Bool {
         let avatarTarget = MediaStorageManager.shared.mediaDirectory.appendingPathComponent("avatar_self.jpg")
         guard let thumbnail = MediaStorageManager.shared.generateImageThumbnail(fileUrl: sourceUrl, maxDimension: 256),
               let tiff = thumbnail.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-              let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else { return }
+              let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
+            NoticeCenter.shared.show("Failed to save"); return false
+        }
         do { try jpeg.write(to: avatarTarget, options: .atomic) }
-        catch { resetErrorMessage = error.localizedDescription; return }
+        catch { NoticeCenter.shared.show("Failed to save"); return false }
         KeychainManager.shared.myAvatarPath = avatarTarget.path
-        broadcastProfileUpdate()
+        if broadcast { broadcastProfileUpdate() }
         objectWillChange.send()
+        return true
     }
 
     public func broadcastProfileUpdate() {

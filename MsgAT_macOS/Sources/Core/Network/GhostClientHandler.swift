@@ -1,6 +1,5 @@
 import Foundation
 import CryptoKit
-import UserNotifications
 import AppKit
 
 public final class GhostClientHandler: @unchecked Sendable {
@@ -267,7 +266,7 @@ public final class GhostClientHandler: @unchecked Sendable {
             acknowledge(packet)
             return
         }
-        let initialNickname = (jsonObj["nickname"] as? String) ?? "Unknown"
+        let initialNickname = "Loading..."
         let initialAvatar = ""
 
         let request = FriendRequest(
@@ -302,13 +301,20 @@ public final class GhostClientHandler: @unchecked Sendable {
 
         guard uuid.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return }
         let nickname = (jsonObj["nickname"] as? String) ?? "Unknown"
-        var finalAvatarPath = ""
+        let request = try? MsgDao.shared.getFriendRequestByUuid(uuid)
+        let conversation = try? MsgDao.shared.getConversationByUuid(uuid)
+        guard request != nil || conversation != nil else { return }
+        var finalAvatarPath = conversation?.avatarPath ?? request?.avatarPath ?? ""
         let avatarData = (jsonObj["avatarData"] as? String) ?? ""
 
         if !avatarData.isEmpty, let bytes = Data(base64Encoded: avatarData) {
             let avatarFile = MediaStorageManager.shared.mediaDirectory.appendingPathComponent("avatar_\(uuid).jpg")
-            try? bytes.write(to: avatarFile)
-            finalAvatarPath = avatarFile.path
+            do {
+                try bytes.write(to: avatarFile, options: .atomic)
+                finalAvatarPath = avatarFile.path
+            } catch { print("[MsgAT] Failed to save profile avatar: \(error)") }
+        } else if avatarData.isEmpty {
+            finalAvatarPath = ""
         }
 
         if var req = try? MsgDao.shared.getFriendRequestByUuid(uuid) {
@@ -473,15 +479,7 @@ public final class GhostClientHandler: @unchecked Sendable {
         if active { return }
 
         let conv = try? MsgDao.shared.getConversationByUuid(senderUuid)
-        let title = conv?.alias ?? String(senderUuid.prefix(8))
-        let body = ext == "txt" ? content : "[\(ext.uppercased())]"
-
-        let contentObj = UNMutableNotificationContent()
-        contentObj.title = title
-        contentObj.body = body
-        contentObj.sound = .default
-
-        let request = UNNotificationRequest(identifier: UUID().uuidString, content: contentObj, trigger: nil)
-        UNUserNotificationCenter.current().add(request)
+        NotificationHelper.shared.showMessageNotification(
+            senderUuid: senderUuid, senderAlias: conv?.alias ?? "Unknown", ext: ext, content: content)
     }
 }

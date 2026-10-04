@@ -47,7 +47,7 @@ fun AddConversationDialog(myUuid: String, onDismiss: () -> Unit, onConfirm: (Str
                     label = { Text("Target UUID", color = Color.Gray) },
                     isError = error != null,
                     supportingText = error?.let { message -> { Text(message) } },
-                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White)
+                    colors = OutlinedTextFieldDefaults.colors(focusedTextColor = Color.White, unfocusedTextColor = Color.White, focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray)
                 )
             }
         },
@@ -155,7 +155,8 @@ fun SettingsDialog(
                 label = { Text("Server IP / Domain", color = Color.Gray) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -166,7 +167,8 @@ fun SettingsDialog(
                 label = { Text("Server Port", color = Color.Gray) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -192,7 +194,8 @@ fun SettingsDialog(
                     label = { Text("TURN Server", color = Color.Gray) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                     ),
                     modifier = Modifier.weight(0.6f)
                 )
@@ -203,7 +206,8 @@ fun SettingsDialog(
                     label = { Text("TURN Port", color = Color.Gray) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                     ),
                     modifier = Modifier.weight(0.4f)
                 )
@@ -216,7 +220,8 @@ fun SettingsDialog(
                     label = { Text("TURN Username", color = Color.Gray) },
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                     ),
                     modifier = Modifier.weight(0.5f)
                 )
@@ -228,7 +233,8 @@ fun SettingsDialog(
                     visualTransformation = PasswordVisualTransformation(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White
+                        unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                     ),
                     modifier = Modifier.weight(0.5f)
                 )

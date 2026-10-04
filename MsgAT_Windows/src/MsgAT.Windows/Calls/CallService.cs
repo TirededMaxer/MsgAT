@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Windows.Media;
 using System.Windows.Threading;
 using MsgAT.Windows.Core.Calls;
 using MsgAT.Windows.Core.Models;
@@ -25,6 +26,8 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     private long _durationSeconds;
     private long? _rttMilliseconds;
     private bool _isMuted;
+    private bool _isSpeakerOn = true;
+    private CancellationTokenSource? _ringTimeout;
     private bool _isCaller;
     private string _engineConnectionState = "new";
     private bool _disposed;
@@ -46,30 +49,35 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         _engine.IceCandidateCreated += IceCandidateCreated;
         _engine.ConnectionStateChanged += ConnectionStateChanged;
         _engine.RttMeasured += RttMeasured;
+        _engine.MicrophonePermissionDenied += MicrophonePermissionDenied;
     }
 
     public event EventHandler? ShowRequested;
+    public event EventHandler<string>? NoticeRequested;
 
-    public CallState State { get => _state; private set { if (SetProperty(ref _state, value)) { OnPropertyChanged(nameof(StatusText)); } } }
+    public CallState State { get => _state; private set { if (SetProperty(ref _state, value)) { OnPropertyChanged(nameof(StatusText)); OnPropertyChanged(nameof(IsIncoming)); } } }
     public string? PeerUuid { get => _peerUuid; private set { if (SetProperty(ref _peerUuid, value)) { OnPropertyChanged(nameof(PeerAlias)); OnPropertyChanged(nameof(PeerAvatarPath)); OnPropertyChanged(nameof(PeerInitial)); } } }
     public string PeerAlias => PeerUuid is null ? "Unknown" : _database.GetConversation(PeerUuid)?.Alias ?? "Unknown";
     public string? PeerAvatarPath => PeerUuid is null ? null : _database.GetConversation(PeerUuid)?.AvatarPath;
     public string PeerInitial => string.IsNullOrWhiteSpace(PeerAlias) ? "" : System.Globalization.StringInfo.GetNextTextElement(PeerAlias);
     public long DurationSeconds { get => _durationSeconds; private set { if (SetProperty(ref _durationSeconds, value)) { OnPropertyChanged(nameof(DurationText)); OnPropertyChanged(nameof(StatusText)); } } }
-    public long? RttMilliseconds { get => _rttMilliseconds; private set { if (SetProperty(ref _rttMilliseconds, value)) { OnPropertyChanged(nameof(RttText)); } } }
+    public long? RttMilliseconds { get => _rttMilliseconds; private set { if (SetProperty(ref _rttMilliseconds, value)) { OnPropertyChanged(nameof(RttText)); OnPropertyChanged(nameof(QualityBrush)); } } }
     public bool IsMuted { get => _isMuted; private set { if (SetProperty(ref _isMuted, value)) OnPropertyChanged(nameof(MuteText)); } }
+    public bool IsSpeakerOn { get => _isSpeakerOn; private set { if (SetProperty(ref _isSpeakerOn, value)) OnPropertyChanged(nameof(SpeakerText)); } }
+    public string SpeakerText => IsSpeakerOn ? "Turn speaker off" : "Turn speaker on";
+    public Brush QualityBrush => RttMilliseconds is not > 0 ? Brushes.Gray : RttMilliseconds < 150 ? Brushes.Lime : RttMilliseconds < 300 ? Brushes.Yellow : Brushes.Red;
     public string MuteText => IsMuted ? "Unmute" : "Mute";
     public bool IsIncoming => State == CallState.IncomingRinging;
     public bool IsVisible => State != CallState.Idle;
     public string DurationText => $"{DurationSeconds / 60:00}:{DurationSeconds % 60:00}";
-    public string RttText => RttMilliseconds is > 0 ? $"{RttMilliseconds} ms" : "—";
+    public string RttText => RttMilliseconds is > 0 ? $"{RttMilliseconds}ms" : "—";
     public string StatusText => State switch
     {
-        CallState.OutgoingRinging => "Calling…",
-        CallState.IncomingRinging => "Incoming voice call…",
-        CallState.Connecting => "Connecting…",
+        CallState.OutgoingRinging => "Calling...",
+        CallState.IncomingRinging => "Incoming Voice Call...",
+        CallState.Connecting => "Connecting...",
         CallState.Connected => DurationText,
-        CallState.Ended => "Call ended",
+        CallState.Ended => "Call Ended",
         _ => ""
     };
 
@@ -77,7 +85,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     {
         await RunOnUiAsync(async () =>
         {
-            EnsureIdle();
+            if (State != CallState.Idle) return;
             RequireCallablePeer(peerUuid);
             BeginCall(peerUuid, isCaller: true, CallState.OutgoingRinging);
             try { await _engine.CreateOfferAsync(BuildIceServers()); }
@@ -89,9 +97,14 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     {
         if (State != CallState.IncomingRinging || PeerUuid is null || string.IsNullOrWhiteSpace(_pendingOffer)) { return; }
         State = CallState.Connecting;
+        StartRingTimeout();
         OnPropertyChanged(nameof(IsIncoming));
-        await _engine.AcceptOfferAsync(_pendingOffer, BuildIceServers());
-        await FlushPendingIceAsync();
+        try
+        {
+            await _engine.AcceptOfferAsync(_pendingOffer, BuildIceServers());
+            await FlushPendingIceAsync();
+        }
+        catch { await FinishAsync(true, null); throw; }
     });
 
     public Task RejectAsync() => RunOnUiAsync(async () =>
@@ -111,8 +124,15 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
 
     public Task ToggleMuteAsync() => RunOnUiAsync(async () =>
     {
-        IsMuted = !IsMuted;
-        await _engine.SetMutedAsync(IsMuted);
+        var muted = !IsMuted;
+        await _engine.SetMutedAsync(muted);
+        IsMuted = muted;
+    });
+
+    public Task ToggleSpeakerAsync() => RunOnUiAsync(async () =>
+    {
+        if (State is CallState.Idle or CallState.Ended) return;
+        IsSpeakerOn = await _engine.SetSpeakerAsync(!IsSpeakerOn);
     });
 
     public Task OfferReceivedAsync(string senderUuid, string sdp) => RunOnUiAsync(async () =>
@@ -131,6 +151,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     {
         if (!_isCaller || PeerUuid != senderUuid || State != CallState.OutgoingRinging) { return; }
         State = CallState.Connecting;
+        StartRingTimeout();
         await _engine.ApplyAnswerAsync(sdp);
         await FlushPendingIceAsync();
     });
@@ -138,7 +159,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     public Task IceCandidateReceivedAsync(string senderUuid, string sdpMid, int sdpMLineIndex, string candidate) =>
         RunOnUiAsync(async () =>
         {
-            if (PeerUuid != senderUuid || State == CallState.Idle || string.IsNullOrWhiteSpace(candidate)) { return; }
+            if (PeerUuid != senderUuid || State is CallState.Idle or CallState.Ended || sdpMLineIndex is < 0 or > 255 || string.IsNullOrWhiteSpace(candidate)) { return; }
             var item = new IceCandidateInfo(sdpMid, sdpMLineIndex, candidate);
             if (State == CallState.IncomingRinging) { if (_pendingIce.Count < 256) _pendingIce.Add(item); }
             else { await _engine.AddIceCandidateAsync(sdpMid, sdpMLineIndex, candidate); }
@@ -168,11 +189,14 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         _disposed = true;
         _callLifetime?.Cancel();
         _callLifetime?.Dispose();
+        _ringTimeout?.Cancel();
+        _ringTimeout?.Dispose();
         _engine.OfferCreated -= OfferCreated;
         _engine.AnswerCreated -= AnswerCreated;
         _engine.IceCandidateCreated -= IceCandidateCreated;
         _engine.ConnectionStateChanged -= ConnectionStateChanged;
         _engine.RttMeasured -= RttMeasured;
+        _engine.MicrophonePermissionDenied -= MicrophonePermissionDenied;
     }
 
     private void BeginCall(string peerUuid, bool isCaller, CallState state)
@@ -188,11 +212,19 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         DurationSeconds = 0;
         RttMilliseconds = null;
         IsMuted = false;
+        IsSpeakerOn = true;
         State = state;
         OnPropertyChanged(nameof(IsIncoming));
         OnPropertyChanged(nameof(IsVisible));
         ShowRequested?.Invoke(this, EventArgs.Empty);
-        _ = RingTimeoutAsync(_callLifetime.Token);
+        StartRingTimeout();
+    }
+
+    private void StartRingTimeout()
+    {
+        _ringTimeout?.Cancel(); _ringTimeout?.Dispose();
+        _ringTimeout = CancellationTokenSource.CreateLinkedTokenSource(_callLifetime?.Token ?? CancellationToken.None);
+        _ = RingTimeoutAsync(_ringTimeout.Token);
     }
 
     private async Task RingTimeoutAsync(CancellationToken cancellationToken)
@@ -203,6 +235,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
             await RunOnUiAsync(async () =>
             {
                 if (State is not (CallState.IncomingRinging or CallState.OutgoingRinging or CallState.Connecting)) { return; }
+                NoticeRequested?.Invoke(this, "Time out");
                 if (PeerUuid is not null)
                 {
                     if (State == CallState.IncomingRinging) { await _messaging.SendCallRejectAsync(PeerUuid); }
@@ -256,7 +289,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         }
         if (state is "failed" or "closed")
         {
-            await FinishAsync(false, _isCaller ? FormatRecord(DurationSeconds) : null);
+            await FinishAsync(true, _isCaller ? FormatRecord(DurationSeconds) : null);
         }
         else if (state == "disconnected")
         {
@@ -270,24 +303,23 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         RttMilliseconds = value is > 0 ? value : null;
     }
 
+    private void MicrophonePermissionDenied(object? sender, EventArgs e) =>
+        NoticeRequested?.Invoke(this, "Microphone permission is required for voice calls.");
+
     private async Task ConnectedLoopAsync(CancellationToken cancellationToken)
     {
-        var syncCounter = 0;
+        var tick = 0;
         try
         {
             while (!cancellationToken.IsCancellationRequested && State == CallState.Connected)
             {
-                await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
+                await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
                 await RunOnUiAsync(async () =>
                 {
-                    if (State != CallState.Connected) { return; }
+                    if (State != CallState.Connected || cancellationToken.IsCancellationRequested) { return; }
                     DurationSeconds = (long)(_connectedTime?.Elapsed.TotalSeconds ?? 0);
-                    await _engine.RequestStatsAsync();
-                    if (++syncCounter >= 10 && PeerUuid is not null)
-                    {
-                        syncCounter = 0;
-                        await _messaging.SendCallSyncAsync(PeerUuid, DurationSeconds);
-                    }
+                    ++tick;
+                    if (tick % 4 == 0) await _engine.RequestStatsAsync();
                 });
             }
         }
@@ -303,7 +335,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
             {
                 if (State == CallState.Connected && _engineConnectionState == "disconnected")
                 {
-                    await FinishAsync(false, _isCaller ? FormatRecord(DurationSeconds) : null);
+                    await FinishAsync(true, _isCaller ? FormatRecord(DurationSeconds) : null);
                 }
             });
         }
@@ -335,7 +367,7 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
         }
         State = CallState.Ended;
         OnPropertyChanged(nameof(IsIncoming));
-        await Task.Delay(600);
+        await Task.Delay(1500);
         State = CallState.Idle;
         PeerUuid = null;
         _pendingOffer = null;
@@ -357,13 +389,14 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     {
         var values = new List<IceServer>
         {
-            new(["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"])
+            new(["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302", "stun:stun.cloudflare.com:3478", "stun:stun.miwifi.com:3478", "stun:stun.chat.bilibili.com:3478"])
         };
         var snapshot = _settings.Snapshot;
         if (!string.IsNullOrWhiteSpace(snapshot.TurnServer))
         {
-            var scheme = snapshot.TurnUseTls ? "turns" : "turn";
-            values.Add(new([$"{scheme}:{snapshot.TurnServer}:{snapshot.TurnPort}"], snapshot.TurnUsername, snapshot.TurnPassword));
+            var urls = new List<string> { $"turn:{snapshot.TurnServer}:{snapshot.TurnPort}", $"turn:{snapshot.TurnServer}:{snapshot.TurnPort}?transport=tcp" };
+            if (snapshot.TurnUseTls) urls.Add($"turns:{snapshot.TurnServer}:{snapshot.TurnPort}?transport=tcp");
+            values.Add(new(urls, snapshot.TurnUsername, snapshot.TurnPassword));
         }
         return values;
     }
@@ -372,13 +405,8 @@ public sealed class CallService : ObservableObject, ICallSignalingSink, IDisposa
     {
         if (_database.GetConversation(peerUuid) is not { PeerPublicKey.Length: > 0 })
         {
-            throw new InvalidOperationException("Voice calls require an active friend identity.");
+            throw new InvalidOperationException("Cannot call a non-friend.");
         }
-    }
-
-    private void EnsureIdle()
-    {
-        if (State != CallState.Idle) { throw new InvalidOperationException("A voice call is already active."); }
     }
 
     private static string FormatRecord(long duration) => duration <= 0

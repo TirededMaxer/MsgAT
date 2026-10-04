@@ -34,15 +34,15 @@ class BlindRoutingTableTest {
         GhostPacket first = packet("recipient-a", (byte) 1, (byte) 2);
         for (int attempt = 0; attempt < 20; attempt++) routing.storeOfflineMessage("recipient-a", first);
         routing.storeOfflineMessage("recipient-b", packet("recipient-b", (byte) 1, (byte) 2));
-        assertEquals(1, routing.retrieveOfflineMessages("recipient-a").size());
-        assertEquals(1, routing.retrieveOfflineMessages("recipient-b").size());
+        assertEquals(1, routing.retrieveOfflineBatch("recipient-a", 0).packets().size());
+        assertEquals(1, routing.retrieveOfflineBatch("recipient-b", 0).packets().size());
         routing.acknowledge("recipient-a", new byte[0]);
         routing.acknowledge("recipient-a", new byte[32]);
-        assertEquals(1, routing.retrieveOfflineMessages("recipient-a").size());
+        assertEquals(1, routing.retrieveOfflineBatch("recipient-a", 0).packets().size());
         byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(first.getEncryptedData());
         routing.acknowledge("recipient-a", digest);
-        assertTrue(routing.retrieveOfflineMessages("recipient-a").isEmpty());
-        assertEquals(1, routing.retrieveOfflineMessages("recipient-b").size());
+        assertTrue(routing.retrieveOfflineBatch("recipient-a", 0).packets().isEmpty());
+        assertEquals(1, routing.retrieveOfflineBatch("recipient-b", 0).packets().size());
     }
 
     @Test
@@ -50,7 +50,7 @@ class BlindRoutingTableTest {
         routing.storeOfflineMessage("recipient-a", packet("recipient-a", (byte) 1, (byte) 2));
         routing.storeOfflineMessage("recipient-a", packet("recipient-a", (byte) 3, (byte) 2));
         routing.storeOfflineMessage("recipient-a", packet("recipient-a", (byte) 1, (byte) 4));
-        assertEquals(3, routing.retrieveOfflineMessages("recipient-a").size());
+        assertEquals(3, routing.retrieveOfflineBatch("recipient-a", 0).packets().size());
     }
 
     @Test
@@ -63,7 +63,7 @@ class BlindRoutingTableTest {
             insert.executeUpdate();
         }
         routing.storeOfflineMessage("recipient-a", first);
-        var stored = routing.retrieveOfflineMessages("recipient-a");
+        var stored = routing.retrieveOfflineBatch("recipient-a", 0).packets();
         assertEquals(1, stored.size());
         assertArrayEquals(first.serialize(), stored.getFirst().serialize());
     }

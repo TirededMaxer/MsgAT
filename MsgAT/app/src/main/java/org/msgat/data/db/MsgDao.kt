@@ -17,18 +17,28 @@ interface MsgDao {
     @Query("""
         SELECT c.*,
         (SELECT COUNT(*) FROM messages m WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0) as unreadCount
-        FROM conversations c
+        FROM conversations c ORDER BY c.rowid
     """)
     fun getAllConversationsWithUnread(): Flow<List<ConversationWithUnreadCount>>
 
+    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid AND isMine = 0 AND isRead = 0 ORDER BY timestamp DESC, messageId DESC LIMIT 1")
+    suspend fun getLatestUnreadMessage(uuid: String): ChatMessage?
+
     @Query("UPDATE messages SET isRead = 1 WHERE conversationUuid = :uuid AND isMine = 0 AND isRead = 0")
     suspend fun markMessagesAsRead(uuid: String)
+
+    @Transaction
+    suspend fun markConversationRead(uuid: String): ChatMessage? {
+        val unread = getLatestUnreadMessage(uuid) ?: return null
+        markMessagesAsRead(uuid)
+        return unread
+    }
 
     @Query("SELECT * FROM conversations WHERE uuid = :uuid LIMIT 1")
     // Fetches a specific conversation from the database by its UUID.
     suspend fun getConversationByUuid(uuid: String): Conversation?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    @Upsert
     // Inserts or updates a conversation record in the database.
     suspend fun insertConversation(conversation: Conversation)
 
@@ -36,14 +46,14 @@ interface MsgDao {
     // Deletes a conversation record from the database.
     suspend fun deleteConversation(uuid: String)
 
-    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid ORDER BY timestamp DESC")
+    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid ORDER BY timestamp DESC, messageId DESC")
     // Retrieves an observable flow of all messages belonging to a specific conversation.
     fun getMessages(uuid: String): Flow<List<ChatMessage>>
 
     @Query("SELECT * FROM messages WHERE conversationUuid = :uuid")
     suspend fun getMessageListByConversation(uuid: String): List<ChatMessage>
 
-    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid ORDER BY timestamp DESC")
+    @Query("SELECT * FROM messages WHERE conversationUuid = :uuid ORDER BY timestamp DESC, messageId DESC")
     // Retrieves a PagingSource of messages belonging to a specific conversation.
     fun getPagingMessages(uuid: String): androidx.paging.PagingSource<Int, ChatMessage>
 

@@ -4,11 +4,9 @@ public struct SessionListView: View {
     @ObservedObject var viewModel: SessionListViewModel
     @Binding var selectedConversationUuid: String?
 
-    @State private var searchText = ""
     @State private var showAddDialog = false
     @State private var showRequestsDialog = false
     @State private var showSettingsDialog = false
-    @State private var showIdentityDialog = false
 
     @State private var conversationToDelete: String? = nil
     @State private var conversationToClear: String? = nil
@@ -18,151 +16,97 @@ public struct SessionListView: View {
         self._selectedConversationUuid = selectedConversationUuid
     }
 
-    private var filteredConversations: [ConversationWithUnread] {
-        if searchText.isEmpty {
-            return viewModel.conversations
-        }
-        return viewModel.conversations.filter {
-            $0.conversation.alias.localizedCaseInsensitiveContains(searchText) ||
-            $0.conversation.uuid.localizedCaseInsensitiveContains(searchText)
-        }
-    }
-
     public var body: some View {
         VStack(spacing: 0) {
-            // Header & Status
-            HStack(spacing: 10) {
+            HStack(spacing: 0) {
                 HStack(spacing: 6) {
-                    Circle()
-                        .fill(statusColor)
-                        .frame(width: 9, height: 9)
-                    Text(viewModel.syncState.rawValue)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                    if viewModel.syncState == .syncing {
+                        ProgressView().controlSize(.mini).tint(MsgATTheme.connectionDotColor)
+                            .frame(width: 12, height: 12)
+                    } else {
+                        Circle().fill(statusColor).frame(width: 10, height: 10)
+                    }
+                    Text(statusText).font(.system(size: 12))
+                        .foregroundColor(viewModel.syncState == .synced ? .gray : statusColor)
                 }
-
                 Spacer()
-
-                // Action Buttons
-                Button(action: { showAddDialog = true }) {
-                    Image(systemName: "person.badge.plus")
+                Menu {
+                    Button("Add Friend") { showAddDialog = true }
+                    Button("Friend Requests") { showRequestsDialog = true }
+                    Button("Settings") { showSettingsDialog = true }
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 20, height: 20)
                 }
-                .buttonStyle(.plain)
-                .help("Add Friend")
-
-                Button(action: { showRequestsDialog = true }) {
-                    ZStack(alignment: .topTrailing) {
-                        Image(systemName: "bell")
-                        if !viewModel.friendRequests.isEmpty {
-                            Circle()
-                                .fill(Color.red)
-                                .frame(width: 7, height: 7)
-                                .offset(x: 2, y: -2)
-                        }
-                    }
-                }
-                .buttonStyle(.plain)
-                .help("Friend Requests")
-
-                Button(action: { showSettingsDialog = true }) {
-                    Image(systemName: "gearshape")
-                }
-                .buttonStyle(.plain)
-                .help("Settings")
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Menu")
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(Color(NSColor.controlBackgroundColor))
+            .padding(.horizontal, 12)
+            .frame(height: 36)
 
-            Divider()
-
-            // Search Bar
-            HStack {
-                Image(systemName: "magnifyingglass")
-                    .foregroundColor(.secondary)
-                TextField("Search friends...", text: $searchText)
-                    .textFieldStyle(.plain)
-                if !searchText.isEmpty {
-                    Button(action: { searchText = "" }) {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-            .padding(7)
-            .background(Color(NSColor.textBackgroundColor))
-            .cornerRadius(8)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-
-            // Conversations List
-            if filteredConversations.isEmpty {
-                VStack(spacing: 12) {
-                    Spacer()
-                    Image(systemName: "bubble.left.and.bubble.right")
-                        .font(.system(size: 32))
-                        .foregroundColor(.secondary.opacity(0.6))
-                    Text("No Conversations")
-                        .font(.callout)
-                        .foregroundColor(.secondary)
-                    Button("Add Friend") {
-                        showAddDialog = true
-                    }
-                    .buttonStyle(.bordered)
-                    .controlSize(.small)
-                    Spacer()
-                }
-            } else {
-                List(filteredConversations, id: \.conversation.uuid, selection: $selectedConversationUuid) { item in
+            if !viewModel.conversations.isEmpty {
+                Text("Friends")
+                    .font(.system(size: 14)).foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16).padding(.vertical, 8)
+                List(viewModel.conversations, id: \.conversation.uuid, selection: $selectedConversationUuid) { item in
                     let conv = item.conversation
-                    HStack(spacing: 12) {
+                    HStack(spacing: 16) {
                         AvatarView(
                             avatarPath: conv.avatarPath,
                             fallbackText: conv.alias,
-                            size: 42,
-                            cornerRadius: 10
+                            size: 48,
+                            cornerRadius: 8
                         )
-                        .frame(width: 46, height: 46, alignment: .center)
+                        .frame(width: 48, height: 48)
 
-                        VStack(alignment: .leading, spacing: 3) {
+                        VStack(alignment: .leading, spacing: 4) {
                             Text(conv.alias)
-                                .font(.system(size: 14, weight: .medium))
+                                .font(.body).fontWeight(.medium)
                                 .lineLimit(1)
 
                             Text(String(conv.uuid.prefix(12)) + "...")
-                                .font(.system(size: 11))
+                                .font(.caption)
                                 .foregroundColor(.secondary)
                                 .lineLimit(1)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
 
                         if item.unreadCount > 0 {
-                            Text(String(item.unreadCount))
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 6)
-                                .frame(minWidth: 20, minHeight: 20)
-                                .background(Color(red: 0.95, green: 0.15, blue: 0.15), in: Capsule())
-                                .fixedSize()
+                            CircularUnreadLayout {
+                                Text(String(item.unreadCount))
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 6).padding(.vertical, 2)
+                            }
+                            .background(Color(red: 242/255, green: 38/255, blue: 38/255), in: Circle())
+                            .padding(.leading, 12)
                         }
                     }
                     .padding(.vertical, 4)
+
+
+
                     .tag(conv.uuid)
                     .contextMenu {
-                        Button("Clear Messages") {
+                        Button("Clear Message") {
                             conversationToClear = conv.uuid
                         }
-                        Divider()
                         Button("Delete Friend", role: .destructive) {
                             conversationToDelete = conv.uuid
                         }
                     }
                 }
                 .listStyle(.sidebar)
+
+            } else {
+                Spacer()
             }
         }
         .frame(minWidth: 260)
+        .navigationTitle("MsgAT")
         .sheet(isPresented: $showAddDialog) {
             AddConversationDialog(
                 isPresented: $showAddDialog,
@@ -212,64 +156,49 @@ public struct SessionListView: View {
                 }
             )
         }
-        .alert(
-            "Reset Failed",
-            isPresented: Binding(
-                get: { viewModel.resetErrorMessage != nil },
-                set: { if !$0 { viewModel.resetErrorMessage = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) { viewModel.resetErrorMessage = nil }
-        } message: {
-            Text(viewModel.resetErrorMessage ?? "Unknown error")
+        .onChange(of: viewModel.resetErrorMessage) { message in
+            if let message { NoticeCenter.shared.show(message); viewModel.resetErrorMessage = nil }
         }
-        .alert(
-            "Clear Messages?",
-            isPresented: Binding(
-                get: { conversationToClear != nil },
-                set: { if !$0 { conversationToClear = nil } }
-            )
-        ) {
-            Button("Clear All", role: .destructive) {
-                if let uuid = conversationToClear {
-                    viewModel.clearMessages(uuid: uuid)
-                }
-                conversationToClear = nil
-            }
-            Button("Cancel", role: .cancel) { conversationToClear = nil }
-        } message: {
-            Text("Are you sure you want to clear all message history for this contact?")
+        .sheet(isPresented: Binding(get: { conversationToClear != nil }, set: { if !$0 { conversationToClear = nil } })) {
+            ConfirmationDialog(message: "Clear all messages in this conversation?", onCancel: { conversationToClear = nil }, onConfirm: {
+                if let uuid = conversationToClear { viewModel.clearMessages(uuid: uuid) }; conversationToClear = nil
+            })
         }
-        .alert(
-            "Delete Friend?",
-            isPresented: Binding(
-                get: { conversationToDelete != nil },
-                set: { if !$0 { conversationToDelete = nil } }
-            )
-        ) {
-            Button("Delete", role: .destructive) {
-                if let uuid = conversationToDelete {
-                    viewModel.deleteConversation(uuid: uuid)
-                    if selectedConversationUuid == uuid {
-                        selectedConversationUuid = nil
-                    }
-                }
-                conversationToDelete = nil
-            }
-            Button("Cancel", role: .cancel) { conversationToDelete = nil }
-        } message: {
-            Text("This will delete the contact and all associated chat and media history.")
+        .sheet(isPresented: Binding(get: { conversationToDelete != nil }, set: { if !$0 { conversationToDelete = nil } })) {
+            ConfirmationDialog(message: "Delete this friend and clear history?", onCancel: { conversationToDelete = nil }, onConfirm: {
+                if let uuid = conversationToDelete { viewModel.deleteConversation(uuid: uuid); if selectedConversationUuid == uuid { selectedConversationUuid = nil } }; conversationToDelete = nil
+            })
+        }
+    }
+
+    private var statusText: String {
+        switch viewModel.syncState {
+        case .synced: return "Connected"
+        case .syncing: return "Syncing..."
+        case .disconnected: return "Disconnected"
         }
     }
 
     private var statusColor: Color {
         switch viewModel.syncState {
         case .synced:
-            return .green
+            return MsgATTheme.connectionDotColor
         case .syncing:
-            return .orange
+            return MsgATTheme.connectionDotColor
         case .disconnected:
             return .red
         }
+    }
+}
+
+private struct CircularUnreadLayout: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let content = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        let diameter = max(20, max(content.width, content.height))
+        return CGSize(width: diameter, height: diameter)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        subviews.first?.place(at: CGPoint(x: bounds.midX, y: bounds.midY), anchor: .center, proposal: .unspecified)
     }
 }

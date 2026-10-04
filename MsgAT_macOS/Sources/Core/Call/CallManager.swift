@@ -2,6 +2,9 @@ import Foundation
 import Combine
 import WebRTC
 import AVFoundation
+#if canImport(MsgATNativeAudio)
+import MsgATNativeAudio
+#endif
 
 public enum CallState: String, Sendable {
     case idle = "IDLE"
@@ -25,11 +28,18 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     }
     @Published public var currentPeerAlias: String = "Unknown"
     @Published public var currentPeerAvatarPath: String? = nil
+    @Published public var isMinimized = false
     @Published public var isMuted: Bool = false
+    @Published public private(set) var isSpeakerOn = false
+    private let audioOutput = CallAudioOutput()
+    private let nativeAudioDevice = MacCallAudioDevice()
+    private var isSwitchingSpeaker = false
 
     private var isCaller: Bool = false
     private var pendingOffer: RTCSessionDescription? = nil
     private var pendingIceCandidates: [RTCIceCandidate] = []
+    private var pendingLocalIceCandidates: [RTCIceCandidate] = []
+    private var localDescriptionSignaled = false
 
     private var peerConnectionFactory: RTCPeerConnectionFactory?
     private var peerConnection: RTCPeerConnection?
@@ -48,10 +58,7 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
 
     private func initializeWebRTC() {
         RTCInitializeSSL()
-        peerConnectionFactory = RTCPeerConnectionFactory(
-            encoderFactory: RTCDefaultVideoEncoderFactory(),
-            decoderFactory: RTCDefaultVideoDecoderFactory()
-        )
+        peerConnectionFactory = MsgATCreateAudioFactory(nativeAudioDevice)
     }
 
     /**
@@ -97,6 +104,9 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
 
     private func createPeerConnection() {
         guard let factory = peerConnectionFactory else { return }
+        restoreAudioOutput()
+        pendingLocalIceCandidates.removeAll()
+        localDescriptionSignaled = false
 
         let config = RTCConfiguration()
         config.iceServers = buildIceServers()
@@ -105,6 +115,23 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
 
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         peerConnection = factory.peerConnection(with: config, constraints: constraints, delegate: self)
+        if let connection = peerConnection {
+            let identity = ObjectIdentifier(connection)
+            nativeAudioDevice.setFailureHandler { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == identity else { return }
+                    self.endCall()
+                }
+            }
+            nativeAudioDevice.setRouteChangeHandler { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == identity,
+                          !self.isSwitchingSpeaker, self.isSpeakerOn,
+                          (try? self.audioOutput.isSpeakerOverrideActive()) == false else { return }
+                    self.restoreAudioOutput()
+                }
+            }
+        }
 
         // Create audio source & track
         let audioConstraints = RTCMediaConstraints(
@@ -129,14 +156,9 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     public func startOutgoingCall(peerUuid: String) {
         guard callState == .idle else { return }
         guard let conv = try? MsgDao.shared.getConversationByUuid(peerUuid), !conv.peerPublicKey.isEmpty else {
-            return
+            Task { @MainActor in NoticeCenter.shared.show("Cannot call a non-friend.") }; return
         }
-
-        if #available(macOS 10.14, *) {
-            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            }
-        }
+        guard ensureMicrophonePermission(resume: { [weak self] in self?.startOutgoingCall(peerUuid: peerUuid) }) else { return }
 
         isCaller = true
         currentPeerUuid = peerUuid
@@ -150,23 +172,19 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         startTimeoutTimer()
         createPeerConnection()
 
+        guard let connection = peerConnection else { endCall(); return }
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-
-        peerConnection?.offer(for: constraints) { [weak self] sdp, error in
-            guard let self = self, let desc = sdp, error == nil else {
-                print("[MsgAT-Call] offer error: \(String(describing: error))")
-                self?.endCall()
-                return
-            }
-            let optimizedSdp = OpusCodecHelper.modifySdpForOpus(sdpDescription: desc.sdp, maxBitrateKbps: 32)
-            let finalOffer = RTCSessionDescription(type: desc.type, sdp: optimizedSdp)
-
-            self.peerConnection?.setLocalDescription(finalOffer) { [weak self] err in
-                if let err = err {
-                    print("[MsgAT-Call] setLocalDescription offer error: \(err)")
-                    self?.endCall()
-                } else {
-                    CallSignalingHandler.shared.sendOffer(offerSdp: finalOffer.sdp, peerUuid: peerUuid)
+        connection.offer(for: constraints) { [weak self] sdp, error in
+            self?.withCurrentConnection(connection) {
+                guard let self, let desc = sdp, error == nil else { self?.endCall(); return }
+                let finalOffer = RTCSessionDescription(type: desc.type,
+                    sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: desc.sdp, maxBitrateKbps: 32))
+                connection.setLocalDescription(finalOffer) { [weak self] error in
+                    self?.withCurrentConnection(connection) {
+                        guard let self else { return }
+                        if error != nil { self.endCall() }
+                        else { self.signalLocalDescription(finalOffer, peerUuid: peerUuid, isOffer: true) }
+                    }
                 }
             }
         }
@@ -201,62 +219,76 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         guard callState == .incomingRinging, let peerUuid = currentPeerUuid, let rawOffer = pendingOffer else { return }
         startTimeoutTimer()
 
-        if #available(macOS 10.14, *) {
-            if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
-                AVCaptureDevice.requestAccess(for: .audio) { _ in }
-            }
-        }
+        guard ensureMicrophonePermission(resume: { [weak self] in
+            guard self?.currentPeerUuid == peerUuid else { return }; self?.acceptCall()
+        }) else { return }
 
         NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
         callState = .connecting
 
         createPeerConnection()
-
-        let optimizedOfferSdp = OpusCodecHelper.modifySdpForOpus(sdpDescription: rawOffer.sdp, maxBitrateKbps: 32)
-        let offer = RTCSessionDescription(type: rawOffer.type, sdp: optimizedOfferSdp)
-
-        peerConnection?.setRemoteDescription(offer) { [weak self] error in
-            guard let self = self else { return }
-            if let error = error {
-                print("[MsgAT-Call] setRemoteDescription offer error: \(error)")
-                self.endCall()
-                return
-            }
-
-            for candidate in self.pendingIceCandidates {
-                self.peerConnection?.add(candidate) { err in
-                    if let err = err {
-                        print("[MsgAT-Call] Failed to add pending candidate: \(err)")
-                    }
-                }
-            }
-            self.pendingIceCandidates.removeAll()
-
-            let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
-
-            self.peerConnection?.answer(for: constraints) { [weak self] answerDesc, err in
-                guard let self = self, let origAnswer = answerDesc, err == nil else {
-                    print("[MsgAT-Call] answer creation error: \(String(describing: err))")
-                    self?.endCall()
-                    return
-                }
-                let optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(sdpDescription: origAnswer.sdp, maxBitrateKbps: 32)
-                let finalAnswer = RTCSessionDescription(type: origAnswer.type, sdp: optimizedAnswerSdp)
-
-                self.peerConnection?.setLocalDescription(finalAnswer) { [weak self] setErr in
-                    guard let self = self else { return }
-                    if let setErr = setErr {
-                        print("[MsgAT-Call] setLocalDescription answer error: \(setErr)")
-                        self.endCall()
-                    } else {
-                        CallSignalingHandler.shared.sendAnswer(answerSdp: finalAnswer.sdp, peerUuid: peerUuid)
+        guard let connection = peerConnection else { endCall(); return }
+        let offer = RTCSessionDescription(type: rawOffer.type,
+            sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: rawOffer.sdp, maxBitrateKbps: 32))
+        connection.setRemoteDescription(offer) { [weak self] error in
+            self?.withCurrentConnection(connection) {
+                guard let self else { return }
+                guard error == nil else { self.endCall(); return }
+                self.flushPendingCandidates(connection)
+                let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
+                connection.answer(for: constraints) { [weak self] answer, error in
+                    self?.withCurrentConnection(connection) {
+                        guard let self, let answer, error == nil else { self?.endCall(); return }
+                        let finalAnswer = RTCSessionDescription(type: answer.type,
+                            sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: answer.sdp, maxBitrateKbps: 32))
+                        connection.setLocalDescription(finalAnswer) { [weak self] error in
+                            self?.withCurrentConnection(connection) {
+                                guard let self else { return }
+                                if error != nil { self.endCall() }
+                                else { self.signalLocalDescription(finalAnswer, peerUuid: peerUuid, isOffer: false) }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
+    private func withCurrentConnection(_ connection: RTCPeerConnection, perform: @escaping () -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.peerConnection === connection,
+                  self.callState != .idle, self.callState != .ended else { return }
+            perform()
+        }
+    }
+
+    private func flushPendingCandidates(_ connection: RTCPeerConnection) {
+        let candidates = pendingIceCandidates
+        pendingIceCandidates.removeAll()
+        for candidate in candidates {
+            connection.add(candidate) { error in
+                if let error { print("[MsgAT-Call] Failed to add pending candidate: \(error)") }
+            }
+        }
+    }
+
+    private func signalLocalDescription(_ description: RTCSessionDescription, peerUuid: String, isOffer: Bool) {
+        if isOffer { CallSignalingHandler.shared.sendOffer(offerSdp: description.sdp, peerUuid: peerUuid) }
+        else { CallSignalingHandler.shared.sendAnswer(answerSdp: description.sdp, peerUuid: peerUuid) }
+        localDescriptionSignaled = true
+        let candidates = pendingLocalIceCandidates
+        pendingLocalIceCandidates.removeAll()
+        for candidate in candidates { sendLocalCandidate(candidate, peerUuid: peerUuid) }
+    }
+
+    private func sendLocalCandidate(_ candidate: RTCIceCandidate, peerUuid: String) {
+        let mid = candidate.sdpMid.flatMap { $0.isEmpty ? nil : $0 } ?? "0"
+        CallSignalingHandler.shared.sendIceCandidate(sdpMid: mid,
+            sdpMLineIndex: Int(candidate.sdpMLineIndex), sdp: candidate.sdp, peerUuid: peerUuid)
+    }
+
     public func rejectCall() {
+        guard callState == .incomingRinging else { return }
         if let peerUuid = currentPeerUuid {
             NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
             CallSignalingHandler.shared.sendReject(peerUuid: peerUuid)
@@ -271,22 +303,15 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         let optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(sdpDescription: sdp, maxBitrateKbps: 32)
         let finalAnswer = RTCSessionDescription(type: .answer, sdp: optimizedAnswerSdp)
 
-        peerConnection?.setRemoteDescription(finalAnswer) { [weak self] error in
-            guard let self = self else { return }
-            if let error = error {
-                print("[MsgAT-Call] setRemoteDescription answer error: \(error)")
-                return
-            }
-            for candidate in self.pendingIceCandidates {
-                self.peerConnection?.add(candidate) { err in
-                    if let err = err {
-                        print("[MsgAT-Call] Failed to add pending candidate: \(err)")
-                    }
-                }
-            }
-            self.pendingIceCandidates.removeAll()
-        }
+        guard let connection = peerConnection else { endCall(); return }
         callState = .connecting
+        connection.setRemoteDescription(finalAnswer) { [weak self] error in
+            self?.withCurrentConnection(connection) {
+                guard let self else { return }
+                if error != nil { self.endCall() }
+                else { self.flushPendingCandidates(connection) }
+            }
+        }
     }
 
     public func handleRemoteSync(duration: Int64) {
@@ -297,6 +322,7 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     }
 
     public func handleRemoteIce(sdpMid: String, sdpMLineIndex: Int, sdp: String) {
+        guard callState != .idle, callState != .ended, (0...255).contains(sdpMLineIndex) else { return }
         let candidate = RTCIceCandidate(sdp: sdp, sdpMLineIndex: Int32(sdpMLineIndex), sdpMid: sdpMid)
         if peerConnection?.remoteDescription == nil {
             if pendingIceCandidates.count < 256 { pendingIceCandidates.append(candidate) }
@@ -352,6 +378,40 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         localAudioTrack?.isEnabled = !isMuted
     }
 
+    public func toggleSpeaker() {
+        guard !isSwitchingSpeaker,
+              callState == .outgoingRinging || callState == .connecting || callState == .connected else { return }
+        let requested = !isSpeakerOn
+        let connectionID = peerConnection.map(ObjectIdentifier.init)
+        do {
+            if isSpeakerOn { try audioOutput.restore() }
+            else { try audioOutput.enableSpeaker() }
+            isSwitchingSpeaker = true
+            nativeAudioDevice.refreshOutputRoute { [weak self] success in
+                DispatchQueue.main.async {
+                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == connectionID,
+                          self.callState != .idle, self.callState != .ended else { return }
+                    self.isSwitchingSpeaker = false
+                    if success {
+                        self.isSpeakerOn = requested && (try? self.audioOutput.isSpeakerOverrideActive()) == true
+                        if requested && !self.isSpeakerOn { self.restoreAudioOutput() }
+                    } else { self.endCall() }
+                }
+            }
+        } catch {
+            print("[MsgAT-Call] Audio output switch failed: \(error.localizedDescription)")
+        }
+    }
+
+    public func restoreAudioOutput() {
+        do {
+            try audioOutput.restore()
+            isSpeakerOn = false
+        } catch {
+            print("[MsgAT-Call] Audio output restoration failed: \(error.localizedDescription)")
+        }
+    }
+
     private func saveCallRecord(rejected: Bool = false, busy: Bool = false, durationOverride: Int64? = nil) {
         guard isCaller, let peerUuid = currentPeerUuid else { return }
 
@@ -373,6 +433,7 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
 
     private func resetState() {
         callState = .ended
+        isSwitchingSpeaker = false
         timerTask?.cancel()
         timerTask = nil
         timeoutTask?.cancel()
@@ -388,6 +449,10 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         localAudioSource = nil
         pendingOffer = nil
         pendingIceCandidates.removeAll()
+        pendingLocalIceCandidates.removeAll()
+        localDescriptionSignaled = false
+
+        restoreAudioOutput()
 
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -399,6 +464,7 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                 self.currentPeerAlias = "Unknown"
                 self.currentPeerAvatarPath = nil
                 self.isMuted = false
+                self.isMinimized = false
             }
         }
     }
@@ -411,11 +477,12 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         // Zero means "not measured yet". Never fabricate a plausible latency.
         rttMs = 0
 
-        let startTime = Date()
+        let startTime = ProcessInfo.processInfo.systemUptime
         timerTask = Task {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 500_000_000)
-                let elapsed = Int64(Date().timeIntervalSince(startTime))
+                guard !Task.isCancelled else { return }
+                let elapsed = Int64(max(0, ProcessInfo.processInfo.systemUptime - startTime))
                 await MainActor.run {
                     if self.callState == .connected {
                         self.callDurationSeconds = elapsed
@@ -427,29 +494,29 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         rttTask = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 2_000_000_000)
-                guard let self = self, let pc = self.peerConnection else { break }
+                guard !Task.isCancelled, let self = self, let pc = self.peerConnection else { break }
 
                 let report = await pc.statistics()
                 var minRtt: Int64 = Int64.max
 
                 for (_, stat) in report.statistics {
+                    let seconds: Double?
                     if stat.type == "candidate-pair" {
-                        if let rttNum = (stat.values["currentRoundTripTime"] as? NSNumber) ?? (stat.values["roundTripTime"] as? NSNumber) {
-                            let ms = Int64(rttNum.doubleValue * 1000.0)
-                            if ms > 0 && ms < minRtt { minRtt = ms }
-                        }
+                        guard stat.values["state"] as? String == "succeeded" else { continue }
+                        seconds = ((stat.values["currentRoundTripTime"] as? NSNumber) ?? (stat.values["roundTripTime"] as? NSNumber))?.doubleValue
                     } else if stat.type == "remote-inbound-rtp" {
-                        if let rttNum = stat.values["roundTripTime"] as? NSNumber {
-                            let ms = Int64(rttNum.doubleValue * 1000.0)
-                            if ms > 0 && ms < minRtt { minRtt = ms }
-                        }
-                    }
+                        seconds = (stat.values["roundTripTime"] as? NSNumber)?.doubleValue
+                    } else { continue }
+                    guard let seconds, seconds.isFinite, seconds > 0,
+                          seconds < Double(Int64.max) / 1000 else { continue }
+                    let ms = Int64(seconds * 1000)
+                    if ms > 0 && ms < minRtt { minRtt = ms }
                 }
 
                 if minRtt != Int64.max {
                     let measuredRtt = minRtt
                     await MainActor.run {
-                        if self.callState == .connected {
+                        if self.callState == .connected && self.peerConnection === pc && !Task.isCancelled {
                             self.rttMs = measuredRtt
                         }
                     }
@@ -458,12 +525,30 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         }
     }
 
+    private func ensureMicrophonePermission(resume: @escaping () -> Void) -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized: return true
+        case .notDetermined:
+            AVCaptureDevice.requestAccess(for: .audio) { granted in
+                DispatchQueue.main.async {
+                    if granted { resume() }
+                    else { NoticeCenter.shared.show("Microphone permission is required for voice calls.") }
+                }
+            }
+        default: Task { @MainActor in NoticeCenter.shared.show("Microphone permission is required for voice calls.") }
+        }
+        return false
+    }
+
     private func startTimeoutTimer() {
         timeoutTask?.cancel()
         timeoutTask = Task {
             try? await Task.sleep(nanoseconds: 30 * 1_000_000_000)
             guard !Task.isCancelled else { return }
             await MainActor.run {
+                if self.callState == .incomingRinging || self.callState == .outgoingRinging || self.callState == .connecting {
+                    NoticeCenter.shared.show("Time out")
+                }
                 if self.callState == .incomingRinging {
                     self.rejectCall()
                 } else if self.callState == .outgoingRinging || self.callState == .connecting {
@@ -530,14 +615,10 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange newState: RTCIceGatheringState) {}
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didGenerate candidate: RTCIceCandidate) {
-        if let peerUuid = currentPeerUuid {
-            let mid = (candidate.sdpMid != nil && !candidate.sdpMid!.isEmpty) ? candidate.sdpMid! : "0"
-            CallSignalingHandler.shared.sendIceCandidate(
-                sdpMid: mid,
-                sdpMLineIndex: Int(candidate.sdpMLineIndex),
-                sdp: candidate.sdp,
-                peerUuid: peerUuid
-            )
+        withCurrentConnection(peerConnection) { [weak self] in
+            guard let self, let peerUuid = self.currentPeerUuid else { return }
+            if self.localDescriptionSignaled { self.sendLocalCandidate(candidate, peerUuid: peerUuid) }
+            else if self.pendingLocalIceCandidates.count < 256 { self.pendingLocalIceCandidates.append(candidate) }
         }
     }
 

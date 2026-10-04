@@ -9,6 +9,7 @@ public struct InAppMediaViewer: View {
     @State private var offset: CGSize = .zero
     @State private var settledScale: CGFloat = 1.0
     @State private var settledOffset: CGSize = .zero
+    @StateObject private var playback = MediaPlaybackModel()
 
     public init(message: ChatMessage, onDismiss: @escaping () -> Void) {
         self.message = message
@@ -28,21 +29,7 @@ public struct InAppMediaViewer: View {
     }
 
     public var body: some View {
-        VStack(spacing: 0) {
-            HStack {
-                Spacer()
-                Button(action: onDismiss) {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 26))
-                        .foregroundColor(.white.opacity(0.8))
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("Close")
-                .keyboardShortcut(.cancelAction)
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-
+        ZStack {
             GeometryReader { geometry in
                 ZStack {
                     Color.black.onTapGesture(perform: onDismiss)
@@ -76,14 +63,17 @@ public struct InAppMediaViewer: View {
                                         }
                                         .onEnded { _ in settledOffset = offset }
                                 )
+                                .simultaneousGesture(TapGesture().onEnded { _ in onDismiss() })
                         } else {
-                            Text("Failed to load image").foregroundColor(.white)
+                            Text("Corrupted Image").foregroundColor(.white)
                         }
                     } else if let url = mediaUrl {
-                        NativeMediaPlayer(url: url)
+                        NativeMediaPlayer(player: playback.player)
+                            .onAppear { playback.open(url) }
+                            .onTapGesture(perform: onDismiss)
                             .frame(width: geometry.size.width, height: geometry.size.height)
                     } else {
-                        Text("Failed to load video").foregroundColor(.white)
+                        Text("Loading Video...").foregroundColor(.white)
                     }
                 }
                 .frame(width: geometry.size.width, height: geometry.size.height)
@@ -91,17 +81,28 @@ public struct InAppMediaViewer: View {
             }
         }
         .background(Color.black)
+        .overlay(alignment: .bottom) {
+            if !isImage, mediaUrl != nil {
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Button { playback.toggle() } label: {
+                            Image(systemName: playback.isPlaying ? "pause.fill" : "play.fill").font(.system(size: 24)).foregroundColor(.white).padding(8)
+                        }.buttonStyle(.plain).help(playback.isPlaying ? "Pause" : "Play")
+                        Text("\(playback.positionText) / \(playback.durationText)").font(.system(size: 12)).foregroundColor(.white)
+                        Spacer()
+                    }
+                    Slider(value: Binding(get: { playback.duration > 0 ? playback.position / playback.duration : 0 }, set: { playback.seek(to: $0 * playback.duration) }), in: 0...1)
+                        .tint(MsgATTheme.primaryColor).disabled(playback.duration <= 0)
+                }.padding(16).background(Color.black.opacity(0.6))
+            }
+        }
+        .onDisappear { playback.close() }
+        .onExitCommand(perform: onDismiss)
     }
 }
 
 private struct NativeMediaPlayer: NSViewRepresentable {
-    let url: URL
-
-    final class Coordinator {
-        var loadedURL: URL?
-    }
-
-    func makeCoordinator() -> Coordinator { Coordinator() }
+    let player: AVPlayer
 
     final class PlayerContainer: NSView {
         let playerView = AVPlayerView()
@@ -110,7 +111,7 @@ private struct NativeMediaPlayer: NSViewRepresentable {
             super.init(frame: frameRect)
             wantsLayer = true
             layer?.masksToBounds = true
-            playerView.controlsStyle = .inline
+            playerView.controlsStyle = .none
             playerView.videoGravity = .resizeAspect
             playerView.translatesAutoresizingMaskIntoConstraints = false
             playerView.wantsLayer = true
@@ -135,19 +136,63 @@ private struct NativeMediaPlayer: NSViewRepresentable {
 
     func updateNSView(_ container: PlayerContainer, context: Context) {
         let view = container.playerView
-        guard context.coordinator.loadedURL != url else { return }
-        view.player?.pause()
-        view.player?.replaceCurrentItem(with: nil)
-        context.coordinator.loadedURL = url
-        view.player = AVPlayer(url: url)
-        view.player?.play()
+        if view.player !== player { view.player = player }
     }
 
-    static func dismantleNSView(_ container: PlayerContainer, coordinator: Coordinator) {
+    static func dismantleNSView(_ container: PlayerContainer, coordinator: ()) {
         let view = container.playerView
-        view.player?.pause()
-        view.player?.replaceCurrentItem(with: nil)
         view.player = nil
-        coordinator.loadedURL = nil
+    }
+}
+
+@MainActor private final class MediaPlaybackModel: ObservableObject {
+    let player = AVPlayer()
+    @Published var position: Double = 0
+    @Published var duration: Double = 0
+    @Published var isPlaying = true
+    private var observer: Any?
+    private var stateObserver: NSKeyValueObservation?
+    private var endObserver: NSObjectProtocol?
+    private var loadedURL: URL?
+    var positionText: String { format(position) }
+    var durationText: String { format(duration) }
+    private func format(_ seconds: Double) -> String { String(format: "%02d:%02d", Int(max(0, seconds)) / 60, Int(max(0, seconds)) % 60) }
+    func open(_ url: URL) {
+        guard loadedURL != url else { return }
+        close(); loadedURL = url
+        let item = AVPlayerItem(url: url); player.replaceCurrentItem(with: item)
+        stateObserver = item.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
+            DispatchQueue.main.async {
+                guard let self, self.player.currentItem === item else { return }
+                if item.status == .readyToPlay { let value = item.duration.seconds; self.duration = value.isFinite ? max(0, value) : 0 }
+                if item.status == .failed { NoticeCenter.shared.show("Failed to load video") }
+            }
+        }
+        observer = player.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.1, preferredTimescale: 600), queue: .main) { [weak self] time in
+            Task { @MainActor [weak self] in
+                guard let self, self.loadedURL == url else { return }
+                if time.seconds.isFinite { self.position = max(0, time.seconds) }
+                self.isPlaying = self.player.rate != 0
+            }
+        }
+        endObserver = NotificationCenter.default.addObserver(forName: .AVPlayerItemDidPlayToEndTime, object: item, queue: .main) { [weak self] _ in
+            Task { @MainActor [weak self] in
+                guard let self, self.loadedURL == url else { return }
+                self.isPlaying = false
+                self.position = self.duration
+            }
+        }
+        isPlaying = true; player.play()
+    }
+    func toggle() {
+        if isPlaying { player.pause(); isPlaying = false }
+        else { if position >= duration { seek(to: 0) }; player.play(); isPlaying = true }
+    }
+    func seek(to seconds: Double) { position = max(0, seconds); player.seek(to: CMTime(seconds: position, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) }
+    func close() {
+        if let observer { player.removeTimeObserver(observer); self.observer = nil }
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver); self.endObserver = nil }
+        stateObserver?.invalidate(); stateObserver = nil
+        player.pause(); player.replaceCurrentItem(with: nil); loadedURL = nil; position = 0; duration = 0; isPlaying = false
     }
 }

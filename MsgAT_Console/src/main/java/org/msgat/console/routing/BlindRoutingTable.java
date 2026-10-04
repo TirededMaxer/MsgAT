@@ -14,6 +14,8 @@ public class BlindRoutingTable {
 
     private final ConcurrentHashMap<String, Channel> activeChannels = new ConcurrentHashMap<>();
 
+    private final ConcurrentHashMap<String, Channel> replayingChannels = new ConcurrentHashMap<>();
+
     public BlindRoutingTable() {
     }
 
@@ -21,7 +23,7 @@ public class BlindRoutingTable {
     public synchronized void storeOfflineMessage(String mailboxHash, GhostPacket packet) {
         try (var conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
              var existing = conn.prepareStatement("SELECT packet_data FROM offline_messages WHERE target_mailbox = ? AND (packet_hash = ? OR packet_hash IS NULL)");
-             var size = conn.prepareStatement("SELECT COALESCE(SUM(length(packet_data)), 0) FROM offline_messages WHERE target_mailbox = ?");
+             var size = conn.prepareStatement("SELECT stored_bytes FROM offline_mailbox_usage WHERE target_mailbox = ?");
              var insert = conn.prepareStatement("INSERT INTO offline_messages(target_mailbox, packet_data, packet_hash) VALUES (?, ?, ?)")) {
             byte[] serialized = packet.serialize();
             String hash = packetHash(packet);
@@ -56,18 +58,23 @@ public class BlindRoutingTable {
     }
 
     // Retain packets until the recipient confirms them; reconnects may replay them.
-    public synchronized List<GhostPacket> retrieveOfflineMessages(String mailboxHash) {
+    public record OfflineBatch(List<GhostPacket> packets, long lastId) { }
+
+    public synchronized OfflineBatch retrieveOfflineBatch(String mailboxHash, long afterId) {
         List<GhostPacket> result = new ArrayList<>();
+        long lastId = afterId;
         try (var conn = org.msgat.console.db.DatabaseManager.getOfflineConnection();
-             var select = conn.prepareStatement("SELECT id, packet_data, packet_hash FROM offline_messages WHERE target_mailbox = ? ORDER BY id");
+             var select = conn.prepareStatement("SELECT id, packet_data, packet_hash FROM offline_messages WHERE target_mailbox = ? AND id > ? ORDER BY id LIMIT 8");
              var migrate = conn.prepareStatement("UPDATE offline_messages SET packet_hash = ? WHERE id = ?")) {
             select.setString(1, mailboxHash);
+            select.setLong(2, afterId);
             try (var rs = select.executeQuery()) {
                 while (rs.next()) {
                     byte[] bytes = org.msgat.console.core.CryptoUtils.decryptField(rs.getBytes("packet_data"));
                     if (bytes == null) throw new IllegalStateException("Stored packet cannot be decrypted");
                     GhostPacket packet = GhostPacket.deserialize(bytes);
                     result.add(packet);
+                    lastId = rs.getLong("id");
                     if (rs.getString("packet_hash") == null) {
                         migrate.setString(1, packetHash(packet));
                         migrate.setLong(2, rs.getLong("id"));
@@ -79,7 +86,7 @@ public class BlindRoutingTable {
         } catch (java.sql.SQLException e) {
             throw new IllegalStateException("Unable to retrieve packets", e);
         }
-        return result;
+        return new OfflineBatch(result, lastId);
     }
 
     // ACK payload is one SHA-256 digest of the encrypted payload. Never trust its target mailbox.
@@ -101,6 +108,14 @@ public class BlindRoutingTable {
         if (previous != null && previous != channel) previous.close();
     }
 
+    public void beginReplay(String mailbox) {
+        replayingChannels.put(mailbox, activeChannels.get(mailbox));
+    }
+
+    public boolean isReplaying(String mailbox) { return replayingChannels.containsKey(mailbox); }
+
+    public void finishReplay(String mailbox) { replayingChannels.remove(mailbox); }
+
     // Looks up and returns the active Netty channel linked to the given mailbox ID.
     public Channel getChannel(String mailboxHashHex) {
         return activeChannels.get(mailboxHashHex);
@@ -109,11 +124,13 @@ public class BlindRoutingTable {
     // Unregisters and removes a specific mailbox ID mapping from the active channels registry.
     public void remove(String mailboxHashHex, Channel channel) {
         activeChannels.remove(mailboxHashHex, channel);
+        replayingChannels.remove(mailboxHashHex, channel);
     }
 
     public void closeConnections() {
         activeChannels.values().forEach(Channel::close);
         activeChannels.clear();
+        replayingChannels.clear();
     }
 
     // Emergency wipe is distinct from an ordinary server restart.

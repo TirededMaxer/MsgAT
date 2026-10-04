@@ -311,24 +311,29 @@ class GhostClientHandler(
                 val avatarData = obj.optString("avatarData", "")
 
                 if (!uuid.matches(Regex("[a-f0-9]{64}"))) return@enqueue
-                var finalAvatarPath = ""
+                val req = msgDao.getFriendRequestByUuid(uuid)
+                val conv = msgDao.getConversationByUuid(uuid)
+                if (req == null && conv == null) return@enqueue
+                var finalAvatarPath = conv?.avatarPath ?: req?.avatarPath ?: ""
                 if (avatarData.isNotEmpty()) {
                     try {
                         val bytes = Base64.decode(avatarData, Base64.DEFAULT)
-                        val file = java.io.File(org.msgat.MsgATApp.instance.cacheDir, "avatar_${uuid}.jpg")
-                        file.writeBytes(bytes)
+                        val directory = java.io.File(org.msgat.MsgATApp.instance.filesDir, "media").apply { mkdirs() }
+                        val file = java.io.File(directory, "avatar_${uuid}.jpg")
+                        val atomic = android.util.AtomicFile(file)
+                        val stream = atomic.startWrite()
+                        try { stream.write(bytes); atomic.finishWrite(stream) }
+                        catch (error: Exception) { atomic.failWrite(stream); throw error }
                         finalAvatarPath = android.net.Uri.fromFile(file).toString()
                     } catch (e: Exception) {
                         Log.e("MsgAT", "Failed to decode avatarData", e)
                     }
-                }
+                } else { finalAvatarPath = "" }
 
-                val req = msgDao.getFriendRequestByUuid(uuid)
                 if (req != null) {
                     msgDao.insertFriendRequest(req.copy(nickname = nickname, avatarPath = finalAvatarPath))
                 }
 
-                val conv = msgDao.getConversationByUuid(uuid)
                 if (conv != null) {
                     msgDao.insertConversation(conv.copy(alias = nickname, avatarPath = finalAvatarPath))
                 }

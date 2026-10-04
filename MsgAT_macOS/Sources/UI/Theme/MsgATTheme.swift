@@ -1,6 +1,8 @@
 import SwiftUI
 
 public enum MsgATTheme {
+    public static let connectionDotColor = Color(red: 29/255.0, green: 150/255.0, blue: 86/255.0)
+    public static let connectionColor = Color(red: 22/255.0, green: 131/255.0, blue: 74/255.0)
     public static let primaryColor = Color(red: 16/255.0, green: 185/255.0, blue: 129/255.0) // 0xFF10B981
     public static let backgroundDark = Color(red: 18/255.0, green: 18/255.0, blue: 18/255.0)
     public static let surfaceDark = Color(red: 30/255.0, green: 30/255.0, blue: 36/255.0)

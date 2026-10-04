@@ -22,10 +22,18 @@ let package = Package(
             name: "CBlake2",
             publicHeadersPath: "include"
         ),
+        .target(
+            name: "MsgATNativeAudio",
+            dependencies: [.product(name: "WebRTC", package: "WebRTC")],
+            path: "NativeAudio",
+            exclude: ["LICENSE", "PATENTS"],
+            publicHeadersPath: "include"
+        ),
         .executableTarget(
             name: "MsgAT",
             dependencies: [
                 "CBlake2",
+                "MsgATNativeAudio",
                 .product(name: "SQLCipher", package: "SQLCipher.swift"),
                 .product(name: "WebRTC", package: "WebRTC")
             ],
@@ -36,6 +44,7 @@ let package = Package(
                 "App/Info.plist",
                 "App/MsgAT.entitlements"
             ],
+            resources: [.copy("App/ThirdParty")],
             cSettings: [.define("SQLITE_HAS_CODEC")],
             swiftSettings: [.define("SQLITE_HAS_CODEC")]
         ),

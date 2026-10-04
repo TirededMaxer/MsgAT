@@ -39,7 +39,7 @@ fun SessionListScreen(
     onDeleteConversation: (String) -> Unit,
     onClearMessages: (String) -> Unit,
     onResetIdentity: () -> Unit,
-    onSaveIdentity: (String, String) -> Unit,
+    onSaveIdentity: (String, String, () -> Unit) -> Unit,
     initialIp: String,
     initialPort: String,
     initialUuid: String,
@@ -122,8 +122,7 @@ fun SessionListScreen(
         org.msgat.ui.components.IdentitySetupDialog(
             onDismiss = {},
             onConfirm = { n, a ->
-                onSaveIdentity(n, a?.toString() ?: "")
-                showIdentityDialog = false
+                onSaveIdentity(n, a?.toString() ?: "") { showIdentityDialog = false }
             }
         )
     }

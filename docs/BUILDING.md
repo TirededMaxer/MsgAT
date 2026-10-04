@@ -2,7 +2,7 @@
 
 以下命令均从仓库根目录开始，使用各组件固定的依赖声明。签名凭据由维护者在本地提供，不进入 Git。
 
-## Android 1.5
+## Android 1.6
 
 需要 Java 21、Android SDK Platform 36，以及支持项目 Gradle/Android 插件版本的 IntelliJ IDEA 或 Android Studio。
 
@@ -15,7 +15,7 @@ cd MsgAT
 
 可选验证：`./gradlew testDebugUnitTest lintDebug`。
 
-## Windows 1.0
+## Windows 1.1
 
 需要 .NET 9 SDK。开发和运行使用 Windows；可在其他系统交叉构建。
 
@@ -29,7 +29,7 @@ dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --se
 
 可选验证：`dotnet test MsgAT.Windows.slnx -c Release`。
 
-## macOS 1.0
+## macOS 1.1
 
 需要 macOS、Xcode 和网络访问以解析 Swift Package 依赖。
 
@@ -55,10 +55,10 @@ mvn package
 java -jar target/MsgAT_Console-1.1-obfuscated.jar
 ```
 
-发布附件将该混淆 JAR 重命名为 `MsgAT-Console-1.1.jar`。首次构建需下载依赖；已有完整本地依赖缓存时可添加 `-o` 离线构建。构建会保留 JVM 所需的 StackMapTable。
+发布附件将该混淆 JAR 重命名为 `MsgAT-Console-1.1.jar`。监听端口位于 JAR 同目录的 `server-config.json`，缺失时自动生成默认配置；示例见 `MsgAT_Console/server-config.example.json`。首次构建需下载依赖；已有完整本地依赖缓存时可添加 `-o` 离线构建。构建会保留 JVM 所需的 StackMapTable。
 
 ## 缓存与发布
 
 保留 `.gradle/`、`.kotlin/`、`.build/`、SwiftPM/Xcode 缓存、Maven/NuGet 缓存及当前增量构建目录可减少重新构建耗时。这些目录由 `.gitignore` 排除。临时日志、诊断转储、Python 缓存和旧发布副本可清理，勿删除真实应用数据或签名密钥。
 
-本仓库四个组件独立版本化。本次集成发布使用 `release-2026-09-15` 标签，对应 Android 1.5、Windows/macOS 1.0、服务端 1.1。Release 附件应与该标签的源码构建一致，并提供 SHA-256 校验清单。
+本仓库四个组件独立版本化。已发布的 `release-2026-09-15` 标签对应 Android 1.5、Windows/macOS 1.0、服务端 1.1。当前源码版本为 Android 1.6、Windows/macOS 1.1、服务端 1.1；新版本安装包尚未新增到 Release。Release 附件应与最终发布标签的源码构建一致，并提供 SHA-256 校验清单。

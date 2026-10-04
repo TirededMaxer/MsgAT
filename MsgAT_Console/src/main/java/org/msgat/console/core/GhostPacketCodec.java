@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.charset.StandardCharsets;
-import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -20,11 +19,7 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
 
     // Determines the appropriate padded boundary size for packet obfuscation.
     private int getBoundarySize(int actualSize) {
-        int[] boundaries = {4096};
-        for (int b : boundaries) {
-            if (actualSize <= b) return b;
-        }
-        return actualSize;
+        return Math.max(4096, actualSize);
     }
 
     // Encodes a GhostPacket into a ByteBuf, applying random padding for fixed-size transmission.
@@ -48,14 +43,15 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
         out.writeByte(msg.getType());
 
         byte[] mailboxBytes = msg.getTargetMailboxId() != null ?
-                msg.getTargetMailboxId().getBytes(StandardCharsets.UTF_8) : new byte[64];
+                msg.getTargetMailboxId().getBytes(StandardCharsets.UTF_8) : new byte[0];
         if (mailboxBytes.length > 64) {
             ctx.close();
             throw new EncoderException("Mailbox ID exceeds the 64-byte protocol field");
         }
-        out.writeBytes(Arrays.copyOf(mailboxBytes, 64));
+        out.writeBytes(mailboxBytes);
+        out.writeZero(64 - mailboxBytes.length);
 
-        out.writeBytes(msg.getNonceOrIv() != null ? msg.getNonceOrIv() : new byte[16]);
+        if (msg.getNonceOrIv() != null) out.writeBytes(msg.getNonceOrIv()); else out.writeZero(16);
         out.writeInt(payloadLen);
 
         if (msg.getEncryptedData() != null) {
@@ -69,11 +65,9 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
         }
 
         int paddingSize = paddedSize - actualSize;
-        if (paddingSize > 0) {
-            byte[] padding = new byte[paddingSize];
-            ThreadLocalRandom.current().nextBytes(padding);
-            out.writeBytes(padding);
-        }
+        ThreadLocalRandom random = ThreadLocalRandom.current();
+        while (paddingSize >= Long.BYTES) { out.writeLong(random.nextLong()); paddingSize -= Long.BYTES; }
+        while (paddingSize-- > 0) out.writeByte(random.nextInt(256));
     }
 
     // Decodes incoming bytes from a ByteBuf into a GhostPacket object and skips trailing random padding.

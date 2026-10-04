@@ -8,17 +8,18 @@
         WindowStartupLocation="CenterScreen" AllowDrop="True"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
         Drop="Window_Drop" DragOver="Window_DragOver">
-    <Grid Background="{StaticResource WindowBrush}">
+    <Grid x:Name="LayoutGrid" Background="{StaticResource WindowBrush}">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="300" />
-            <ColumnDefinition Width="*" />
+            <ColumnDefinition x:Name="SidebarColumn" Width="300" MinWidth="260" MaxWidth="400" />
+            <ColumnDefinition Width="5" />
+            <ColumnDefinition Width="*" MinWidth="450" />
         </Grid.ColumnDefinitions>
-
         <Border Grid.Column="0" Background="{StaticResource PanelBrush}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
             <Grid>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="64" />
+                    <RowDefinition Height="48" />
+                    <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                 </Grid.RowDefinitions>
 
@@ -28,7 +29,7 @@
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="40" />
                     </Grid.ColumnDefinitions>
-                    <TextBlock Text="MsgAT" FontSize="22" VerticalAlignment="Center" />
+                    <TextBlock Text="MsgAT" FontSize="18" VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
                         <Grid Width="12" Height="12" Margin="0,0,6,0">
                             <Ellipse Width="10" Height="10">
@@ -37,7 +38,7 @@
                                         <Setter Property="Fill" Value="Red" />
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding SyncText}" Value="Connected">
-                                                <Setter Property="Fill" Value="Lime" />
+                                                <Setter Property="Fill" Value="{StaticResource ConnectionDotBrush}" />
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding SyncText}" Value="Syncing...">
                                                 <Setter Property="Visibility" Value="Collapsed" />
@@ -46,7 +47,7 @@
                                     </Style>
                                 </Ellipse.Style>
                             </Ellipse>
-                            <Path Data="M 6,1 A 5,5 0 1 1 1,6" Stroke="Lime" StrokeThickness="2" RenderTransformOrigin="0.5,0.5">
+                            <Path Data="M 6,1 A 5,5 0 1 1 1,6" Stroke="{StaticResource ConnectionDotBrush}" StrokeThickness="2" RenderTransformOrigin="0.5,0.5">
                                 <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
                                 <Path.Style>
                                     <Style TargetType="Path">
@@ -74,8 +75,8 @@
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Foreground" Value="Red" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Connected"><Setter Property="Foreground" Value="Lime" /></DataTrigger>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Syncing..."><Setter Property="Foreground" Value="Lime" /></DataTrigger>
+                                        <DataTrigger Binding="{Binding SyncText}" Value="Connected"><Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" /></DataTrigger>
+                                        <DataTrigger Binding="{Binding SyncText}" Value="Syncing..."><Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" /></DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
@@ -86,7 +87,19 @@
                     </Button>
                 </Grid>
 
-                <ListBox x:Name="ConversationList" Grid.Row="1" ItemsSource="{Binding Conversations}"
+                <TextBlock Grid.Row="1" Text="Friends" FontSize="14" Foreground="#FF808080" Margin="16,8">
+                    <TextBlock.Style>
+                        <Style TargetType="TextBlock">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding Conversations.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </TextBlock.Style>
+                </TextBlock>
+
+                <ListBox x:Name="ConversationList" Grid.Row="2" ItemsSource="{Binding Conversations}"
                          SelectedItem="{Binding SelectedConversation}" Background="Transparent"
                          BorderThickness="0" HorizontalContentAlignment="Stretch"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled">
@@ -97,32 +110,32 @@
                     </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Grid Height="50">
+                            <Grid MinHeight="48">
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="48" />
                                     <ColumnDefinition />
                                     <ColumnDefinition Width="Auto" />
                                 </Grid.ColumnDefinitions>
-                                <Border Width="40" Height="40" CornerRadius="20" Background="#FF314050"
+                                <Border Width="48" Height="48" CornerRadius="8" Background="#FF333333"
                                         HorizontalAlignment="Left" VerticalAlignment="Center">
                                     <Grid>
                                         <TextBlock Text="{Binding Initial}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" FontWeight="SemiBold" FontSize="14" />
-                                        <Ellipse Fill="{Binding AvatarPath, Converter={StaticResource AvatarConverter}}" />
+                                                   VerticalAlignment="Center" FontWeight="Bold" FontSize="20" />
+                                        <Rectangle RadiusX="8" RadiusY="8" Fill="{Binding AvatarPath, Converter={StaticResource AvatarConverter}}" />
                                     </Grid>
                                 </Border>
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="9,0,7,0">
-                                    <TextBlock Text="{Binding Alias}" FontSize="14" FontWeight="SemiBold"
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <TextBlock Text="{Binding Alias}" FontSize="18" FontWeight="Medium"
                                                TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding Uuid}" FontSize="10" Foreground="{StaticResource MutedBrush}"
-                                               Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding UuidPreview}" FontSize="13" Foreground="{StaticResource MutedBrush}"
+                                               Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
                                 </StackPanel>
-                                <Border x:Name="Unread" Grid.Column="2" Background="#FFFF5C69" CornerRadius="9"
-                                        MinWidth="18" Height="18" Padding="5,0" VerticalAlignment="Center">
+                                <infra:CircularBadge x:Name="Unread" Grid.Column="2" Background="#FFF22626"
+                                                     Padding="6,2" Margin="12,0,0,0" VerticalAlignment="Center">
                                     <TextBlock Text="{Binding UnreadCount}" Foreground="White"
                                                HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               FontSize="10" FontWeight="SemiBold" />
-                                </Border>
+                                               FontSize="11" FontWeight="SemiBold" />
+                                </infra:CircularBadge>
                             </Grid>
                             <DataTemplate.Triggers>
                                 <DataTrigger Binding="{Binding UnreadCount}" Value="0">
@@ -135,30 +148,39 @@
             </Grid>
         </Border>
 
-        <Grid Grid.Column="1" Background="{StaticResource WindowBrush}">
+        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+                      ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True"
+                      Background="{StaticResource BorderBrush}" AutomationProperties.Name="Resize sidebar" />
+        <Grid Grid.Column="2" Background="{StaticResource WindowBrush}">
+            <Grid.Style>
+                <Style TargetType="Grid">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <DataTrigger Binding="{Binding HasConversation}" Value="True">
+                            <Setter Property="Visibility" Value="Visible" />
+                        </DataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Grid.Style>
             <Grid.RowDefinitions>
-                <RowDefinition Height="64" />
+                <RowDefinition Height="48" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0" Background="{StaticResource PanelBrush}"
                     BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-                <Grid Margin="20,0,14,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <StackPanel VerticalAlignment="Center">
-                        <TextBlock Text="{Binding SelectedConversation.Alias}" FontSize="16" FontWeight="SemiBold" />
-                        <TextBlock Text="{Binding SelectedConversation.Uuid}" Foreground="{StaticResource MutedBrush}"
-                                   FontSize="10" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
-                    </StackPanel>
+                <Grid Margin="16,0" HorizontalAlignment="Left">
+                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
+                    <TextBlock Text="{Binding SelectedConversation.Alias}" FontSize="16" FontWeight="Medium"
+                               VerticalAlignment="Center" Margin="0,0,6,0" TextTrimming="CharacterEllipsis" />
+                    <ContentControl Grid.Column="1" Content="{Binding SyncText}" ContentTemplate="{StaticResource ChatConnectionIndicatorTemplate}"
+                                    VerticalAlignment="Center" />
                 </Grid>
             </Border>
 
             <ListBox x:Name="MessageList" Grid.Row="1" ItemsSource="{Binding Messages}"
-                     Background="{StaticResource WindowBrush}" BorderThickness="0" Padding="20,14"
+                     Background="{StaticResource WindowBrush}" BorderThickness="0" Padding="16,16"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                      VirtualizingPanel.ScrollUnit="Pixel"
                      PreviewMouseWheel="MessageList_PreviewMouseWheel"
@@ -185,44 +207,89 @@
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <Grid Margin="0,4">
-                            <Border x:Name="Bubble" HorizontalAlignment="Left" MaxWidth="540"
-                                    Padding="12,9" CornerRadius="12" Background="{StaticResource SurfaceBrush}">
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border x:Name="PeerAvatar" Width="40" Height="40" CornerRadius="12"
+                                    Background="#FF444444" Margin="0,0,8,0" VerticalAlignment="Top">
+                                <Grid>
+                                    <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Rectangle RadiusX="12" RadiusY="12"
+                                               Fill="{Binding DataContext.SelectedConversation.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
+                                </Grid>
+                            </Border>
+                            <Border x:Name="Bubble" Grid.Column="1" HorizontalAlignment="Left" MaxWidth="250">
                                 <StackPanel>
-                                    <Border x:Name="ReplyPreview" BorderBrush="#9954D6B0"
-                                            BorderThickness="2,0,0,0" Padding="8,2" Margin="0,0,0,6" MouseLeftButtonDown="ReplyPreview_Click" Cursor="Hand">
-                                        <TextBlock Text="{Binding ReplyPreview}" Foreground="#FFC7D0DB"
+                                    <Border x:Name="TextBubble" HorizontalAlignment="Left" Padding="12,9" CornerRadius="12" Background="{StaticResource SurfaceBrush}">
+                                        <DockPanel>
+                                            <Button x:Name="ReEditButton" DockPanel.Dock="Right" Visibility="Collapsed"
+                                                    Content="Re-edit" Foreground="{StaticResource AccentBrush}" FontSize="12" FontWeight="Bold"
+                                                    Background="Transparent" BorderThickness="0" Padding="8,0,0,0" MinHeight="0"
+                                                    Click="ReEdit_Click" />
+                                            <infra:MessageTextBlock x:Name="MessageContent" MessageText="{Binding DisplayContent}"
+                                                       TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
+                                        </DockPanel>
+                                    </Border>
+                                    <infra:AttachmentPreview x:Name="Attachment" Message="{Binding}" Visibility="Collapsed"
+                                                             HorizontalAlignment="Left" MouseLeftButtonUp="AttachmentPreview_Click" Cursor="Hand" />
+                                    <Border x:Name="ReplyPreview" Background="{StaticResource RaisedBrush}" CornerRadius="6"
+                                            Padding="8,2" Margin="0,2,0,0" MouseLeftButtonDown="ReplyPreview_Click" Cursor="Hand">
+                                        <TextBlock Text="{Binding ReplyPreview}" Foreground="#FFD0D0D0"
                                                    FontSize="11" TextTrimming="CharacterEllipsis" />
                                     </Border>
-                                    <infra:AttachmentPreview x:Name="Attachment" Message="{Binding}" Visibility="Collapsed" HorizontalAlignment="Left"
-                                                             MouseLeftButtonUp="AttachmentPreview_Click" Cursor="Hand" />
-                                    <DockPanel x:Name="TextContent">
-                                        <Button x:Name="ReEditButton" DockPanel.Dock="Right" Visibility="Collapsed"
-                                                Content="{StaticResource ReEditIcon}" ToolTip="Re-edit" AutomationProperties.Name="Re-edit"
-                                                Style="{StaticResource IconButtonStyle}" Width="28" Height="28" Margin="8,0,0,0"
-                                                Click="ReEdit_Click" />
-                                        <TextBlock x:Name="MessageContent" Text="{Binding DisplayContent}"
-                                                   TextWrapping="Wrap" FontSize="14" VerticalAlignment="Center" />
-                                    </DockPanel>
-                                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,5,0,0">
-                                        <TextBlock Text="{Binding TimeText}" Foreground="#FF96A3B4" FontSize="10" />
-                                        <TextBlock Text="{Binding EditedText}" Foreground="#FF96A3B4" FontSize="10" />
-                                        <TextBlock x:Name="DeliveryStatus" Text="{Binding StatusText}" Foreground="#FF96A3B4"
-                                                   FontSize="10" Margin="6,0,0,0" />
+                                    <StackPanel x:Name="MessageMetadata" Orientation="Horizontal" HorizontalAlignment="Left" Margin="4,4,4,0">
+                                        <TextBlock Text="{Binding TimeText}" Foreground="#FF444444" FontSize="10" />
+                                        <TextBlock Text="{Binding EditedText}" Foreground="#FF444444" FontSize="10" />
+                                        <TextBlock x:Name="DeliveryStatus" Text="{Binding StatusText}" ToolTip="{Binding StatusName}" AutomationProperties.Name="{Binding StatusName}" Foreground="#FF808080"
+                                                   FontSize="12" Margin="4,0,0,0" />
+                                        <Path Data="M 6,1 A 5,5 0 1 1 1,6" Stroke="#FF808080" StrokeThickness="1.5"
+                                              Width="12" Height="12" Margin="4,0,0,0" RenderTransformOrigin="0.5,0.5">
+                                            <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
+                                            <Path.Style>
+                                                <Style TargetType="Path">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSending}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                            <DataTrigger.EnterActions>
+                                                                <BeginStoryboard Name="SendingAnimation">
+                                                                    <Storyboard>
+                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                                                         From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever" />
+                                                                    </Storyboard>
+                                                                </BeginStoryboard>
+                                                            </DataTrigger.EnterActions>
+                                                            <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="SendingAnimation" /></DataTrigger.ExitActions>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Path.Style>
+                                        </Path>
                                     </StackPanel>
                                 </StackPanel>
+                            </Border>
+                            <Border x:Name="MyAvatar" Grid.Column="2" Width="40" Height="40" CornerRadius="12"
+                                    Background="#FF444444" Margin="8,0,0,0" VerticalAlignment="Top" Visibility="Collapsed">
+                                <Grid>
+                                    <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Rectangle RadiusX="12" RadiusY="12"
+                                               Fill="{Binding DataContext.Settings.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
+                                </Grid>
                             </Border>
                         </Grid>
                         <DataTemplate.Triggers>
                             <DataTrigger Binding="{Binding IsAttachment}" Value="True">
                                 <Setter TargetName="Attachment" Property="Visibility" Value="Visible" />
-                                <Setter TargetName="TextContent" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="TextBubble" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsDelivered}" Value="True">
-                                <Setter TargetName="DeliveryStatus" Property="Foreground" Value="#FF54D6B0" />
+                                <Setter TargetName="DeliveryStatus" Property="Foreground" Value="{StaticResource AccentBrush}" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                <Setter TargetName="Bubble" Property="BorderBrush" Value="#FFE2C663" />
+                                <Setter TargetName="Bubble" Property="BorderBrush" Value="Yellow" />
                                 <Setter TargetName="Bubble" Property="BorderThickness" Value="1" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding ReplyPreview}" Value="">
@@ -230,30 +297,49 @@
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsMine}" Value="True">
                                 <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right" />
-                                <Setter TargetName="Bubble" Property="Background" Value="#FF176A58" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsAttachment}" Value="True">
-                                <Setter TargetName="Bubble" Property="Background" Value="Transparent" />
-                                <Setter TargetName="Bubble" Property="Padding" Value="0" />
-                                <Setter TargetName="Bubble" Property="CornerRadius" Value="0" />
+                                <Setter TargetName="TextBubble" Property="HorizontalAlignment" Value="Right" />
+                                <Setter TargetName="TextBubble" Property="Background" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="MessageContent" Property="Foreground" Value="#FF07120F" />
+                                <Setter TargetName="MessageContent" Property="LinkForeground" Value="DarkBlue" />
+                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="MessageMetadata" Property="HorizontalAlignment" Value="Right" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding CanReEdit}" Value="True">
                                 <Setter TargetName="ReEditButton" Property="Visibility" Value="Visible" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsRevoked}" Value="True">
                                 <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Center" />
-                                <Setter TargetName="Bubble" Property="Background" Value="Transparent" />
-                                <Setter TargetName="MessageContent" Property="Foreground" Value="{StaticResource MutedBrush}" />
+                                <Setter TargetName="Bubble" Property="MaxWidth" Value="Infinity" />
+                                <Setter TargetName="TextBubble" Property="HorizontalAlignment" Value="Center" />
+                                <Setter TargetName="TextBubble" Property="Background" Value="Transparent" />
+                                <Setter TargetName="TextBubble" Property="Padding" Value="0,8" />
+                                <Setter TargetName="MessageContent" Property="Foreground" Value="#FF808080" />
+                                <Setter TargetName="MessageContent" Property="FontSize" Value="12" />
+                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="MessageMetadata" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="ReplyPreview" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                         </DataTemplate.Triggers>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
 
+            <Button Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16" Width="40" Height="40"
+                    Content="{StaticResource MinimizeIcon}" ToolTip="Scroll to bottom" AutomationProperties.Name="Scroll to bottom" Click="Latest_Click"
+                    Padding="8" Foreground="{StaticResource TextBrush}"
+                    Visibility="{Binding ShowLatestButton, Converter={StaticResource BooleanVisibilityConverter}}">
+                <Button.Style><Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}"><Setter Property="Background" Value="{StaticResource BorderBrush}"/>
+                    <Style.Triggers><DataTrigger Binding="{Binding HasNewUnread}" Value="True"><Setter Property="Background" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
+                </Style></Button.Style>
+            </Button>
+
             <Border Grid.Row="2" Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0" Padding="14,12">
+                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0" Padding="0">
                 <Grid>
                     <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -263,9 +349,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <Border x:Name="ReplyBar" Grid.Row="0" Grid.ColumnSpan="3"
-                            Background="#FF151F28" BorderBrush="{StaticResource AccentBrush}"
-                            BorderThickness="3,0,0,0" CornerRadius="5" Padding="9,5"
-                            Margin="46,0,80,8">
+                            Background="{StaticResource SurfaceBrush}" Padding="12,6">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Visibility" Value="Visible" />
@@ -280,29 +364,109 @@
                             <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" ToolTip="Cancel reply" AutomationProperties.Name="Cancel reply"
                                     Style="{StaticResource IconButtonStyle}" Width="24" Height="24" MinHeight="24"
                                     Click="CancelReply_Click" />
-                            <TextBlock Text="{Binding ReplyPreview}" Foreground="{StaticResource MutedBrush}"
-                                       VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                            <Border DockPanel.Dock="Left" Width="4" Height="32" CornerRadius="2" Background="{StaticResource AccentBrush}" Margin="0,0,8,0"/>
+                            <StackPanel>
+                                <TextBlock Text="{Binding ReplyTitle}" Foreground="{StaticResource AccentBrush}" FontSize="12" FontWeight="Bold" />
+                                <TextBlock Text="{Binding ReplyPreview}" Foreground="{StaticResource MutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis" />
+                            </StackPanel>
                         </DockPanel>
                     </Border>
-                    <Button x:Name="AttachmentButton" Grid.Row="1" Content="{StaticResource AttachIcon}"
-                            ToolTip="Attachments" AutomationProperties.Name="Attachments"
-                            Style="{StaticResource IconButtonStyle}" Width="42" Height="42"
-                            IsEnabled="{Binding HasConversation}" Click="Attachment_Click" />
-                    <TextBox x:Name="Composer" Grid.Row="1" Grid.Column="1"
+                    <TextBox x:Name="Composer" Grid.Row="1" Grid.ColumnSpan="2"
                              Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
-                             Margin="10,0" MinHeight="42" MaxHeight="112" AcceptsReturn="True"
+                             Margin="8" MinHeight="56" MaxHeight="132" AcceptsReturn="True"
+                             FontSize="16" Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}"
                              TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             IsEnabled="{Binding HasConversation}"
-                             PreviewKeyDown="Composer_PreviewKeyDown" />
-                    <Button Grid.Row="1" Grid.Column="2" Content="{StaticResource SendIcon}" ToolTip="Send" AutomationProperties.Name="Send"
-                            Width="42" Height="42" Style="{StaticResource PrimaryIconButtonStyle}"
-                            IsEnabled="{Binding HasConversation}" Click="Send_Click" />
+                             IsEnabled="{Binding HasConversation}">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="TextBox">
+                                            <Border Background="{TemplateBinding Background}" CornerRadius="20" Padding="12">
+                                                <Grid>
+                                                    <TextBlock x:Name="Placeholder" Text="Message..." Foreground="#FF808080" Visibility="Collapsed" IsHitTestVisible="False" />
+                                                    <ScrollViewer x:Name="PART_ContentHost" />
+                                                </Grid>
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="Text" Value=""><Setter TargetName="Placeholder" Property="Visibility" Value="Visible" /></Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                    <Button Grid.Row="1" Grid.Column="2" Width="48" Height="48"
+                            Margin="0,8,8,8" VerticalAlignment="Bottom"
+                            IsEnabled="{Binding HasConversation}" Click="Send_Click">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Setter Property="Content" Value="{StaticResource MenuPlusIcon}" />
+                                <Setter Property="ToolTip" Value="Add Media" />
+                                <Setter Property="AutomationProperties.Name" Value="Add Media" />
+                                <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasDraft}" Value="True">
+                                        <Setter Property="Content" Value="{StaticResource SendIcon}" />
+                                        <Setter Property="ToolTip" Value="Send" />
+                                        <Setter Property="AutomationProperties.Name" Value="Send" />
+                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Foreground" Value="White" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <Border Grid.Row="2" Grid.ColumnSpan="3" ClipToBounds="True">
+                        <Border.Style>
+                            <Style TargetType="Border">
+                                <Setter Property="Height" Value="0" />
+                                <Setter Property="Opacity" Value="0" />
+                                <Setter Property="IsHitTestVisible" Value="False" />
+                                <Setter Property="IsEnabled" Value="False" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding ShowAttachments}" Value="True">
+                                        <Setter Property="IsHitTestVisible" Value="True" />
+                                        <Setter Property="IsEnabled" Value="True" />
+                                        <DataTrigger.EnterActions>
+                                            <BeginStoryboard><Storyboard>
+                                                <DoubleAnimation Storyboard.TargetProperty="Height" To="116" Duration="0:0:0.18" />
+                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
+                                            </Storyboard></BeginStoryboard>
+                                        </DataTrigger.EnterActions>
+                                        <DataTrigger.ExitActions>
+                                            <BeginStoryboard><Storyboard>
+                                                <DoubleAnimation Storyboard.TargetProperty="Height" To="0" Duration="0:0:0.18" />
+                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" />
+                                            </Storyboard></BeginStoryboard>
+                                        </DataTrigger.ExitActions>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Border.Style>
+                        <UniformGrid Columns="2" Margin="16" Height="84" VerticalAlignment="Top">
+                        <StackPanel HorizontalAlignment="Center">
+                            <Button Content="{StaticResource MenuPlusIcon}" Style="{StaticResource AttachmentActionStyle}"
+                                    Width="60" Height="60" ToolTip="Media" AutomationProperties.Name="Media" Click="Media_Click" />
+                            <TextBlock Text="Media" FontSize="12" Foreground="#FF808080" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                        </StackPanel>
+                        <StackPanel HorizontalAlignment="Center">
+                            <Button Content="{StaticResource CallIcon}" Style="{StaticResource AttachmentActionStyle}"
+                                    Width="60" Height="60" ToolTip="Voice Call" AutomationProperties.Name="Voice Call" Click="VoiceCall_Click" />
+                            <TextBlock Text="Voice Call" FontSize="12" Foreground="#FF808080" HorizontalAlignment="Center" Margin="0,8,0,0" />
+                        </StackPanel>
+                        </UniformGrid>
+                    </Border>
                 </Grid>
             </Border>
 
+
+        </Grid>
             <wv2:WebView2 x:Name="WebRtcView" Width="1" Height="1"
                           HorizontalAlignment="Left" VerticalAlignment="Top"
                           IsHitTestVisible="False" />
-        </Grid>
+        <ContentControl x:Name="MediaOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+        <ContentControl x:Name="CallOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
     </Grid>
 </Window>

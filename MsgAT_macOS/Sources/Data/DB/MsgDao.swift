@@ -14,7 +14,7 @@ public final class MsgDao: Sendable {
 
     public func getAllConversations() throws -> [Conversation] {
         try database.query(
-            "SELECT uuid, alias, avatarPath, peerPublicKey FROM conversations ORDER BY alias COLLATE NOCASE",
+            "SELECT uuid, alias, avatarPath, peerPublicKey FROM conversations ORDER BY rowid",
             map: conversation
         )
     }
@@ -24,7 +24,7 @@ public final class MsgDao: Sendable {
             SELECT c.uuid, c.alias, c.avatarPath, c.peerPublicKey,
               (SELECT COUNT(*) FROM messages m
                WHERE m.conversationUuid = c.uuid AND m.isMine = 0 AND m.isRead = 0)
-            FROM conversations c ORDER BY c.alias COLLATE NOCASE
+            FROM conversations c ORDER BY c.rowid
             """) { statement in
                 ConversationWithUnread(
                     conversation: conversation(statement),
@@ -55,12 +55,17 @@ public final class MsgDao: Sendable {
         changed()
     }
 
-    public func markMessagesAsRead(conversationUuid: String) throws {
-        try database.execute(
-            "UPDATE messages SET isRead = 1 WHERE conversationUuid = ? AND isMine = 0 AND isRead = 0",
-            values: [.text(conversationUuid)]
-        )
-        changed()
+    public func markConversationRead(conversationUuid: String) throws -> ChatMessage? {
+        let unread = try database.queryAndExecute("""
+            SELECT messageId, conversationUuid, isMine, content, ext, timestamp, isRead,
+                   replyToId, replyToSender, replyToContent, status, isRevoked, isEdited
+            FROM messages WHERE conversationUuid = ? AND isMine = 0 AND isRead = 0
+            ORDER BY timestamp DESC, messageId DESC LIMIT 1
+            """,
+            updateSQL: "UPDATE messages SET isRead = 1 WHERE conversationUuid = ? AND isMine = 0 AND isRead = 0",
+            values: [.text(conversationUuid)], map: message).first
+        if unread != nil { changed() }
+        return unread
     }
 
     public func getMessages(conversationUuid: String, limit: Int = 100, offset: Int = 0) throws -> [ChatMessage] {
@@ -68,7 +73,7 @@ public final class MsgDao: Sendable {
             SELECT messageId, conversationUuid, isMine, content, ext, timestamp, isRead,
                    replyToId, replyToSender, replyToContent, status, isRevoked, isEdited
             FROM messages WHERE conversationUuid = ?
-            ORDER BY timestamp DESC LIMIT ? OFFSET ?
+            ORDER BY timestamp DESC, messageId DESC LIMIT ? OFFSET ?
             """, values: [.text(conversationUuid), .integer(Int64(limit)), .integer(Int64(offset))], map: message)
         return rows.reversed()
     }

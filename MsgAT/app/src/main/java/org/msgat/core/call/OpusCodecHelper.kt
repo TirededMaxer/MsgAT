@@ -62,7 +62,10 @@ object OpusCodecHelper {
 
             for (i in lines.indices) {
                 if (lines[i].startsWith(targetFmtpPrefix)) {
-                    lines[i] = "$targetFmtpPrefix$opusParams;${lines[i].removePrefix(targetFmtpPrefix)}"
+                    val keys = opusParams.split(";").map { it.substringBefore("=") }.toSet()
+                    val retained = lines[i].removePrefix(targetFmtpPrefix).split(";")
+                        .map { it.trim() }.filter { it.isNotEmpty() && it.substringBefore("=").lowercase() !in keys }
+                    lines[i] = targetFmtpPrefix + (listOf(opusParams) + retained).joinToString(";")
                     fmtpFound = true
                     break
                 } else if (lines[i].startsWith("a=fmtp:$opusPayloadType")) {

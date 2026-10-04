@@ -52,8 +52,18 @@ public sealed class MediaStore
             throw new ArgumentException("Avatar owner UUID is invalid.", nameof(uuid));
         }
         var path = Path.Combine(RootDirectory, $"avatar_{uuid.ToLowerInvariant()}.jpg");
-        File.WriteAllBytes(path, bytes.ToArray());
-        return path;
+        var temporaryPath = path + ".tmp";
+        try
+        {
+            using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
+            File.Move(temporaryPath, path, overwrite: true);
+            return path;
+        }
+        finally { File.Delete(temporaryPath); }
     }
 
     public string Import(string messageId, string sourcePath)

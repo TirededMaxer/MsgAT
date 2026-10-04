@@ -64,3 +64,6 @@ MsgAT_Console/data/
 **/dependency-reduced-pom.xml
 **/*.hprof
 /release-artifacts/
+
+# Generated server settings (the example remains tracked).
+**/server-config.json

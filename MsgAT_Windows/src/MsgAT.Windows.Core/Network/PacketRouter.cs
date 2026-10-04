@@ -145,8 +145,10 @@ public sealed class PacketRouter : IDisposable
                 payload.FileId, payload.SenderUuid, IsMine: false, content, payload.Ext, payload.Timestamp,
                 ReplyToId: payload.ReplyToId, ReplyToSender: payload.ReplyToSender, ReplyToContent: payload.ReplyToContent));
             var conversation = _database.GetConversation(payload.SenderUuid);
+            var alias = conversation?.Alias;
+            var title = !string.IsNullOrEmpty(alias) && alias != "Unknown" ? alias : payload.SenderUuid[..8];
             NotificationRequested?.Invoke(this, new NotificationRequest(
-                conversation?.Alias ?? "MsgAT", payload.Ext == "txt" ? content : $"[{payload.Ext.ToUpperInvariant()}]", payload.SenderUuid));
+                title, payload.Ext == "txt" ? content : "[Media]", payload.SenderUuid));
         }
 
         if (!payload.Ext.StartsWith("ack_", StringComparison.Ordinal))
@@ -168,7 +170,7 @@ public sealed class PacketRouter : IDisposable
         }
         _database.UpsertFriendRequest(new FriendRequest(
             payload.SenderUuid,
-            string.IsNullOrWhiteSpace(payload.Nickname) ? payload.SenderUuid[..12] : payload.Nickname.Trim(),
+            "Loading...",
             "",
             payload.SenderPublicKey ?? "",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
@@ -179,17 +181,23 @@ public sealed class PacketRouter : IDisposable
     private void HandleProfileResponse(GhostPacket packet)
     {
         var profile = JsonSerializer.Deserialize<ProfilePayload>(packet.EncryptedData, JsonOptions);
-        if (profile is null || string.IsNullOrWhiteSpace(profile.Uuid)) { return; }
-        var avatarPath = "";
+        if (profile is null || profile.Uuid is null || !Regex.IsMatch(profile.Uuid, "^[a-f0-9]{64}$")) { return; }
+        var request = _database.GetFriendRequest(profile.Uuid);
+        var conversation = _database.GetConversation(profile.Uuid);
+        if (request is null && conversation is null) { return; }
+        var avatarPath = conversation?.AvatarPath ?? request?.AvatarPath ?? "";
         if (!string.IsNullOrWhiteSpace(profile.AvatarData))
         {
-            avatarPath = _media.SaveAvatar(profile.Uuid, DecodeBase64(profile.AvatarData));
+            try { avatarPath = _media.SaveAvatar(profile.Uuid, DecodeBase64(profile.AvatarData)); }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or FormatException)
+            { System.Diagnostics.Trace.TraceWarning("Profile avatar could not be saved: {0}", error.Message); }
         }
-        if (_database.GetFriendRequest(profile.Uuid) is { } request)
+        else { avatarPath = ""; }
+        if (request is not null)
         {
             _database.UpsertFriendRequest(request with { Nickname = profile.Nickname ?? "Unknown", AvatarPath = avatarPath });
         }
-        if (_database.GetConversation(profile.Uuid) is { } conversation)
+        if (conversation is not null)
         {
             _database.UpsertConversation(conversation with { Alias = profile.Nickname ?? "Unknown", AvatarPath = avatarPath });
         }

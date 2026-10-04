@@ -80,24 +80,57 @@ public final class AppDatabase: @unchecked Sendable {
     ) throws -> [T] {
         try queue.sync {
             guard let handle else { throw Self.databaseError("Query", handle: nil) }
-            var statement: OpaquePointer?
-            guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
-                  let statement else {
-                throw Self.databaseError("Prepare query", handle: handle)
-            }
-            defer { sqlite3_finalize(statement) }
-            try Self.bind(values, to: statement, handle: handle)
+            return try Self.query(handle: handle, sql: sql, values: values, map: map)
+        }
+    }
 
-            var rows: [T] = []
-            while true {
-                switch sqlite3_step(statement) {
-                case SQLITE_ROW:
-                    rows.append(try map(statement))
-                case SQLITE_DONE:
-                    return rows
-                default:
-                    throw Self.databaseError("Read query", handle: handle)
+    /// Reads a snapshot and updates it without allowing another database operation between them.
+    public func queryAndExecute<T>(
+        _ sql: String,
+        updateSQL: String,
+        values: [DatabaseValue] = [],
+        map: (OpaquePointer) throws -> T
+    ) throws -> [T] {
+        try queue.sync {
+            guard let handle else { throw Self.databaseError("Read and update", handle: nil) }
+            try Self.execute(handle: handle, sql: "BEGIN IMMEDIATE")
+            do {
+                let rows = try Self.query(handle: handle, sql: sql, values: values, map: map)
+                if !rows.isEmpty {
+                    try Self.execute(handle: handle, sql: updateSQL, values: values)
                 }
+                try Self.execute(handle: handle, sql: "COMMIT")
+                return rows
+            } catch {
+                try? Self.execute(handle: handle, sql: "ROLLBACK")
+                throw error
+            }
+        }
+    }
+
+    private static func query<T>(
+        handle: OpaquePointer,
+        sql: String,
+        values: [DatabaseValue],
+        map: (OpaquePointer) throws -> T
+    ) throws -> [T] {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(handle, sql, -1, &statement, nil) == SQLITE_OK,
+              let statement else {
+            throw Self.databaseError("Prepare query", handle: handle)
+        }
+        defer { sqlite3_finalize(statement) }
+        try Self.bind(values, to: statement, handle: handle)
+
+        var rows: [T] = []
+        while true {
+            switch sqlite3_step(statement) {
+            case SQLITE_ROW:
+                rows.append(try map(statement))
+            case SQLITE_DONE:
+                return rows
+            default:
+                throw Self.databaseError("Read query", handle: handle)
             }
         }
     }

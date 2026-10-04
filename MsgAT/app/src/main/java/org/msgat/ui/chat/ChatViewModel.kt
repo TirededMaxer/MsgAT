@@ -69,13 +69,13 @@ class ChatViewModel(
             if (convo != null) {
                 _alias.value = convo.alias
             }
-            msgDao.markMessagesAsRead(targetUuid)
         }
     }
 
     fun markAsRead() {
         viewModelScope.launch {
-            msgDao.markMessagesAsRead(targetUuid)
+            val unread = msgDao.markConversationRead(targetUuid) ?: return@launch
+            sendReadAck(unread.messageId)
         }
     }
 
@@ -165,97 +165,104 @@ class ChatViewModel(
         replyToId: String? = null,
         replyToSender: String? = null,
         replyToContent: String? = null,
-        onFail: () -> Unit
+        onFail: () -> Unit,
+        onComplete: () -> Unit = {}
     ) {
         val myUuid = securePrefs.myUuid
 
         viewModelScope.launch(Dispatchers.IO) {
-            val convo = msgDao.getConversationByUuid(targetUuid)
-            val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
-            if (peerPublicKeyBase64.isEmpty()) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
-                return@launch
-            }
-
-            val msgId = UUID.randomUUID().toString()
-
             try {
-
-                val fileSize = org.msgat.utils.MediaHelper.getFileSize(context, uri)
-                if (fileSize > 100L * 1024 * 1024) {
-                    kotlinx.coroutines.withContext(Dispatchers.Main) {
-                        android.widget.Toast.makeText(context, "Files cannot exceed 100 MB.", android.widget.Toast.LENGTH_SHORT).show()
-                        onFail()
-                    }
+                val convo = msgDao.getConversationByUuid(targetUuid)
+                val peerPublicKeyBase64 = convo?.peerPublicKey ?: ""
+                if (peerPublicKeyBase64.isEmpty()) {
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
                     return@launch
                 }
 
-                val ext = getExtensionFromUri(context, uri)
-                val savedFile = org.msgat.core.media.MediaStorageManager.saveMediaFromUri(context, msgId, ext, uri)
+                val msgId = UUID.randomUUID().toString()
 
-                val chatMsg = ChatMessage(
-                    messageId = msgId,
-                    conversationUuid = targetUuid,
-                    isMine = true,
-                    content = savedFile.absolutePath,
-                    ext = ext,
-                    timestamp = System.currentTimeMillis(),
-                    isRead = true,
-                    replyToId = replyToId,
-                    replyToSender = replyToSender,
-                    replyToContent = replyToContent,
-                    status = 0
-                )
-                msgDao.insertMessage(chatMsg)
+                try {
 
-                val chunks = uriToBase64Chunks(context, savedFile.toUri())
-                if (chunks.isEmpty()) return@launch
-                val total = chunks.size
+                    val fileSize = org.msgat.utils.MediaHelper.getFileSize(context, uri)
+                    if (fileSize > 100L * 1024 * 1024) {
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            android.widget.Toast.makeText(context, "Files cannot exceed 100 MB.", android.widget.Toast.LENGTH_SHORT).show()
+                        }
+                        return@launch
+                    }
 
-                var allChunksSent = true
-                for (index in 0 until total) {
-                    val chunkData = chunks[index]
-                    val payload = MessagePayload(
-                        senderUuid = myUuid,
-                        fileId = msgId,
-                        total = total,
-                        index = index,
+                    val ext = getExtensionFromUri(context, uri)
+                    val savedFile = org.msgat.core.media.MediaStorageManager.saveMediaFromUri(context, msgId, ext, uri)
+
+                    val chatMsg = ChatMessage(
+                        messageId = msgId,
+                        conversationUuid = targetUuid,
+                        isMine = true,
+                        content = savedFile.absolutePath,
                         ext = ext,
-                        data = chunkData,
-                        timestamp = chatMsg.timestamp,
+                        timestamp = System.currentTimeMillis(),
+                        isRead = true,
                         replyToId = replyToId,
                         replyToSender = replyToSender,
-                        replyToContent = replyToContent
+                        replyToContent = replyToContent,
+                        status = 0
                     )
-                    val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
+                    msgDao.insertMessage(chatMsg)
 
-                    val iv = ByteArray(16)
-                    SecureRandom().nextBytes(iv)
+                    val chunks = uriToBase64Chunks(context, savedFile.toUri())
+                    if (chunks.isEmpty()) return@launch
+                    val total = chunks.size
 
-                    val (cipherText, authTag) = CryptoManager.encryptPayloadECDH(
-                        securePrefs.getX25519PrivateKey(), peerPublicKeyBase64, iv, jsonBytes)
+                    var allChunksSent = true
+                    for (index in 0 until total) {
+                        val chunkData = chunks[index]
+                        val payload = MessagePayload(
+                            senderUuid = myUuid,
+                            fileId = msgId,
+                            total = total,
+                            index = index,
+                            ext = ext,
+                            data = chunkData,
+                            timestamp = chatMsg.timestamp,
+                            replyToId = replyToId,
+                            replyToSender = replyToSender,
+                            replyToContent = replyToContent
+                        )
+                        val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
 
-                    val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
+                        val iv = ByteArray(16)
+                        SecureRandom().nextBytes(iv)
 
-                    val packet =
-                        GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, cipherText, authTag)
+                        val (cipherText, authTag) = CryptoManager.encryptPayloadECDH(
+                            securePrefs.getX25519PrivateKey(), peerPublicKeyBase64, iv, jsonBytes)
 
-                    val success = nettyClient.sendPacket(packet)
-                    if (!success) {
-                        allChunksSent = false
-                        break
+                        val targetMailboxId = CryptoManager.calculateMailboxId(targetUuid)
+
+                        val packet =
+                            GhostPacket(GhostPacket.TYPE_MESSAGE, targetMailboxId, iv, cipherText, authTag)
+
+                        val success = nettyClient.sendPacket(packet)
+                        if (!success) {
+                            allChunksSent = false
+                            break
+                        }
+
+                        if (index < total - 1) {
+                            kotlinx.coroutines.delay(50)
+                        }
                     }
 
-                    if (index < total - 1) {
-                        kotlinx.coroutines.delay(50)
+                    if (allChunksSent) {
+                        msgDao.updateMessageStatus(msgId, 1)
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("ChatViewModel", "Failed to send media message", e)
+                    kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
                 }
-
-                if (allChunksSent) {
-                    msgDao.updateMessageStatus(msgId, 1)
-                }
-            } catch (e: Exception) {
-                Log.e("ChatViewModel", "Failed to send media message", e)
+            } finally {
+                kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main) { onComplete() }
             }
         }
     }

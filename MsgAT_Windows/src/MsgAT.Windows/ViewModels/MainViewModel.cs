@@ -9,11 +9,13 @@ namespace MsgAT.Windows.ViewModels;
 
 public sealed class MainViewModel : ObservableObject, IDisposable
 {
-    private const int PageSize = 100;
+    private const int PageSize = 50;
     private readonly AppServices _services;
     private readonly Dispatcher _dispatcher;
     private ConversationItem? _selectedConversation;
     private string _draft = "";
+    private bool _showAttachments;
+    private bool _isViewingLatest = true;
     private string _syncText = "Disconnected";
     private bool _hasOlderMessages;
     private MessageItem? _replyTarget;
@@ -46,17 +48,36 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             if (!SetProperty(ref _selectedConversation, value)) { return; }
             ReplyTarget = null;
+            Draft = "";
+            ShowAttachments = false;
+            IsViewingLatest = true;
             OnPropertyChanged(nameof(HasConversation));
             LoadInitialMessages();
         }
     }
 
-    public string Draft { get => _draft; set => SetProperty(ref _draft, value); }
+    public string Draft
+    {
+        get => _draft;
+        set
+        {
+            if (!SetProperty(ref _draft, value)) { return; }
+            OnPropertyChanged(nameof(HasDraft));
+            if (!string.IsNullOrEmpty(Draft)) { ShowAttachments = false; }
+        }
+    }
+    public bool HasDraft => !string.IsNullOrWhiteSpace(Draft);
+    public bool ShowAttachments { get => _showAttachments; set => SetProperty(ref _showAttachments, value); }
     public string SyncText { get => _syncText; private set => SetProperty(ref _syncText, value); }
     public bool HasConversation => SelectedConversation is not null;
-    public MessageItem? ReplyTarget { get => _replyTarget; private set { if (SetProperty(ref _replyTarget, value)) { OnPropertyChanged(nameof(HasReplyTarget)); OnPropertyChanged(nameof(ReplyPreview)); } } }
+    public bool IsViewingLatest { get => _isViewingLatest; set { if (SetProperty(ref _isViewingLatest, value)) OnPropertyChanged(nameof(ShowLatestButton)); } }
+    public bool IsChatContentVisible { get; set; } = true;
+    public bool ShowLatestButton => !IsViewingLatest;
+    public bool HasNewUnread => Messages.LastOrDefault() is { IsMine: false, IsRead: false };
+    public MessageItem? ReplyTarget { get => _replyTarget; private set { if (SetProperty(ref _replyTarget, value)) { OnPropertyChanged(nameof(HasReplyTarget)); OnPropertyChanged(nameof(ReplyPreview)); OnPropertyChanged(nameof(ReplyTitle)); } } }
     public bool HasReplyTarget => ReplyTarget is not null;
     public string ReplyPreview => ReplyTarget?.QuoteContent ?? "";
+    public string ReplyTitle => ReplyTarget is null ? "" : $"Replying to {(ReplyTarget.IsMine ? "Me" : SelectedConversation?.Alias ?? "User")}";
     public bool HasOlderMessages { get => _hasOlderMessages; private set => SetProperty(ref _hasOlderMessages, value); }
     public SecureSettings Settings => _services.Settings.Snapshot;
     public string MyUuid => _services.Settings.MyUuid;
@@ -66,36 +87,47 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (SelectedConversation is null || string.IsNullOrWhiteSpace(Draft)) { return; }
         var text = Draft;
+        var peerUuid = SelectedConversation.Uuid;
+        var reply = ReplyTarget;
         Draft = "";
+        ReplyTarget = null;
         try
         {
             await _services.Messaging.SendTextAsync(
-                SelectedConversation.Uuid,
+                peerUuid,
                 text,
-                ReplyTarget?.MessageId,
-                ReplyTarget is null ? null : ReplyTarget.IsMine ? MyUuid : SelectedConversation.Uuid,
-                ReplyTarget?.QuoteContent);
-            ReplyTarget = null;
+                reply?.MessageId,
+                reply is null ? null : reply.IsMine ? MyUuid : peerUuid,
+                reply?.QuoteContent);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException)
         {
-            Draft = text;
-            ErrorRequested?.Invoke(this, exception.Message);
+            if (SelectedConversation?.Uuid == peerUuid && string.IsNullOrEmpty(Draft)) Draft = text;
+            ErrorRequested?.Invoke(this, "Send content failed");
         }
     }
 
-    public async Task SendMediaAsync(string path)
+    public Task SendMediaAsync(string path) => CaptureMediaSender()?.Invoke(path) ?? Task.CompletedTask;
+
+    public Func<string, Task>? CaptureMediaSender()
     {
-        if (SelectedConversation is null) { return; }
+        if (SelectedConversation is null) return null;
+        var peerUuid = SelectedConversation.Uuid;
+        var reply = ReplyTarget;
+        ReplyTarget = null;
+        return path => SendMediaToAsync(path, peerUuid, reply);
+    }
+
+    private async Task SendMediaToAsync(string path, string peerUuid, MessageItem? reply)
+    {
         try
         {
-            await _services.Messaging.SendMediaAsync(SelectedConversation.Uuid, path, ReplyTarget?.MessageId,
-                ReplyTarget is null ? null : ReplyTarget.IsMine ? MyUuid : SelectedConversation.Uuid, ReplyTarget?.QuoteContent);
-            ReplyTarget = null;
+            await _services.Messaging.SendMediaAsync(peerUuid, path, reply?.MessageId,
+                reply is null ? null : reply.IsMine ? MyUuid : peerUuid, reply?.QuoteContent);
         }
         catch (Exception exception) when (exception is InvalidOperationException or IOException or ArgumentException)
         {
-            ErrorRequested?.Invoke(this, exception.Message);
+            ErrorRequested?.Invoke(this, exception is InvalidDataException && exception.Message.Contains("100 MB", StringComparison.Ordinal) ? "Files cannot exceed 100 MB." : "Send content failed");
         }
     }
 
@@ -118,21 +150,27 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task DeleteSelectedFriendAsync()
     {
-        if (SelectedConversation is null) { return; }
-        await _services.Messaging.DeleteFriendAsync(SelectedConversation.Uuid);
-        SelectedConversation = null;
+        if (SelectedConversation is not null) { await DeleteFriendAsync(SelectedConversation.Uuid); }
     }
+
+    public async Task DeleteFriendAsync(string uuid)
+    {
+        await _services.Messaging.DeleteFriendAsync(uuid);
+        if (SelectedConversation?.Uuid == uuid) { SelectedConversation = null; }
+    }
+
+    public void ClearMessages(string uuid) => _services.Messaging.ClearMessages(uuid);
 
     public void ClearSelectedMessages()
     {
-        if (SelectedConversation is not null) { _services.Messaging.ClearMessages(SelectedConversation.Uuid); }
+        if (SelectedConversation is not null) { ClearMessages(SelectedConversation.Uuid); }
     }
 
     public async Task RevokeAsync(MessageItem item)
     {
         if (SelectedConversation is null || !item.IsMine || item.IsRevoked) { return; }
         try { await _services.Messaging.RevokeMessageAsync(SelectedConversation.Uuid, item.MessageId); }
-        catch (InvalidOperationException error) { ErrorRequested?.Invoke(this, error.Message); }
+        catch (InvalidOperationException) { ErrorRequested?.Invoke(this, "The message change could not be sent."); }
     }
 
     public void SetReply(MessageItem item) { if (!item.IsRevoked) { ReplyTarget = item; } }
@@ -142,7 +180,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (SelectedConversation is null || !item.IsMine || item.IsRevoked || item.Extension != "txt") { return; }
         try { await _services.Messaging.EditMessageAsync(SelectedConversation.Uuid, item.MessageId, newText); }
-        catch (InvalidOperationException error) { ErrorRequested?.Invoke(this, error.Message); }
+        catch (InvalidOperationException) { ErrorRequested?.Invoke(this, "The message change could not be sent."); }
     }
 
     public void LoadOlderMessages()
@@ -163,10 +201,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (existing is not null) return existing;
         var target = _services.Database.GetMessage(messageId);
         if (target?.ConversationUuid != SelectedConversation.Uuid) return null;
-        Messages.Clear();
-        foreach (var message in _services.Database.GetAllMessages(SelectedConversation.Uuid)) Messages.Add(CreateMessageItem(message));
-        HasOlderMessages = false;
-        return Messages.FirstOrDefault(message => message.MessageId == messageId);
+        while (HasOlderMessages)
+        {
+            LoadOlderMessages();
+            var loaded = Messages.FirstOrDefault(message => message.MessageId == messageId);
+            if (loaded is not null) return loaded;
+        }
+        return null;
     }
 
     public void Dispose()
@@ -198,12 +239,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var rows = _services.Database.GetMessages(SelectedConversation.Uuid, PageSize);
         foreach (var message in rows) { Messages.Add(CreateMessageItem(message)); }
         HasOlderMessages = rows.Count == PageSize;
-        _services.Database.MarkMessagesRead(SelectedConversation.Uuid);
-        var lastIncoming = rows.LastOrDefault(static item => !item.IsMine);
-        if (lastIncoming is not null)
-        {
-            _ = SendReadAckSafelyAsync(SelectedConversation.Uuid, lastIncoming.MessageId);
-        }
         InitialMessagesLoaded?.Invoke(this, EventArgs.Empty);
     }
 
@@ -248,6 +283,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         while (Messages.Count > rows.Count) { Messages.RemoveAt(Messages.Count - 1); }
         HasOlderMessages = rows.Count >= limit;
+        OnPropertyChanged(nameof(HasNewUnread));
         if (previousLast != Messages.LastOrDefault()?.MessageId) { LatestMessagesChanged?.Invoke(this, EventArgs.Empty); }
     }
 
@@ -259,12 +295,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public void MarkActiveConversationRead()
     {
-        if (_disposed || _services.IsDisposed || SelectedConversation is null ||
+        if (_disposed || _services.IsDisposed || !IsViewingLatest || !IsChatContentVisible || SelectedConversation is null ||
             System.Windows.Application.Current.MainWindow is not { IsActive: true, IsVisible: true }) { return; }
-        var unread = _services.Database.GetMessages(SelectedConversation.Uuid, PageSize)
-            .LastOrDefault(message => !message.IsMine && !message.IsRead);
+        var unread = _services.Database.MarkConversationRead(SelectedConversation.Uuid);
         if (unread is null) { return; }
-        _services.Database.MarkMessagesRead(SelectedConversation.Uuid);
         _ = SendReadAckSafelyAsync(SelectedConversation.Uuid, unread.MessageId);
     }
 
@@ -310,6 +344,7 @@ public sealed class ConversationItem : ObservableObject
     private ConversationWithUnread _source;
     public ConversationItem(ConversationWithUnread source) { _source = source; }
     public string Uuid => _source.Conversation.Uuid;
+    public string UuidPreview => Uuid[..Math.Min(12, Uuid.Length)] + "...";
     public string Alias => _source.Conversation.Alias;
     public string AvatarPath => _source.Conversation.AvatarPath;
     public string PeerPublicKey => _source.Conversation.PeerPublicKey;
@@ -333,6 +368,7 @@ public sealed class MessageItem(ChatMessage source, string replyAuthor = "User")
     public string MessageId { get; } = source.MessageId;
     public bool CanModify => IsMine && !IsRevoked && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - source.Timestamp is >= 0 and <= 120000;
     public bool CanReEdit => IsMine && IsRevoked && Extension == "txt" && !string.IsNullOrEmpty(Content);
+    public bool IsRead => Source.IsRead;
     public bool IsMine { get; } = source.IsMine;
     public string Content { get; } = source.Content;
     public string Extension { get; } = source.Extension;
@@ -340,18 +376,23 @@ public sealed class MessageItem(ChatMessage source, string replyAuthor = "User")
     public bool IsEdited { get; } = source.IsEdited;
     public string? ReplyToId { get; } = source.ReplyToId;
     public string ReplyPreview { get; } = string.IsNullOrEmpty(source.ReplyToId) ? "" : $"{replyAuthor}: {source.ReplyToContent ?? ""}";
-    public string DisplayContent => IsRevoked ? "Message revoked" : Extension == "txt" ? Content : $"[{Extension.ToUpperInvariant()}]  {Path.GetFileName(Content)}";
+    public string DisplayContent => IsRevoked ? IsMine ? "You revoked a message" : "Peer revoked a message" : Extension == "txt" ? Content : $"[{Extension.ToUpperInvariant()}]  {Path.GetFileName(Content)}";
     public string QuoteContent => Extension == "txt" ? Content : $"[{Extension.ToUpperInvariant()}]";
-    public string EditedText => IsEdited && !IsRevoked ? " · edited" : "";
-    public string TimeText => DateTimeOffset.FromUnixTimeMilliseconds(source.Timestamp).LocalDateTime.ToString("HH:mm", CultureInfo.CurrentCulture);
+    public string EditedText => IsEdited && !IsRevoked ? " (edited)" : "";
+    public string TimeText => DateTimeOffset.FromUnixTimeMilliseconds(source.Timestamp).LocalDateTime.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.CurrentCulture);
     public bool IsDelivered => source.Status >= 2;
+    public bool IsSending => IsMine && !IsRevoked && source.Status == 0;
     public bool IsAttachment => !IsRevoked && Extension != "txt";
     public string StatusText => !IsMine || IsRevoked ? "" : source.Status switch
     {
-        0 => "○",
+        0 => "",
         1 => "✓",
         2 => "✓",
         3 => "✓✓",
         _ => ""
+    };
+    public string StatusName => !IsMine || IsRevoked ? "" : source.Status switch
+    {
+        0 => "Sending", 1 => "Sent", 2 => "Delivered", 3 => "Read", _ => ""
     };
 }

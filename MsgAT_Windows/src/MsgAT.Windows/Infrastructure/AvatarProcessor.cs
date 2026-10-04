@@ -10,9 +10,7 @@ public static class AvatarProcessor
 
     public static byte[] EncodeJpeg(string sourcePath)
     {
-        using var source = File.OpenRead(sourcePath);
-        var decoder = BitmapDecoder.Create(source, BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-        var frame = decoder.Frames[0];
+        var frame = ImageDecoder.Load(sourcePath);
         var scale = Math.Min(1d, Math.Min((double)MaximumDimension / frame.PixelWidth, (double)MaximumDimension / frame.PixelHeight));
         BitmapSource bitmap = scale < 1d
             ? new TransformedBitmap(frame, new ScaleTransform(scale, scale))

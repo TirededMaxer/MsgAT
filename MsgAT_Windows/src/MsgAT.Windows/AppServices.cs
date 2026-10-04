@@ -102,7 +102,7 @@ public sealed class AppServices : IAsyncDisposable
         }
         if (!await Messaging.PrepareIdentityResetAsync())
         {
-            throw new InvalidOperationException("Identity reset requires a synchronized relay connection.");
+            throw new InvalidOperationException("Must be online to reset");
         }
 
         await DisposeAsync();

@@ -15,30 +15,10 @@ public enum OpusCodecHelper {
             lines = sdpDescription.components(separatedBy: "\n")
         }
 
-        var opusPayloadType: String? = nil
-
-        // Find Opus payload type (e.g. 111)
-        for line in lines {
-            if let range = line.range(of: #"a=rtpmap:(\d+)\s+opus/48000/2"#, options: [.regularExpression, .caseInsensitive]) {
-                let matched = String(line[range])
-                let digits = matched.replacingOccurrences(of: "a=rtpmap:", with: "", options: .caseInsensitive)
-                    .split(separator: " ").first
-                if let d = digits {
-                    opusPayloadType = String(d)
-                    break
-                }
-            } else if line.lowercased().starts(with: "a=rtpmap:") && line.lowercased().contains("opus/48000") {
-                let parts = line.dropFirst(9).split(separator: " ")
-                if let pt = parts.first {
-                    opusPayloadType = String(pt)
-                    break
-                }
-            }
-        }
-
-        guard let pt = opusPayloadType else {
-            return sdpDescription
-        }
+        guard let pattern = try? NSRegularExpression(pattern: #"^a=rtpmap:(\d+)\s+opus/48000/2"#, options: [.caseInsensitive, .anchorsMatchLines]),
+              let match = pattern.firstMatch(in: sdpDescription, range: NSRange(sdpDescription.startIndex..., in: sdpDescription)),
+              let range = Range(match.range(at: 1), in: sdpDescription) else { return sdpDescription }
+        let pt = String(sdpDescription[range])
 
         // 1. Reorder m=audio line to place Opus payload type first
         for i in 0..<lines.count {
@@ -65,7 +45,9 @@ public enum OpusCodecHelper {
         for i in 0..<lines.count {
             if lines[i].starts(with: targetFmtpPrefix) {
                 let existing = lines[i].replacingOccurrences(of: targetFmtpPrefix, with: "")
-                lines[i] = "\(targetFmtpPrefix)\(opusParams);\(existing)"
+                let keys = Set(opusParams.split(separator: ";").map { String($0.split(separator: "=")[0]) })
+                let retained = existing.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty && !keys.contains(String($0.split(separator: "=", omittingEmptySubsequences: false).first ?? "").lowercased()) }
+                lines[i] = targetFmtpPrefix + ([opusParams] + retained).joined(separator: ";")
                 fmtpFound = true
                 break
             } else if lines[i].starts(with: "a=fmtp:\(pt)") {

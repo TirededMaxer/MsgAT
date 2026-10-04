@@ -45,8 +45,8 @@ public sealed class MessagingService : IDisposable
         string? replyToContent = null,
         CancellationToken cancellationToken = default)
     {
-        var trimmed = text.Trim();
-        if (trimmed.Length == 0) { return false; }
+        var trimmed = text;
+        if (string.IsNullOrWhiteSpace(trimmed)) { return false; }
         var conversation = RequireSendableConversation(peerUuid);
         var id = Guid.NewGuid().ToString();
         var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
@@ -117,8 +117,8 @@ public sealed class MessagingService : IDisposable
 
     public async Task EditMessageAsync(string peerUuid, string messageId, string newContent, CancellationToken cancellationToken = default)
     {
-        var trimmed = newContent.Trim();
-        if (trimmed.Length == 0) { return; }
+        var trimmed = newContent;
+        if (string.IsNullOrWhiteSpace(trimmed)) { return; }
         if (RequireModifiableMessage(peerUuid, messageId).Extension != "txt") { return; }
         await SendActionAsync(peerUuid, "edit", messageId, Convert.ToBase64String(Encoding.UTF8.GetBytes(trimmed)), cancellationToken).ConfigureAwait(false);
         _database.EditMessage(messageId, trimmed);
@@ -136,7 +136,7 @@ public sealed class MessagingService : IDisposable
 
     public async Task AddFriendAsync(string rawUuid, CancellationToken cancellationToken = default)
     {
-        if (_relay.State != SyncState.Synced) throw new InvalidOperationException("Connect to the relay before adding a friend.");
+        if (_relay.State != SyncState.Synced) return;
         var uuid = NormalizeUuid(rawUuid);
         if (string.Equals(uuid, _settings.MyUuid, StringComparison.Ordinal))
         {
@@ -153,20 +153,18 @@ public sealed class MessagingService : IDisposable
         if (!await SendFallbackAsync(uuid, GhostPacket.SearchUser, payload, cancellationToken).ConfigureAwait(false))
         {
             _database.DeleteConversation(uuid);
-            throw new InvalidOperationException("The friend request could not be sent.");
         }
     }
 
     public async Task AcceptFriendRequestAsync(string senderUuid, CancellationToken cancellationToken = default)
     {
-        var request = _database.GetFriendRequest(senderUuid)
-            ?? throw new InvalidOperationException("Friend request no longer exists.");
-        if (_relay.State != SyncState.Synced) throw new InvalidOperationException("Connect to the relay before accepting a friend.");
+        var request = _database.GetFriendRequest(senderUuid);
+        if (request is null || _relay.State != SyncState.Synced || string.IsNullOrEmpty(request.PeerPublicKey)) return;
         if (!await SendFallbackAsync(senderUuid, GhostPacket.FriendAccepted, new
         {
             senderUuid = _settings.MyUuid,
             senderPublicKey = _settings.MyX25519PublicKeyBase64
-        }, cancellationToken).ConfigureAwait(false)) throw new InvalidOperationException("The friend acceptance could not be sent.");
+        }, cancellationToken).ConfigureAwait(false)) return;
         _database.UpsertConversation(new Conversation(request.SenderUuid, request.Nickname, request.AvatarPath, request.PeerPublicKey));
         _database.DeleteFriendRequest(senderUuid);
     }

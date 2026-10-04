@@ -23,10 +23,14 @@
         <SolidColorBrush x:Key="TextBrush" Color="{StaticResource TextColor}" />
         <SolidColorBrush x:Key="MutedBrush" Color="{StaticResource MutedColor}" />
         <SolidColorBrush x:Key="AccentBrush" Color="{StaticResource AccentColor}" />
+        <SolidColorBrush x:Key="ConnectionDotBrush" Color="#FF35B67D" />
+        <SolidColorBrush x:Key="ConnectionBrush" Color="#FF2AA46F" />
         <SolidColorBrush x:Key="AccentHoverBrush" Color="{StaticResource AccentHoverColor}" />
         <SolidColorBrush x:Key="DangerBrush" Color="{StaticResource DangerColor}" />
+        <BooleanToVisibilityConverter x:Key="BooleanVisibilityConverter" />
         <infra:AvatarConverter x:Key="AvatarConverter" />
 
+        <Geometry x:Key="MenuPlusIcon">M 12,4 L 12,20 M 4,12 L 20,12</Geometry>
         <Geometry x:Key="AddFriendIcon">M 9,11 A 4,4 0 1 0 9,3 A 4,4 0 1 0 9,11 M 2,21 L 2,18 C 2,14 16,14 16,18 L 16,21 M 19,7 L 19,15 M 15,11 L 23,11</Geometry>
         <Geometry x:Key="RequestsIcon">M 5,17 L 7,14 L 7,9 A 5,5 0 0 1 17,9 L 17,14 L 19,17 Z M 10,21 L 14,21 M 12,2 L 12,4</Geometry>
         <Geometry x:Key="SettingsIcon">M 8.94,4.61 L 10.34,4.17 L 9.92,2.22 L 14.08,2.22 L 13.66,4.17 L 15.06,4.61 L 15.06,4.61 L 16.36,5.29 L 17.45,3.61 L 20.39,6.55 L 18.71,7.64 L 19.39,8.94 L 19.39,8.94 L 19.83,10.34 L 21.78,9.92 L 21.78,14.08 L 19.83,13.66 L 19.39,15.06 L 19.39,15.06 L 18.71,16.36 L 20.39,17.45 L 17.45,20.39 L 16.36,18.71 L 15.06,19.39 L 15.06,19.39 L 13.66,19.83 L 14.08,21.78 L 9.92,21.78 L 10.34,19.83 L 8.94,19.39 L 8.94,19.39 L 7.64,18.71 L 6.55,20.39 L 3.61,17.45 L 5.29,16.36 L 4.61,15.06 L 4.61,15.06 L 4.17,13.66 L 2.22,14.08 L 2.22,9.92 L 4.17,10.34 L 4.61,8.94 L 4.61,8.94 L 5.29,7.64 L 3.61,6.55 L 6.55,3.61 L 7.64,5.29 L 8.94,4.61 Z M 15,12 A 3,3 0 1 0 9,12 A 3,3 0 1 0 15,12</Geometry>
@@ -182,6 +186,41 @@
             <Setter Property="Background" Value="#18FF6B78" />
             <Setter Property="BorderBrush" Value="#66FF6B78" />
         </Style>
+        <DataTemplate x:Key="ChatConnectionIndicatorTemplate">
+            <Grid Width="14" Height="14">
+                <Ellipse x:Name="DisconnectedIndicator" Width="8" Height="8" Fill="{StaticResource DangerBrush}" />
+                <Path x:Name="ConnectedIndicator" Data="M 2,7 L 6,11 L 12,3" Stroke="{StaticResource ConnectionBrush}"
+                      StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" ToolTip="Synced" />
+                <Path x:Name="SyncingIndicator" Data="M 7,2 A 5,5 0 1 1 2,7" Stroke="{StaticResource ConnectionBrush}"
+                      StrokeThickness="1.8" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed" RenderTransformOrigin="0.5,0.5">
+                    <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
+                </Path>
+            </Grid>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding}" Value="Connected">
+                    <Setter TargetName="DisconnectedIndicator" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="ConnectedIndicator" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding}" Value="Syncing...">
+                    <Setter TargetName="DisconnectedIndicator" Property="Visibility" Value="Collapsed" />
+                    <Setter TargetName="SyncingIndicator" Property="Visibility" Value="Visible" />
+                    <DataTrigger.EnterActions>
+                        <BeginStoryboard Name="ChatSyncAnimation">
+                            <Storyboard>
+                                <DoubleAnimation Storyboard.TargetName="SyncingIndicator"
+                                                 Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
+                                                 From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </DataTrigger.EnterActions>
+                    <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="ChatSyncAnimation" /></DataTrigger.ExitActions>
+                </DataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <Style x:Key="AttachmentActionStyle" TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+        </Style>
+
         <Style x:Key="MicrophoneButtonStyle" TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
             <Setter Property="Content" Value="{StaticResource MicrophoneIcon}" />
             <Setter Property="ToolTip" Value="{Binding MuteText}" />

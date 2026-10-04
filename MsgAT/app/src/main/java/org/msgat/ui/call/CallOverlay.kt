@@ -54,10 +54,10 @@ fun CallOverlay(
 
     AnimatedVisibility(
         visible = isVisible,
-        enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
-        exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
+        enter = slideInVertically(animationSpec = tween(300), initialOffsetY = { it }) + fadeIn(tween(300)),
+        exit = slideOutVertically(animationSpec = tween(300), targetOffsetY = { it }) + fadeOut(tween(300))
     ) {
-        var isMinimized by remember { mutableStateOf(false) }
+        val isMinimized by callManager.isMinimized.collectAsState()
         var alias by remember { mutableStateOf("Unknown") }
         var avatar by remember { mutableStateOf("") }
 
@@ -74,7 +74,7 @@ fun CallOverlay(
         AnimatedContent(
             targetState = isMinimized,
             transitionSpec = {
-                (fadeIn() + scaleIn(initialScale = 0.8f)).togetherWith(fadeOut() + scaleOut(targetScale = 0.8f))
+                (fadeIn(tween(220)) + scaleIn(tween(220), initialScale = 0.8f)).togetherWith(fadeOut(tween(220)) + scaleOut(tween(220), targetScale = 0.8f))
             },
             label = "CallOverlayTransition"
         ) { minimized ->
@@ -83,7 +83,7 @@ fun CallOverlay(
                     duration = duration,
                     alias = alias,
                     avatar = avatar,
-                    onExpand = { isMinimized = false }
+                    onExpand = { callManager.isMinimized.value = false }
                 )
             } else {
                 if (callState == CallState.INCOMING_RINGING) {
@@ -109,7 +109,7 @@ fun CallOverlay(
                         },
                         onToggleSpeaker = { audioDeviceManager.toggleSpeakerphone() },
                         onEndCall = { callManager.endCall() },
-                        onMinimize = { isMinimized = true }
+                        onMinimize = { callManager.isMinimized.value = true }
                     )
                 }
             }
@@ -163,7 +163,7 @@ fun IncomingCallScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     val rejectInteraction = remember { MutableInteractionSource() }
                     val isRejectPressed by rejectInteraction.collectIsPressedAsState()
-                    val rejectScale by animateFloatAsState(targetValue = if (isRejectPressed) 0.85f else 1f, label = "rejectScale")
+                    val rejectScale by animateFloatAsState(targetValue = if (isRejectPressed) 0.85f else 1f, animationSpec = tween(150), label = "rejectScale")
 
                     IconButton(
                         onClick = onReject,
@@ -182,7 +182,7 @@ fun IncomingCallScreen(
                 Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     val acceptInteraction = remember { MutableInteractionSource() }
                     val isAcceptPressed by acceptInteraction.collectIsPressedAsState()
-                    val acceptScale by animateFloatAsState(targetValue = if (isAcceptPressed) 0.85f else 1f, label = "acceptScale")
+                    val acceptScale by animateFloatAsState(targetValue = if (isAcceptPressed) 0.85f else 1f, animationSpec = tween(150), label = "acceptScale")
 
                     IconButton(
                         onClick = onAccept,
@@ -290,7 +290,7 @@ fun CallScreen(
             ) {
                 val muteInteraction = remember { MutableInteractionSource() }
                 val isMutePressed by muteInteraction.collectIsPressedAsState()
-                val muteScale by animateFloatAsState(targetValue = if (isMutePressed) 0.85f else 1f, label = "muteScale")
+                val muteScale by animateFloatAsState(targetValue = if (isMutePressed) 0.85f else 1f, animationSpec = tween(150), label = "muteScale")
 
                 IconButton(
                     onClick = onToggleMute,
@@ -310,7 +310,7 @@ fun CallScreen(
 
                 val speakerInteraction = remember { MutableInteractionSource() }
                 val isSpeakerPressed by speakerInteraction.collectIsPressedAsState()
-                val speakerScale by animateFloatAsState(targetValue = if (isSpeakerPressed) 0.85f else 1f, label = "speakerScale")
+                val speakerScale by animateFloatAsState(targetValue = if (isSpeakerPressed) 0.85f else 1f, animationSpec = tween(150), label = "speakerScale")
 
                 IconButton(
                     onClick = onToggleSpeaker,
@@ -333,7 +333,7 @@ fun CallScreen(
 
             val endInteraction = remember { MutableInteractionSource() }
             val isEndPressed by endInteraction.collectIsPressedAsState()
-            val endScale by animateFloatAsState(targetValue = if (isEndPressed) 0.85f else 1f, label = "endScale")
+            val endScale by animateFloatAsState(targetValue = if (isEndPressed) 0.85f else 1f, animationSpec = tween(150), label = "endScale")
 
             IconButton(
                 onClick = onEndCall,

@@ -10,7 +10,8 @@ public sealed class WebRtcEngine
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly WebView2 _view;
-    private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private long _generation;
 
     public WebRtcEngine(WebView2 view)
     {
@@ -22,8 +23,10 @@ public sealed class WebRtcEngine
     public event EventHandler<IceCandidateInfo>? IceCandidateCreated;
     public event EventHandler<string>? ConnectionStateChanged;
     public event EventHandler<long?>? RttMeasured;
+    public event EventHandler? MicrophonePermissionDenied;
 
     private Task? _initialization;
+    private TaskCompletionSource<bool>? _speakerRequest;
     public async Task InitializeAsync()
     {
         try { await (_initialization ??= InitializeCoreAsync()); }
@@ -36,6 +39,7 @@ public sealed class WebRtcEngine
 
     private async Task InitializeCoreAsync()
     {
+        _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var userDataDirectory = Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "MsgAT",
@@ -56,6 +60,7 @@ public sealed class WebRtcEngine
                 args.State = CoreWebView2PermissionState.Allow;
             }
         };
+        _view.CoreWebView2.WebMessageReceived -= WebMessageReceived;
         _view.CoreWebView2.WebMessageReceived += WebMessageReceived;
         var hostDirectory = Path.Combine(userDataDirectory, "Host");
         Directory.CreateDirectory(hostDirectory);
@@ -65,11 +70,17 @@ public sealed class WebRtcEngine
         await _ready.Task.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
-    public Task CreateOfferAsync(IReadOnlyList<IceServer> iceServers) =>
-        SendCommandAsync("offer", new { iceServers });
+    public Task CreateOfferAsync(IReadOnlyList<IceServer> iceServers)
+    {
+        ++_generation;
+        return SendCommandAsync("offer", new { iceServers });
+    }
 
-    public Task AcceptOfferAsync(string sdp, IReadOnlyList<IceServer> iceServers) =>
-        SendCommandAsync("accept", new { sdp, iceServers });
+    public Task AcceptOfferAsync(string sdp, IReadOnlyList<IceServer> iceServers)
+    {
+        ++_generation;
+        return SendCommandAsync("accept", new { sdp, iceServers });
+    }
 
     public Task ApplyAnswerAsync(string sdp) => SendCommandAsync("answer", new { sdp });
 
@@ -77,14 +88,29 @@ public sealed class WebRtcEngine
         SendCommandAsync("ice", new { sdpMid, sdpMLineIndex, candidate });
 
     public Task SetMutedAsync(bool muted) => SendCommandAsync("mute", new { muted });
-    public Task CloseAsync() => _ready.Task.IsCompletedSuccessfully ? SendCommandAsync("close", new { }) : Task.CompletedTask;
+    public async Task<bool> SetSpeakerAsync(bool enabled)
+    {
+        if (_speakerRequest is not null) throw new InvalidOperationException("Audio routing is already changing.");
+        var request = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _speakerRequest = request;
+        try { await SendCommandAsync("speaker", new { enabled }); return await request.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
+        finally { if (_speakerRequest == request) _speakerRequest = null; }
+    }
+    public Task CloseAsync()
+    {
+        ++_generation;
+        _speakerRequest?.TrySetCanceled();
+        return _ready.Task.IsCompletedSuccessfully ? SendCommandAsync("close", new { }) : Task.CompletedTask;
+    }
     public Task RequestStatsAsync() => SendCommandAsync("stats", new { });
 
     private async Task SendCommandAsync<T>(string type, T payload)
     {
+        var generation = _generation;
         await InitializeAsync();
         await _ready.Task.WaitAsync(TimeSpan.FromSeconds(15));
-        var command = JsonSerializer.Serialize(new { type, payload }, JsonOptions);
+        if (generation != _generation) return;
+        var command = JsonSerializer.Serialize(new { type, payload, generation }, JsonOptions);
         await _view.ExecuteScriptAsync($"window.msgat.command({command})");
     }
 
@@ -94,8 +120,10 @@ public sealed class WebRtcEngine
         using var document = JsonDocument.Parse(args.WebMessageAsJson);
         var root = document.RootElement;
         var type = root.GetProperty("type").GetString();
+        if (type != "ready" && (!root.TryGetProperty("generation", out var generation) || generation.GetInt64() != _generation)) return;
         switch (type)
         {
+            case "speaker": _speakerRequest?.TrySetResult(root.GetProperty("enabled").GetBoolean()); break;
             case "ready": _ready.TrySetResult(); break;
             case "offer": OfferCreated?.Invoke(this, root.GetProperty("sdp").GetString() ?? ""); break;
             case "answer": AnswerCreated?.Invoke(this, root.GetProperty("sdp").GetString() ?? ""); break;
@@ -109,6 +137,8 @@ public sealed class WebRtcEngine
                 System.Diagnostics.Trace.TraceWarning("ICE candidate rejected: {0}", root.GetProperty("detail").GetString());
                 break;
             case "state":
+                if (root.TryGetProperty("reason", out var reason) && reason.GetString() == "microphone-permission")
+                    MicrophonePermissionDenied?.Invoke(this, EventArgs.Empty);
                 if (root.TryGetProperty("detail", out var detail))
                 {
                     System.Diagnostics.Trace.TraceWarning("WebRTC state detail: {0}", detail.GetString());

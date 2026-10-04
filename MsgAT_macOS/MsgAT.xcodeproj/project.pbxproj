@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A254704779AF4855A5924895 /* ThirdParty in Resources */ = {isa = PBXBuildFile; fileRef = 47589E80EDAA43D499119E06 /* ThirdParty */; };
+		C1B34FF45802486CAEFEEA84 /* MsgATNativeAudio.m in Sources */ = {isa = PBXBuildFile; fileRef = A5DCFE364D7C4FD0AF108027 /* MsgATNativeAudio.m */; };
+		AB83E91C44FD47649A45BF2B /* MacCallAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3817371916E481C90E0282A /* MacCallAudioDevice.swift */; };
+		8FFAAAE50CE04497A95C2788 /* CallAudioOutput.swift in Sources */ = {isa = PBXBuildFile; fileRef = C529A02751DD42EA8EED7D62 /* CallAudioOutput.swift */; };
 		5EB1B9F1A92C4BC0A89EA816 /* MainWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C733243B64F4FCF8216A54C /* MainWindow.swift */; };
 		069ECC9FF86547F1A7C8312D /* ChatViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FA426B7E534F3D8D47538D /* ChatViewModel.swift */; };
 		5B54A764A9CD43EC86AE464B /* InAppMediaViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1BFD75976644D5B0F74B38 /* InAppMediaViewer.swift */; };
@@ -43,6 +47,10 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		47589E80EDAA43D499119E06 /* ThirdParty */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "App/ThirdParty"; sourceTree = "<group>"; };
+		A5DCFE364D7C4FD0AF108027 /* MsgATNativeAudio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../NativeAudio/MsgATNativeAudio.m"; sourceTree = "<group>"; };
+		F3817371916E481C90E0282A /* MacCallAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/MacCallAudioDevice.swift"; sourceTree = "<group>"; };
+		C529A02751DD42EA8EED7D62 /* CallAudioOutput.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/CallAudioOutput.swift"; sourceTree = "<group>"; };
 		62BA06A366D441C09FC7A6D0 /* MsgAT.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MsgAT.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		3C733243B64F4FCF8216A54C /* MainWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/MainWindow.swift"; sourceTree = "<group>"; };
 		14FA426B7E534F3D8D47538D /* ChatViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "UI/Chat/ChatViewModel.swift"; sourceTree = "<group>"; };
@@ -122,6 +130,10 @@
 				3F89B1147D204EBB8C586933 /* GhostClientHandler.swift */,
 				E503A7198FCB4B0E9B666372 /* NotificationHelper.swift */,
 				842BA56195C846FB99F3492F /* CallManager.swift */,
+				47589E80EDAA43D499119E06 /* ThirdParty */,
+				A5DCFE364D7C4FD0AF108027 /* MsgATNativeAudio.m */,
+				F3817371916E481C90E0282A /* MacCallAudioDevice.swift */,
+				C529A02751DD42EA8EED7D62 /* CallAudioOutput.swift */,
 				96E441E6BA684DEEBB1F05D2 /* CallSignalingHandler.swift */,
 				C9DE5289463E4E3EA2229CFC /* OpusCodecHelper.swift */,
 				8B8B34DF9A9B44F986FAA3D0 /* MediaStorageManager.swift */,
@@ -211,6 +223,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				71A61F0C13CB48D49C42DF7D /* Assets.xcassets in Resources */,
+				A254704779AF4855A5924895 /* ThirdParty in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -242,6 +255,9 @@
 				4E98513CCB9144F5BEBBD0B9 /* GhostClientHandler.swift in Sources */,
 				62899511183F46B7A7CDB30D /* NotificationHelper.swift in Sources */,
 				A2B7C4B1D936496B87504A58 /* CallManager.swift in Sources */,
+				C1B34FF45802486CAEFEEA84 /* MsgATNativeAudio.m in Sources */,
+				AB83E91C44FD47649A45BF2B /* MacCallAudioDevice.swift in Sources */,
+				8FFAAAE50CE04497A95C2788 /* CallAudioOutput.swift in Sources */,
 				89DAA2DC62A04F15854019C3 /* CallSignalingHandler.swift in Sources */,
 				9B582B4CF6D44BDB83A36DCC /* OpusCodecHelper.swift in Sources */,
 				BAD0AAE36EEE476F8343C91D /* MediaStorageManager.swift in Sources */,
@@ -344,7 +360,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sources/App/MsgAT.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 15;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -360,13 +376,14 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
+				SWIFT_OBJC_BRIDGING_HEADER = NativeAudio/include/MsgATNativeAudio.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -377,7 +394,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Sources/App/MsgAT.entitlements;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 7;
+				CURRENT_PROJECT_VERSION = 15;
 				ENABLE_HARDENED_RUNTIME = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
@@ -393,13 +410,14 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
+				SWIFT_OBJC_BRIDGING_HEADER = NativeAudio/include/MsgATNativeAudio.h;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

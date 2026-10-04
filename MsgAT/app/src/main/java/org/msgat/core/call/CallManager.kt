@@ -26,6 +26,8 @@ class CallManager private constructor(private val context: Context) {
     private val _callState = MutableStateFlow(CallState.IDLE)
     val callState: StateFlow<CallState> = _callState.asStateFlow()
 
+    val isMinimized = MutableStateFlow(false)
+
     private val _callDurationSeconds = MutableStateFlow(0L)
     val callDurationSeconds: StateFlow<Long> = _callDurationSeconds.asStateFlow()
 
@@ -38,7 +40,7 @@ class CallManager private constructor(private val context: Context) {
     private var localAudioSource: AudioSource? = null
 
     private var signalingHandler: CallSignalingHandler? = null
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
     private var durationJob: Job? = null
     private var rttJob: Job? = null
     private var timeoutJob: Job? = null
@@ -47,10 +49,25 @@ class CallManager private constructor(private val context: Context) {
     var currentPeerUuid: String? = null
         private set
 
-    fun isCurrentPeer(peerUuid: String): Boolean = currentPeerUuid == peerUuid
+    fun isCurrentPeer(peerUuid: String): Boolean = currentPeerUuid == peerUuid && _callState.value != CallState.IDLE && _callState.value != CallState.ENDED
 
     private var isCaller: Boolean = false
     private val pendingIceCandidates = mutableListOf<IceCandidate>()
+    private val pendingLocalIceCandidates = mutableListOf<IceCandidate>()
+    private var localDescriptionSignaled = false
+
+    private fun onCurrentConnection(connection: PeerConnection, action: () -> Unit) {
+        scope.launch {
+            if (peerConnection === connection && _callState.value != CallState.IDLE && _callState.value != CallState.ENDED) action()
+        }
+    }
+
+    private fun signalLocalDescription(description: SessionDescription, peer: String, offer: Boolean) {
+        if (offer) signalingHandler?.sendOffer(description, peer) else signalingHandler?.sendAnswer(description, peer)
+        localDescriptionSignaled = true
+        pendingLocalIceCandidates.forEach { signalingHandler?.sendIceCandidate(it, peer) }
+        pendingLocalIceCandidates.clear()
+    }
 
     init {
         initializeWebRTC()
@@ -134,6 +151,8 @@ class CallManager private constructor(private val context: Context) {
 
     private fun createPeerConnection() {
         val generation = ++peerGeneration
+        localDescriptionSignaled = false
+        pendingLocalIceCandidates.clear()
         val rtcConfig = PeerConnection.RTCConfiguration(buildIceServers()).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
@@ -143,7 +162,8 @@ class CallManager private constructor(private val context: Context) {
             override fun onSignalingChange(newState: PeerConnection.SignalingState?) {}
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
-                if (generation != peerGeneration || _callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
+                scope.launch {
+                if (generation != peerGeneration || _callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return@launch
                 Log.d("MsgAT-Call", "ICE Connection State: $newState")
                 when (newState) {
                     PeerConnection.IceConnectionState.CONNECTED,
@@ -187,6 +207,7 @@ class CallManager private constructor(private val context: Context) {
                     PeerConnection.IceConnectionState.FAILED -> endCall()
                     else -> {}
                 }
+                }
             }
 
             override fun onIceConnectionReceivingChange(receiving: Boolean) {}
@@ -194,9 +215,12 @@ class CallManager private constructor(private val context: Context) {
             override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState?) {}
 
             override fun onIceCandidate(candidate: IceCandidate?) {
-                if (generation != peerGeneration) return
-                candidate?.let {
-                    signalingHandler?.sendIceCandidate(it, currentPeerUuid ?: return)
+                scope.launch {
+                    if (generation != peerGeneration || !isCurrentPeer(currentPeerUuid ?: return@launch)) return@launch
+                    candidate?.let {
+                        if (localDescriptionSignaled) signalingHandler?.sendIceCandidate(it, currentPeerUuid ?: return@launch)
+                        else if (pendingLocalIceCandidates.size < 256) pendingLocalIceCandidates.add(it)
+                    }
                 }
             }
 
@@ -253,19 +277,21 @@ class CallManager private constructor(private val context: Context) {
 
                     createPeerConnection()
 
-                    peerConnection?.createOffer(object : SdpObserver {
-                        override fun onCreateSuccess(desc: SessionDescription?) {
-                            desc?.let { origDesc ->
-                                val optimizedSdp = OpusCodecHelper.modifySdpForOpus(origDesc.description, maxBitrateKbps = 32)
-                                val finalOffer = SessionDescription(origDesc.type, optimizedSdp)
-                                peerConnection?.setLocalDescription(this, finalOffer)
-                                signalingHandler?.sendOffer(finalOffer, peerUuid)
-                            }
+                    val connection = peerConnection ?: run { endCall(); return@withContext }
+                    connection.createOffer(object : SdpObserver {
+                        override fun onCreateSuccess(desc: SessionDescription?) = onCurrentConnection(connection) {
+                            if (desc == null) { endCall(); return@onCurrentConnection }
+                            val finalOffer = SessionDescription(desc.type, OpusCodecHelper.modifySdpForOpus(desc.description, maxBitrateKbps = 32))
+                            connection.setLocalDescription(object : SdpObserver {
+                                override fun onCreateSuccess(desc: SessionDescription?) {}
+                                override fun onSetSuccess() = onCurrentConnection(connection) { signalLocalDescription(finalOffer, peerUuid, true) }
+                                override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                                override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                            }, finalOffer)
                         }
-
                         override fun onSetSuccess() {}
-                        override fun onCreateFailure(s: String?) {}
-                        override fun onSetFailure(s: String?) {}
+                        override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                        override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
                     }, MediaConstraints())
                 }
             }
@@ -324,32 +350,36 @@ class CallManager private constructor(private val context: Context) {
         val optimizedOfferSdp = OpusCodecHelper.modifySdpForOpus(rawOffer.description, maxBitrateKbps = 32)
         val offer = SessionDescription(rawOffer.type, optimizedOfferSdp)
 
-        peerConnection?.setRemoteDescription(object : SdpObserver {
+        val connection = peerConnection ?: run { endCall(); return }
+        val peer = currentPeerUuid ?: run { endCall(); return }
+        connection.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
-            override fun onSetSuccess() {
-                pendingIceCandidates.forEach { peerConnection?.addIceCandidate(it) }
+            override fun onSetSuccess() = onCurrentConnection(connection) {
+                pendingIceCandidates.forEach { connection.addIceCandidate(it) }
                 pendingIceCandidates.clear()
-
-                peerConnection?.createAnswer(object : SdpObserver {
-                    override fun onCreateSuccess(answer: SessionDescription?) {
-                        answer?.let { origAnswer ->
-                            val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(origAnswer.description, maxBitrateKbps = 32)
-                            val finalAnswer = SessionDescription(origAnswer.type, optimizedAnswerSdp)
-                            peerConnection?.setLocalDescription(this, finalAnswer)
-                            signalingHandler?.sendAnswer(finalAnswer, currentPeerUuid ?: return)
-                        }
+                connection.createAnswer(object : SdpObserver {
+                    override fun onCreateSuccess(answer: SessionDescription?) = onCurrentConnection(connection) {
+                        if (answer == null) { endCall(); return@onCurrentConnection }
+                        val finalAnswer = SessionDescription(answer.type, OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32))
+                        connection.setLocalDescription(object : SdpObserver {
+                            override fun onCreateSuccess(desc: SessionDescription?) {}
+                            override fun onSetSuccess() = onCurrentConnection(connection) { signalLocalDescription(finalAnswer, peer, false) }
+                            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                        }, finalAnswer)
                     }
                     override fun onSetSuccess() {}
-                    override fun onCreateFailure(s: String?) {}
-                    override fun onSetFailure(s: String?) {}
+                    override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                    override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
                 }, MediaConstraints())
             }
-            override fun onCreateFailure(s: String?) {}
-            override fun onSetFailure(s: String?) {}
+            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
         }, offer)
     }
 
     fun rejectCall() {
+        if (_callState.value != CallState.INCOMING_RINGING) return
         currentPeerUuid?.let { signalingHandler?.sendReject(it) }
         resetState()
     }
@@ -358,20 +388,22 @@ class CallManager private constructor(private val context: Context) {
         if (!isCaller || _callState.value != CallState.OUTGOING_RINGING) return
         val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32)
         val finalAnswer = SessionDescription(answer.type, optimizedAnswerSdp)
-        peerConnection?.setRemoteDescription(object : SdpObserver {
-            override fun onCreateSuccess(desc: SessionDescription?) {}
-            override fun onSetSuccess() {
-                pendingIceCandidates.forEach { peerConnection?.addIceCandidate(it) }
-                pendingIceCandidates.clear()
-            }
-            override fun onCreateFailure(s: String?) {}
-            override fun onSetFailure(s: String?) {}
-        }, finalAnswer)
+        val connection = peerConnection ?: run { endCall(); return }
         _callState.value = CallState.CONNECTING
         startTimeoutTimer()
+        connection.setRemoteDescription(object : SdpObserver {
+            override fun onCreateSuccess(desc: SessionDescription?) {}
+            override fun onSetSuccess() = onCurrentConnection(connection) {
+                pendingIceCandidates.forEach { connection.addIceCandidate(it) }
+                pendingIceCandidates.clear()
+            }
+            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+        }, finalAnswer)
     }
 
     fun handleRemoteIceCandidate(candidate: IceCandidate) {
+        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED || candidate.sdpMLineIndex !in 0..255) return
         if (peerConnection?.remoteDescription == null) {
             if (pendingIceCandidates.size < 256) pendingIceCandidates.add(candidate)
         } else {
@@ -452,11 +484,14 @@ class CallManager private constructor(private val context: Context) {
 
         AudioDeviceManager.getInstance().endCallMode()
 
-        currentPeerUuid = null
         pendingIceCandidates.clear()
+        pendingLocalIceCandidates.clear()
+        localDescriptionSignaled = false
 
         scope.launch {
             delay(1500)
+            currentPeerUuid = null
+            isMinimized.value = false
             _callState.value = CallState.IDLE
             _callDurationSeconds.value = 0
             _rttMs.value = 0
@@ -480,7 +515,9 @@ class CallManager private constructor(private val context: Context) {
         rttJob = scope.launch {
             while (isActive && _callState.value == CallState.CONNECTED) {
                 delay(2000)
-                peerConnection?.getStats { report ->
+                val connection = peerConnection ?: break
+                val generation = peerGeneration
+                connection.getStats { report ->
                     var minRtt = Long.MAX_VALUE
                     report.statsMap.values.forEach { stat ->
                         if (stat.type == "candidate-pair" && stat.members["state"] == "succeeded") {
@@ -499,7 +536,7 @@ class CallManager private constructor(private val context: Context) {
                         }
                     }
                     if (minRtt != Long.MAX_VALUE) {
-                        _rttMs.value = minRtt
+                        scope.launch { if (generation == peerGeneration && _callState.value == CallState.CONNECTED) _rttMs.value = minRtt }
                     }
                 }
             }

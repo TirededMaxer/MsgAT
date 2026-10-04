@@ -3,275 +3,100 @@ import AppKit
 
 public struct CallOverlayView: View {
     @ObservedObject var callManager = CallManager.shared
-
-    @State private var isMinimized = false
-    @State private var savedOffset = CGSize(width: -30, height: 40)
+    @State private var savedPosition = CGPoint(x: 0, y: 100)
     @GestureState private var dragOffset = CGSize.zero
-
     public init() {}
-
-    private var durationString: String {
-        let mins = callManager.callDurationSeconds / 60
-        let secs = callManager.callDurationSeconds % 60
-        return String(format: "%02d:%02d", mins, secs)
-    }
-
+    private var durationString: String { String(format: "%02d:%02d", callManager.callDurationSeconds / 60, callManager.callDurationSeconds % 60) }
     public var body: some View {
-        ZStack {
+        GeometryReader { geometry in
             if callManager.callState != .idle {
-                if isMinimized {
-                    // Minimized Floating Box (80x80 rounded squircle)
-                    GeometryReader { geo in
-                        VStack(spacing: 4) {
-                            AvatarView(
-                                avatarPath: callManager.currentPeerAvatarPath,
-                                fallbackText: callManager.currentPeerAlias,
-                                size: 42,
-                                cornerRadius: 21
-                            )
-
-                            if callManager.callState == .connected {
-                                Text(durationString)
-                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
-                                    .foregroundColor(.green)
-                            } else {
-                                Text(callManager.callState == .incomingRinging ? "Ringing" : (callManager.callState == .outgoingRinging ? "Calling" : "Connecting"))
-                                    .font(.system(size: 10, weight: .medium))
-                                    .foregroundColor(.white)
-                            }
-                        }
-                        .frame(width: 82, height: 82)
-                        .background(Color(red: 0.1, green: 0.1, blue: 0.1).opacity(0.92))
-                        .cornerRadius(18)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 18)
-                                .stroke(Color.white.opacity(0.25), lineWidth: 1)
-                        )
-                        .shadow(color: Color.black.opacity(0.4), radius: 10, x: 0, y: 5)
-                        .offset(
-                            x: clampX(savedOffset.width + dragOffset.width, screenWidth: geo.size.width),
-                            y: clampY(savedOffset.height + dragOffset.height, screenHeight: geo.size.height)
-                        )
-                        .gesture(
-                            DragGesture()
-                                .updating($dragOffset) { value, state, _ in
-                                    state = value.translation
-                                }
-                                .onEnded { value in
-                                    let newX = clampX(savedOffset.width + value.translation.width, screenWidth: geo.size.width)
-                                    let newY = clampY(savedOffset.height + value.translation.height, screenHeight: geo.size.height)
-                                    savedOffset = CGSize(width: newX, height: newY)
-                                }
-                        )
-                        .onTapGesture {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                isMinimized = false
-                            }
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    }
-                    .transition(.asymmetric(
-                        insertion: .scale(scale: 0.85).combined(with: .opacity),
-                        removal: .scale(scale: 0.85).combined(with: .opacity)
-                    ))
+                ZStack(alignment: .topLeading) {
+                if callManager.isMinimized {
+                    VStack(spacing: 4) {
+                        AvatarView(avatarPath: callManager.currentPeerAvatarPath, fallbackText: callManager.currentPeerAlias, size: 40, cornerRadius: 20)
+                        Text(durationString).font(.system(size: 12)).foregroundColor(Color(red: 0, green: 1, blue: 0))
+                    }.frame(width: 80, height: 80).background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 16))
+                    .offset(x: clamped(savedPosition.x + dragOffset.width, max: geometry.size.width - 80),
+                            y: clamped(savedPosition.y + dragOffset.height, max: geometry.size.height - 80))
+                    .gesture(DragGesture().updating($dragOffset) { value, state, _ in state = value.translation }
+                        .onEnded { value in
+                            let x = clamped(savedPosition.x + value.translation.width, max: geometry.size.width - 80)
+                            savedPosition.x = x + 40 > geometry.size.width / 2 ? max(0, geometry.size.width - 80) : 0
+                            savedPosition.y = clamped(savedPosition.y + value.translation.height, max: geometry.size.height - 80)
+                        })
+                    .onTapGesture { callManager.isMinimized = false }
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 } else {
-                    // Fullscreen Call Screen matching Android 0xFF2C2C2C background
-                    ZStack {
-                        Color(red: 0.17, green: 0.17, blue: 0.17) // 0xFF2C2C2C
-                            .ignoresSafeArea()
-
+                    ZStack(alignment: .top) {
+                        Color(white: 44/255).ignoresSafeArea()
                         VStack(spacing: 0) {
-                            // Top Header Bar
-                            HStack {
-                                Button(action: {
-                                    withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
-                                        isMinimized = true
-                                    }
-                                }) {
-                                    Image(systemName: "chevron.down")
-                                        .font(.system(size: 18, weight: .bold))
-                                        .foregroundColor(.white)
-                                        .padding(12)
-                                        .background(Color.white.opacity(0.12))
-                                        .clipShape(Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .help("Minimize to floating box")
-
-                                Spacer()
-
-                                if callManager.callState == .connected {
-                                    HStack(spacing: 6) {
-                                        Circle()
-                                            .fill(callManager.rttMs == 0 ? Color.gray : (callManager.rttMs < 150 ? Color.green : (callManager.rttMs < 300 ? Color.yellow : Color.red)))
-                                            .frame(width: 8, height: 8)
-                                        Text(callManager.rttMs > 0 ? "\(callManager.rttMs)ms" : "—")
-                                            .font(.system(size: 12, weight: .medium, design: .monospaced))
-                                            .foregroundColor(.white.opacity(0.8))
-                                    }
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 6)
-                                    .background(Color.black.opacity(0.35))
-                                    .cornerRadius(12)
-                                }
-                            }
-                            .padding(.horizontal, 24)
-                            .padding(.top, 20)
-
-                            Spacer()
-
-                            // Center Avatar & Info
-                            VStack(spacing: 16) {
-                                AvatarView(
-                                    avatarPath: callManager.currentPeerAvatarPath,
-                                    fallbackText: callManager.currentPeerAlias,
-                                    size: 120,
-                                    cornerRadius: 60
-                                )
-                                .overlay(
-                                    Circle()
-                                        .stroke(Color.white.opacity(0.2), lineWidth: 3)
-                                )
-                                .shadow(color: Color.black.opacity(0.35), radius: 14)
-
-                                Text(callManager.currentPeerAlias)
-                                    .font(.system(size: 28, weight: .bold))
-                                    .foregroundColor(.white)
-
-                                Text(statusText)
-                                    .font(.system(size: 18, weight: .medium))
-                                    .foregroundColor(statusColor)
-                            }
-
-                            Spacer()
-
-                            // Bottom Actions
+                            Spacer().frame(height: min(100, max(24, (geometry.size.height - 440) / 2)))
+                            AvatarView(avatarPath: callManager.currentPeerAvatarPath, fallbackText: callManager.currentPeerAlias, size: 120, cornerRadius: 60)
+                            Text(callManager.currentPeerAlias).font(.system(size: 28)).foregroundColor(.white).padding(.top, 24)
+                            Text(statusText).font(.system(size: callManager.callState == .incomingRinging ? 16 : 18))
+                                .foregroundColor(callManager.callState == .ended ? .red : callManager.callState == .incomingRinging ? .gray : Color(white: 192/255))
+                                .padding(.top, 8)
+                            Spacer(minLength: 16)
                             if callManager.callState == .incomingRinging {
-                                // Incoming Call: Decline (Red) / Accept (Green 0xFF4CAF50)
-                                HStack(spacing: 80) {
+                                HStack {
+                                    Spacer()
                                     VStack(spacing: 8) {
-                                        Button(action: {
-                                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                                callManager.rejectCall()
-                                            }
-                                        }) {
-                                            Image(systemName: "phone.down.fill")
-                                                .font(.system(size: 28))
-                                                .foregroundColor(.white)
-                                                .frame(width: 72, height: 72)
-                                                .background(Color.red)
-                                                .clipShape(Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        Text("Decline")
-                                            .font(.caption)
-                                            .foregroundColor(.white)
+                                        callButton("phone.down.fill", label: "Reject", size: 72, active: false, color: .red) { callManager.rejectCall() }
+                                        Text("Decline").foregroundColor(.white).font(.system(size: 16))
                                     }
-
+                                    Spacer()
                                     VStack(spacing: 8) {
-                                        Button(action: {
-                                            withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                                callManager.acceptCall()
-                                            }
-                                        }) {
-                                            Image(systemName: "phone.fill")
-                                                .font(.system(size: 28))
-                                                .foregroundColor(.white)
-                                                .frame(width: 72, height: 72)
-                                                .background(Color(red: 0.3, green: 0.69, blue: 0.31)) // 0xFF4CAF50
-                                                .clipShape(Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        Text("Accept")
-                                            .font(.caption)
-                                            .foregroundColor(.white)
+                                        callButton("phone.fill", label: "Accept", size: 72, active: false, color: Color(red: 76/255, green: 175/255, blue: 80/255)) { callManager.acceptCall() }
+                                        Text("Accept").foregroundColor(.white).font(.system(size: 16))
                                     }
+                                    Spacer()
                                 }
-                                .padding(.bottom, 60)
                             } else {
-                                // Desktop audio output follows the system-selected device.
-                                VStack(spacing: 30) {
-                                    HStack {
-                                        Button(action: { callManager.toggleMute() }) {
-                                            Image(systemName: callManager.isMuted ? "mic.slash.fill" : "mic.fill")
-                                                .font(.system(size: 24))
-                                                .foregroundColor(callManager.isMuted ? .black : .white)
-                                                .frame(width: 64, height: 64)
-                                                .background(callManager.isMuted ? Color.white : Color.white.opacity(0.2))
-                                                .clipShape(Circle())
-                                        }
-                                        .buttonStyle(.plain)
-                                        .help(callManager.isMuted ? "Unmute" : "Mute")
-
-                                    }
-
-                                    Button(action: {
-                                        withAnimation(.spring(response: 0.4, dampingFraction: 0.85)) {
-                                            callManager.endCall()
-                                        }
-                                    }) {
-                                        Image(systemName: "phone.down.fill")
-                                            .font(.system(size: 28))
-                                            .foregroundColor(.white)
-                                            .frame(width: 72, height: 72)
-                                            .background(Color.red)
-                                            .clipShape(Circle())
-                                    }
-                                    .buttonStyle(.plain)
-                                    .help("End Call")
+                                HStack {
+                                    Spacer()
+                                    callButton(callManager.isMuted ? "mic.slash.fill" : "mic.fill", label: callManager.isMuted ? "Unmute" : "Mute", size: 64, active: callManager.isMuted) { callManager.toggleMute() }
+                                    Spacer()
+                                    callButton("speaker.wave.2.fill", label: callManager.isSpeakerOn ? "Turn speaker off" : "Turn speaker on", size: 64, active: callManager.isSpeakerOn) { callManager.toggleSpeaker() }
+                                    Spacer()
                                 }
-                                .padding(.bottom, 50)
+                                callButton("phone.down.fill", label: "End Call", size: 72, active: false, color: .red) { callManager.endCall() }.padding(.top, 40)
                             }
+                            Spacer().frame(height: 60)
+                        }
+                        if callManager.callState != .incomingRinging {
+                            HStack {
+                                Button {
+                                    savedPosition = CGPoint(x: max(0, geometry.size.width - 80), y: min(100, max(0, geometry.size.height - 80)))
+                                    callManager.isMinimized = true
+                                } label: { Image(systemName: "chevron.down").font(.system(size: 32)).foregroundColor(.white).frame(width: 48, height: 48) }
+                                .buttonStyle(.plain).help("Minimize")
+                                Spacer()
+                                if callManager.callState == .connected {
+                                    HStack(spacing: 4) {
+                                        Circle().fill(qualityColor).frame(width: 8, height: 8)
+                                        Text(callManager.rttMs > 0 ? "\(callManager.rttMs)ms" : "—").font(.system(size: 12)).foregroundColor(.white)
+                                    }
+                                }
+                            }.padding(16)
                         }
                     }
-                    .transition(.asymmetric(
-                        insertion: .move(edge: .bottom).combined(with: .opacity),
-                        removal: .move(edge: .bottom).combined(with: .opacity)
-                    ))
+                    .transition(.opacity.combined(with: .scale(scale: 0.8)))
                 }
+                }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .animation(.spring(response: 0.45, dampingFraction: 0.85), value: callManager.callState)
-        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isMinimized)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: callManager.isMinimized)
+        .animation(.easeInOut(duration: 0.2), value: callManager.callState != .idle)
+        .onChange(of: callManager.callState) { state in if state == .idle || state == .incomingRinging { callManager.isMinimized = false } }
     }
-
-    private var statusText: String {
-        switch callManager.callState {
-        case .outgoingRinging:
-            return "Calling..."
-        case .incomingRinging:
-            return "Incoming Voice Call..."
-        case .connecting:
-            return "Connecting..."
-        case .connected:
-            return durationString
-        case .ended:
-            return "Call Ended"
-        case .idle:
-            return ""
-        }
+    private func callButton(_ icon: String, label: String, size: CGFloat, active: Bool, color: Color? = nil, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: icon).font(.system(size: size / 2)).foregroundColor(active ? .black : .white)
+                .frame(width: size, height: size).background(color ?? (active ? Color.white : Color.white.opacity(0.2)), in: Circle())
+        }.buttonStyle(.plain).help(label).accessibilityLabel(label)
     }
-
-    private var statusColor: Color {
-        switch callManager.callState {
-        case .connected:
-            return Color(red: 0.3, green: 0.85, blue: 0.4)
-        case .ended:
-            return .red
-        default:
-            return .white.opacity(0.8)
-        }
-    }
-
-    private func clampX(_ x: CGFloat, screenWidth: CGFloat) -> CGFloat {
-        let minX = -(screenWidth - 100)
-        let maxX: CGFloat = 0
-        return min(max(x, minX), maxX)
-    }
-
-    private func clampY(_ y: CGFloat, screenHeight: CGFloat) -> CGFloat {
-        let minY: CGFloat = 20
-        let maxY = max(20, screenHeight - 120)
-        return min(max(y, minY), maxY)
-    }
+    private var qualityColor: Color { callManager.rttMs <= 0 ? .gray : callManager.rttMs < 150 ? Color(red: 0, green: 1, blue: 0) : callManager.rttMs < 300 ? .yellow : .red }
+    private var statusText: String { callManager.callState == .connected ? durationString : callManager.callState == .idle ? "" : callManager.callState.rawValue }
+    private func clamped(_ value: CGFloat, max maximum: CGFloat) -> CGFloat { min(max(0, value), max(0, maximum)) }
 }

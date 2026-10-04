@@ -11,7 +11,7 @@
     <RootNamespace>MsgAT.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\icon.ico</ApplicationIcon>
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <SelfContained>true</SelfContained>
     <PublishSingleFile>true</PublishSingleFile>
@@ -24,8 +24,11 @@
   <ItemGroup>
     <ProjectReference Include="..\MsgAT.Windows.Core\MsgAT.Windows.Core.csproj" />
     <PackageReference Include="Microsoft.Web.WebView2" />
+    <PackageReference Include="SkiaSharp" />
   </ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="Assets\webrtc-host.html" LogicalName="MsgAT.Windows.Assets.webrtc-host.html" />
+    <EmbeddedResource Include="Assets\Licenses\SkiaSharp-LICENSE.txt" />
+    <EmbeddedResource Include="Assets\Licenses\SkiaSharp-THIRD-PARTY-NOTICES.txt" />
   </ItemGroup>
 </Project>

@@ -60,10 +60,48 @@ public class DatabaseManager {
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_packet ON offline_messages(target_mailbox, packet_hash)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_mailbox ON offline_messages(target_mailbox)");
             stmt.execute("CREATE INDEX IF NOT EXISTS idx_offline_created ON offline_messages(created_at)");
+            initializeMailboxUsage(conn);
 
         } catch (SQLException e) {
             throw new IllegalStateException("Offline DB init failed", e);
         }
+    }
+
+    // Transactional counters avoid rescanning every existing attachment chunk on each insert.
+    private static void initializeMailboxUsage(Connection connection) throws SQLException {
+        connection.setAutoCommit(false);
+        try (Statement statement = connection.createStatement()) {
+            boolean exists;
+            try (var result = statement.executeQuery("SELECT 1 FROM sqlite_master WHERE type='table' AND name='offline_mailbox_usage'")) {
+                exists = result.next();
+            }
+            statement.execute("CREATE TABLE IF NOT EXISTS offline_mailbox_usage (target_mailbox TEXT PRIMARY KEY, stored_bytes INTEGER NOT NULL)");
+            if (!exists) statement.executeUpdate("INSERT INTO offline_mailbox_usage SELECT target_mailbox, SUM(length(packet_data)) FROM offline_messages GROUP BY target_mailbox");
+            statement.execute("""
+                    CREATE TRIGGER IF NOT EXISTS offline_usage_insert AFTER INSERT ON offline_messages BEGIN
+                      INSERT INTO offline_mailbox_usage VALUES (NEW.target_mailbox, length(NEW.packet_data))
+                      ON CONFLICT(target_mailbox) DO UPDATE SET stored_bytes=stored_bytes+length(NEW.packet_data);
+                    END
+                    """);
+            statement.execute("""
+                    CREATE TRIGGER IF NOT EXISTS offline_usage_delete AFTER DELETE ON offline_messages BEGIN
+                      UPDATE offline_mailbox_usage SET stored_bytes=stored_bytes-length(OLD.packet_data) WHERE target_mailbox=OLD.target_mailbox;
+                      DELETE FROM offline_mailbox_usage WHERE target_mailbox=OLD.target_mailbox AND stored_bytes<=0;
+                    END
+                    """);
+            statement.execute("""
+                    CREATE TRIGGER IF NOT EXISTS offline_usage_update AFTER UPDATE OF packet_data,target_mailbox ON offline_messages BEGIN
+                      UPDATE offline_mailbox_usage SET stored_bytes=stored_bytes-length(OLD.packet_data) WHERE target_mailbox=OLD.target_mailbox;
+                      DELETE FROM offline_mailbox_usage WHERE target_mailbox=OLD.target_mailbox AND stored_bytes<=0;
+                      INSERT INTO offline_mailbox_usage VALUES (NEW.target_mailbox, length(NEW.packet_data))
+                      ON CONFLICT(target_mailbox) DO UPDATE SET stored_bytes=stored_bytes+length(NEW.packet_data);
+                    END
+                    """);
+            connection.commit();
+        } catch (SQLException error) {
+            connection.rollback();
+            throw error;
+        } finally { connection.setAutoCommit(true); }
     }
 
     private static boolean hasColumn(Connection connection, String table, String column) throws SQLException {
@@ -194,7 +232,10 @@ public class DatabaseManager {
     public static void cleanupOldOfflineMessages() {
         try (Connection conn = getOfflineConnection();
              Statement stmt = conn.createStatement()) {
-            stmt.executeUpdate("DELETE FROM offline_messages WHERE created_at < datetime('now', '-3 days')");
+            int deleted;
+            do {
+                deleted = stmt.executeUpdate("DELETE FROM offline_messages WHERE id IN (SELECT id FROM offline_messages WHERE created_at < datetime('now', '-3 days') LIMIT 1000)");
+            } while (deleted == 1000 && !Thread.currentThread().isInterrupted());
         } catch (SQLException e) {
             log.error("Failed to clean up old offline messages", e);
         }

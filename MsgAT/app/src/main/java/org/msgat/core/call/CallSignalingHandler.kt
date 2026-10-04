@@ -25,6 +25,15 @@ class CallSignalingHandler private constructor(context: Context) {
     private val msgDao = MsgATApp.instance.db.msgDao()
     private val callManager = CallManager.getInstance()
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val outgoingSignals = kotlinx.coroutines.channels.Channel<suspend () -> Unit>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+
+    init {
+        scope.launch {
+            for (send in outgoingSignals) {
+                try { send() } catch (error: Exception) { Log.e("MsgAT-Call", "Could not send call signaling", error) }
+            }
+        }
+    }
 
     var pendingOffer: SessionDescription? = null
         private set
@@ -39,8 +48,8 @@ class CallSignalingHandler private constructor(context: Context) {
     }
 
     private fun sendSignalingPacket(peerUuid: String, type: Byte, payload: JSONObject) {
-        scope.launch {
-            val peerPubKey = getPeerPublicKey(peerUuid) ?: return@launch
+        outgoingSignals.trySend {
+            val peerPubKey = getPeerPublicKey(peerUuid) ?: return@trySend
 
             payload.put("senderUuid", securePrefs.myUuid)
             val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
@@ -173,7 +182,7 @@ class CallSignalingHandler private constructor(context: Context) {
 
             if (peerPublicKeyBase64.isNotEmpty()) {
                 val msgId = java.util.UUID.randomUUID().toString()
-                val chatMsg = org.msgat.data.db.ChatMessage(msgId, peerUuid, true, text, "txt", System.currentTimeMillis())
+                val chatMsg = org.msgat.data.db.ChatMessage(msgId, peerUuid, true, text, "txt", System.currentTimeMillis(), isRead = true, status = 0)
                 db.insertMessage(chatMsg)
 
                 val payload = org.msgat.model.MessagePayload(
@@ -183,7 +192,7 @@ class CallSignalingHandler private constructor(context: Context) {
                     index = 0,
                     ext = "txt",
                     data = android.util.Base64.encodeToString(text.toByteArray(), android.util.Base64.NO_WRAP),
-                    timestamp = System.currentTimeMillis()
+                    timestamp = chatMsg.timestamp
                 )
                 val jsonBytes = payload.toJson().toByteArray(Charsets.UTF_8)
                 val iv = ByteArray(16)
@@ -200,7 +209,7 @@ class CallSignalingHandler private constructor(context: Context) {
                     encryptedData = pair.first,
                     authTag = pair.second
                 )
-                MsgATApp.instance.nettyClient.sendPacket(packet)
+                if (MsgATApp.instance.nettyClient.sendPacket(packet)) db.updateMessageStatus(msgId, 1)
             }
         }
     }

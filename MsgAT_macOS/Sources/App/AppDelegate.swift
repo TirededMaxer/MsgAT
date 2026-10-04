@@ -36,4 +36,13 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     public func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return false
     }
+
+    public func applicationDidBecomeActive(_ notification: Notification) {
+        NotificationHelper.shared.clearMessageNotifications()
+    }
+
+    public func applicationWillTerminate(_ notification: Notification) {
+        CallManager.shared.endCall()
+        CallManager.shared.restoreAudioOutput()
+    }
 }

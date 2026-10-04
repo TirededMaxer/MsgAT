@@ -10,10 +10,20 @@ public class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
-    private static final int DEFAULT_PORT = 34478;
-
     // Entry point of the application; initializes database, routing, security monitors, and starts the server.
     public static void main(String[] args) {
+        try {
+            if (args.length != 0) throw new IllegalArgumentException("Set port in server-config.json beside the JAR; no positional arguments are accepted.");
+            var configuration = org.msgat.console.core.ServerConfiguration.load();
+            log.info("Configuration: {} (port {})", configuration.file(), configuration.port());
+            run(configuration.port());
+        } catch (Exception error) {
+            log.error("Failed to start server: {}", error.getMessage(), error);
+            System.exit(1);
+        }
+    }
+
+    private static void run(int port) throws Exception {
         org.msgat.console.core.CryptoUtils.validateConfiguration();
         org.msgat.console.db.DatabaseManager.init();
 
@@ -33,16 +43,12 @@ public class Main {
         }));
 
         try {
-            int port = args.length > 0 ? Integer.parseInt(args[0]) : DEFAULT_PORT;
-
             GhostNettyServer server = new GhostNettyServer(port, routingTable);
             server.start();
 
-        } catch (Exception e) {
-            log.error("Failed to start server", e);
+        } finally {
             scheduler.shutdownNow();
             routingTable.closeConnections();
-            System.exit(1);
         }
     }
 }

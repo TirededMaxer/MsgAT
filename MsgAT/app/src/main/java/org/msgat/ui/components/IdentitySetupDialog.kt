@@ -105,7 +105,8 @@ fun IdentitySetupDialog(
                 label = { Text("Nickname", color = Color.Gray) },
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    unfocusedTextColor = Color.White,
+                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
                 ),
                 modifier = Modifier.fillMaxWidth()
             )

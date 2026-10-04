@@ -4,6 +4,8 @@ import AppKit
 
 public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegate, Sendable {
     public static let shared = NotificationHelper()
+    @MainActor public static var openMainWindow: (() -> Void)?
+    @MainActor public static weak var mainWindow: NSWindow?
 
     private override init() {
         super.init()
@@ -24,7 +26,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
 
     public func showMessageNotification(senderUuid: String, senderAlias: String, ext: String, content: String) {
         let title = (!senderAlias.isEmpty && senderAlias != "Unknown") ? senderAlias : String(senderUuid.prefix(8))
-        let body = ext == "txt" ? content : "[\(ext.uppercased())]"
+        let body = ext == "txt" ? content : "[Media]"
 
         let notificationContent = UNMutableNotificationContent()
         notificationContent.title = title
@@ -33,7 +35,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         notificationContent.userInfo = ["senderUuid": senderUuid, "action": "open_chat"]
 
         let request = UNNotificationRequest(
-            identifier: "msg_\(UUID().uuidString)",
+            identifier: "msg_\(senderUuid)",
             content: notificationContent,
             trigger: nil
         )
@@ -49,7 +51,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
 
         let notificationContent = UNMutableNotificationContent()
         notificationContent.title = title
-        notificationContent.body = "Incoming Voice Call..."
+        notificationContent.body = "Incoming call"
         notificationContent.sound = .default
         notificationContent.userInfo = ["peerUuid": peerUuid, "action": "show_call"]
 
@@ -65,14 +67,33 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["call_\(peerUuid)"])
     }
 
+    public func clearMessageNotifications() {
+        let center = UNUserNotificationCenter.current()
+        center.getDeliveredNotifications { notifications in
+            let identifiers = notifications.map { $0.request.identifier }.filter { $0.hasPrefix("msg_") }
+            Task { @MainActor in
+                guard NSApp.isActive else { return }
+                center.removeDeliveredNotifications(withIdentifiers: identifiers)
+            }
+        }
+        center.getPendingNotificationRequests { requests in
+            let identifiers = requests.map(\.identifier).filter { $0.hasPrefix("msg_") }
+            Task { @MainActor in
+                guard NSApp.isActive else { return }
+                center.removePendingNotificationRequests(withIdentifiers: identifiers)
+            }
+        }
+    }
+
     // MARK: - UNUserNotificationCenterDelegate
     public func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
-        // Deliver banner and sound, strictly NO badge
-        completionHandler([.banner, .sound])
+        // Messages received in the foreground are already visible in the client.
+        if notification.request.identifier.hasPrefix("msg_") { completionHandler([]) }
+        else { completionHandler([.banner, .sound]) }
     }
 
     public func userNotificationCenter(
@@ -81,8 +102,10 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         DispatchQueue.main.async {
+            Self.openMainWindow?()
             NSApp.activate(ignoringOtherApps: true)
             NSApp.dockTile.badgeLabel = nil
+            self.clearMessageNotifications()
         }
         completionHandler()
     }

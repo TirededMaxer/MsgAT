@@ -15,6 +15,8 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     private static final Logger log = LoggerFactory.getLogger(AuthChallengeHandler.class);
     private final BlindRoutingTable routingTable;
 
+    private static final java.security.SecureRandom RANDOM = new java.security.SecureRandom();
+    private long replayCursor;
     private boolean isAuthenticated = false;
     private byte[] currentChallengeNonce = null;
     private String pendingMailboxId = null;
@@ -27,30 +29,32 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     // Intercepts packets for authentication; passes through if already authenticated, otherwise handles challenge-response.
     @Override
     protected void channelRead0(ChannelHandlerContext ctx, GhostPacket packet) {
-        if (isAuthenticated) {
-            ctx.fireChannelRead(packet);
-            return;
-        }
+        try {
+            if (isAuthenticated) {
+                ctx.fireChannelRead(packet);
+                return;
+            }
 
-        if (packet.getType() == GhostPacket.TYPE_AUTH_REQ) {
-            handleAuthRequest(ctx, packet);
-        } else if (packet.getType() == GhostPacket.TYPE_AUTH_RESP) {
-            handleAuthResponse(ctx, packet);
-        } else {
-            ctx.close();
-        }
+            if (packet.getType() == GhostPacket.TYPE_AUTH_REQ) {
+                handleAuthRequest(ctx, packet);
+            } else if (packet.getType() == GhostPacket.TYPE_AUTH_RESP) {
+                handleAuthResponse(ctx, packet);
+            } else {
+                ctx.close();
+            }
+        } finally { ApplicationQueueGuard.completed(ctx.channel()); }
     }
 
     // Handles incoming authentication request by generating and sending a challenge nonce to the client.
     private void handleAuthRequest(ChannelHandlerContext ctx, GhostPacket packet) {
         this.pendingMailboxId = packet.getTargetMailboxId();
         this.currentChallengeNonce = new byte[16];
-        new java.security.SecureRandom().nextBytes(currentChallengeNonce);
+        RANDOM.nextBytes(currentChallengeNonce);
 
         GhostPacket challenge = new GhostPacket(
                 GhostPacket.TYPE_AUTH_CHAL, this.pendingMailboxId, this.currentChallengeNonce, null, null
         );
-        ctx.writeAndFlush(challenge);
+        PacketWriter.write(ctx.channel(), challenge, true);
     }
 
     // Verifies the client's signed authentication response; if valid, registers the client and pushes offline messages.
@@ -72,20 +76,48 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
                 routingTable.register(this.pendingMailboxId, ctx.channel());
                 ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).set(this.pendingMailboxId);
 
-                var offlineMsgs = routingTable.retrieveOfflineMessages(this.pendingMailboxId);
-                if (offlineMsgs != null && !offlineMsgs.isEmpty()) {
-                    for (GhostPacket msg : offlineMsgs) {
-                        ctx.writeAndFlush(msg);
-                    }
-                }
-                ctx.writeAndFlush(new GhostPacket(GhostPacket.TYPE_OFFLINE_END, this.pendingMailboxId,
-                        new byte[16], new byte[0], new byte[16]));
+                routingTable.beginReplay(this.pendingMailboxId);
+                // Cleanup is independent of a potentially saturated application executor.
+                String mailbox = this.pendingMailboxId;
+                ctx.channel().closeFuture().addListener(done -> routingTable.remove(mailbox, ctx.channel()));
             }
+            currentChallengeNonce = null;
+            drainOffline(ctx);
         } else {
             ctx.close();
             return;
         }
 
+    }
+
+    // Read at most 8 packets, flush together, and wait for socket completion before reading more.
+    private void drainOffline(ChannelHandlerContext ctx) {
+        if (!ctx.channel().isActive() || routingTable.getChannel(pendingMailboxId) != ctx.channel()) return;
+        try {
+            org.msgat.console.routing.BlindRoutingTable.OfflineBatch batch;
+            synchronized (routingTable) {
+                if (!ctx.channel().isActive() || routingTable.getChannel(pendingMailboxId) != ctx.channel()) return;
+                batch = routingTable.retrieveOfflineBatch(pendingMailboxId, replayCursor);
+                if (batch.packets().isEmpty()) {
+                    routingTable.finishReplay(pendingMailboxId);
+                    PacketWriter.write(ctx.channel(), new GhostPacket(GhostPacket.TYPE_OFFLINE_END,
+                            pendingMailboxId, new byte[16], new byte[0], new byte[16]), true);
+                    return;
+                }
+            }
+            replayCursor = batch.lastId();
+            io.netty.channel.ChannelFuture lastWrite = null;
+            for (GhostPacket message : batch.packets()) lastWrite = PacketWriter.write(ctx.channel(), message, false);
+            ctx.channel().flush();
+            lastWrite.addListener(done -> {
+                if (!done.isSuccess()) { ctx.close(); return; }
+                try { ctx.executor().execute(() -> drainOffline(ctx)); }
+                catch (java.util.concurrent.RejectedExecutionException overloaded) { ctx.close(); }
+            });
+        } catch (Exception error) {
+            log.warn("Offline replay failed: {}", error.getMessage());
+            ctx.close();
+        }
     }
 
     // Validates an Ed25519 signature against a public key and the original challenge nonce.

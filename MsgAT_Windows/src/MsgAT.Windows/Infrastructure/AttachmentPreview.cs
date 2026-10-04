@@ -1,7 +1,6 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using MsgAT.Windows.ViewModels;
 
 namespace MsgAT.Windows.Infrastructure;
@@ -45,17 +44,25 @@ public sealed class AttachmentPreview : Border
         CloseVideo();
         Child = null;
         if (!IsLoaded || Message is not { IsAttachment: true } message) { return; }
-        var fallback = new TextBlock { Text = message.DisplayContent, TextWrapping = TextWrapping.Wrap, MaxWidth = 360 };
+        var isImage = message.Extension is "jpg" or "jpeg" or "png" or "webp";
+        var placeholder = new Grid { Width = 250, Height = 200, Background = isImage ? Brushes.DarkGray : Brushes.Black };
+        if (!isImage)
+        {
+            var play = new Border { Width = 48, Height = 48, CornerRadius = new CornerRadius(24), Background = new SolidColorBrush(Color.FromArgb(128, 0, 0, 0)), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            play.Child = new TextBlock { Text = "▶", FontSize = 32, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            placeholder.Children.Add(play);
+        }
+        var fallback = placeholder;
         Child = fallback;
         if (!File.Exists(message.Content)) { return; }
-        if (message.Extension is "mp4" or "mov" or "webm")
+        if (!isImage)
         {
-            var panel = new Grid { Width = 280, Height = 180, Background = Brushes.Black, ClipToBounds = true };
+            var panel = new Grid { Width = 250, Height = 200, Background = Brushes.Black, ClipToBounds = true };
             var video = new MediaElement
             {
                 Source = new Uri(message.Content), LoadedBehavior = MediaState.Manual,
                 UnloadedBehavior = MediaState.Close, ScrubbingEnabled = true,
-                IsMuted = true, Stretch = Stretch.Uniform, IsHitTestVisible = false
+                IsMuted = true, Stretch = Stretch.UniformToFill, IsHitTestVisible = false
             };
             _video = video;
             video.MediaOpened += (_, _) => { video.Pause(); video.Position = TimeSpan.FromMilliseconds(100); };
@@ -66,36 +73,22 @@ public sealed class AttachmentPreview : Border
                 Child = fallback;
             };
             panel.Children.Add(video);
-            panel.Children.Add(new TextBlock
-            {
-                Text = "▶", FontSize = 30, Foreground = Brushes.White,
-                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
-                IsHitTestVisible = false
-            });
+            var play = new Border { Width = 48, Height = 48, CornerRadius = new CornerRadius(24), Background = new SolidColorBrush(Color.FromArgb(128, 0, 0, 0)), HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+            play.Child = new TextBlock { Text = "▶", FontSize = 32, Foreground = Brushes.White, HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center };
+            panel.Children.Add(play);
             Child = panel;
             video.Play();
             return;
         }
-        if (message.Extension is not ("jpg" or "jpeg" or "png" or "bmp" or "gif" or "webp")) { return; }
         try
         {
-            var bitmap = await Task.Run(() =>
-            {
-                var image = new BitmapImage();
-                image.BeginInit();
-                image.CacheOption = BitmapCacheOption.OnLoad;
-                image.DecodePixelWidth = 560;
-                image.UriSource = new Uri(message.Content);
-                image.EndInit();
-                image.Freeze();
-                return image;
-            });
+            var bitmap = await Task.Run(() => ImageDecoder.Load(message.Content, 560));
             if (generation != _generation || !IsLoaded) { return; }
-            Child = new Image { Source = bitmap, MaxWidth = 280, MaxHeight = 240, Stretch = Stretch.Uniform };
+            Child = new Image { Source = bitmap, Width = 250, Height = 200, Stretch = Stretch.UniformToFill };
         }
         catch (Exception error) when (error is IOException or NotSupportedException or InvalidOperationException or ArgumentException)
         {
-            // Unsupported codecs keep the attachment label and the same bounded click target.
+            // Keep the same fixed media surface if decoding fails.
             if (generation == _generation) { Child = fallback; }
         }
     }

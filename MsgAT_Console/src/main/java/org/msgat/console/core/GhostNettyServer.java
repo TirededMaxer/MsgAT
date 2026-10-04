@@ -19,18 +19,26 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
     private static final Logger log = LoggerFactory.getLogger(GhostNettyServer.class);
 
     // Starts the Netty server, sets up dynamic TLS, configures the channel pipeline, and binds to the specified port.
+    @SuppressWarnings("deprecation") // Netty 4.2 retains ordered per-channel executor groups; keep DB work off I/O threads.
     public void start() throws Exception {
         final SslContext sslCtx = createSslContext();
 
         EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
-        EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(NioIoHandler.newFactory());
+        EventLoopGroup workerGroup = new MultiThreadIoEventLoopGroup(Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors())), NioIoHandler.newFactory());
+
+        var applicationGroup = new io.netty.util.concurrent.DefaultEventExecutorGroup(
+                Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())),
+                new io.netty.util.concurrent.DefaultThreadFactory("msgat-application"), 64,
+                io.netty.util.concurrent.RejectedExecutionHandlers.reject());
 
         try {
             ServerBootstrap b = new ServerBootstrap();
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .childOption(ChannelOption.SO_KEEPALIVE, true)
+                    .childOption(ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 64 * 1024))
                     .childOption(ChannelOption.TCP_NODELAY, true)
+                    .childOption(ChannelOption.WRITE_BUFFER_WATER_MARK, new WriteBufferWaterMark(1024 * 1024, 4 * 1024 * 1024))
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(SocketChannel ch) {
@@ -40,8 +48,10 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
                             p.addLast(new io.netty.handler.timeout.ReadTimeoutHandler(300));
                             p.addLast(sslCtx.newHandler(ch.alloc()));
                             p.addLast(new GhostPacketCodec());
-                            p.addLast(new AuthChallengeHandler(routingTable));
-                            p.addLast(new RelayHandler(routingTable));
+                            p.addLast(new ApplicationQueueGuard());
+                            // Both handlers share the same ordered application executor for this channel.
+                            p.addLast(applicationGroup, "authentication", new AuthChallengeHandler(routingTable));
+                            p.addLast(applicationGroup, "relay", new RelayHandler(routingTable));
                         }
                     });
 
@@ -49,6 +59,7 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
             log.info("Server started on port: {}", port);
             f.channel().closeFuture().sync();
         } finally {
+            applicationGroup.shutdownGracefully();
             workerGroup.shutdownGracefully();
             bossGroup.shutdownGracefully();
         }

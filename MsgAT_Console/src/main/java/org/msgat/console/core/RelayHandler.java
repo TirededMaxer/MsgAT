@@ -161,7 +161,7 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
 
                 byte[] payload = respJson.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8);
                 GhostPacket resp = new GhostPacket(GhostPacket.TYPE_PROFILE_RESP, senderMailbox, new byte[16], payload, new byte[16]);
-                ctx.writeAndFlush(resp);
+                PacketWriter.write(ctx.channel(), resp, true);
             }
         } catch (Exception e) {
             log.error("[PROFILE] Get profile parse failed", e);
@@ -180,7 +180,8 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
             if (!org.msgat.console.db.DatabaseManager.doesMailboxExist(targetMailbox)) return;
             routingTable.storeOfflineMessage(targetMailbox, packet);
             Channel targetChannel = routingTable.getChannel(targetMailbox);
-            if (targetChannel != null && targetChannel.isActive()) targetChannel.writeAndFlush(packet);
+            if (targetChannel != null && targetChannel.isActive() && !routingTable.isReplaying(targetMailbox))
+                PacketWriter.write(targetChannel, packet, true);
         }
     }
 
@@ -188,8 +189,7 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
     private void deliverOnly(String targetMailbox, GhostPacket packet) {
         Channel targetChannel = routingTable.getChannel(targetMailbox);
         if (targetChannel != null && targetChannel.isActive()) {
-            GhostPacket packetCopy = new GhostPacket(packet.getType(), packet.getTargetMailboxId(), packet.getNonceOrIv(), packet.getEncryptedData(), packet.getAuthTag());
-            targetChannel.writeAndFlush(packetCopy);
+            PacketWriter.write(targetChannel, packet, true);
         } else {
             log.debug("[RELAY] Target offline, dropping real-time packet type: {}", packet.getType());
         }
@@ -197,7 +197,7 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
 
     // Echoes heartbeat packets back to the client.
     private void handleHeartbeat(ChannelHandlerContext ctx, GhostPacket packet) {
-        ctx.writeAndFlush(packet);
+        PacketWriter.write(ctx.channel(), packet, true);
     }
 
     // Handles message acknowledgement by clearing stored offline messages for the given mailbox.
@@ -215,8 +215,8 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
                 routingTable.remove(senderMailbox, ctx.channel());
             }
         }
-        ctx.writeAndFlush(new GhostPacket(GhostPacket.TYPE_DELETE_ACCOUNT, senderMailbox,
-                packet.getNonceOrIv(), new byte[0], new byte[16]))
+        PacketWriter.write(ctx.channel(), new GhostPacket(GhostPacket.TYPE_DELETE_ACCOUNT, senderMailbox,
+                packet.getNonceOrIv(), new byte[0], new byte[16]), true)
                 .addListener(io.netty.channel.ChannelFutureListener.CLOSE);
     }
 

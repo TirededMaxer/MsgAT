@@ -13,8 +13,8 @@ android {
         applicationId = "org.msgat"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "1.5"
+        versionCode = 11
+        versionName = "1.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

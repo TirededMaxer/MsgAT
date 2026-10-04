@@ -19,7 +19,7 @@ public partial class MainWindow : Window
 {
     private AppServices? _services;
     private MainViewModel? _viewModel;
-    private CallWindow? _callWindow;
+    private CallOverlay? _callWindow;
     private bool _allowClose;
     private bool _loadingOlderMessages;
     private bool _exiting;
@@ -28,6 +28,10 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        CommandManager.AddPreviewCanExecuteHandler(Composer, Composer_PreviewCanExecute);
+        CommandManager.AddPreviewExecutedHandler(Composer, Composer_PreviewExecuted);
+        LayoutGrid.SizeChanged += (_, args) =>
+            SidebarColumn.MaxWidth = Math.Clamp(args.NewSize.Width - 455, 260, 400);
         WindowAppearance.Apply(this);
         RestoreWindowPlacement();
         Activated += (_, _) => _viewModel?.MarkActiveConversationRead();
@@ -44,7 +48,7 @@ public partial class MainWindow : Window
             _initialization = AppServices.CreateAsync(Dispatcher, WebRtcView);
             _services = await _initialization;
             if (_exiting) { return; }
-            if (string.IsNullOrWhiteSpace(_services.Settings.Snapshot.Nickname))
+            if (string.IsNullOrWhiteSpace(_services.Settings.Snapshot.Nickname) || string.IsNullOrWhiteSpace(_services.Settings.Snapshot.AvatarPath))
             {
                 var setup = new IdentitySetupDialog { Owner = this };
                 if (setup.ShowDialog() != true)
@@ -52,18 +56,19 @@ public partial class MainWindow : Window
                     ((App)System.Windows.Application.Current).ExitApplication();
                     return;
                 }
-                var avatar = _services.Media.SaveAvatar(_services.Settings.MyUuid, AvatarProcessor.EncodeJpeg(setup.AvatarPath));
+                var avatar = _services.Media.SaveAvatar(_services.Settings.MyUuid, setup.AvatarData ?? AvatarProcessor.EncodeJpeg(setup.AvatarPath));
                 _services.Settings.SetInitialIdentity(setup.Nickname, avatar);
                 await _services.Messaging.SendProfileAsync();
             }
             if (_exiting) { return; }
             _viewModel = new MainViewModel(_services, Dispatcher);
-            _viewModel.ErrorRequested += (_, message) => MessageBox.Show(this, message, "MsgAT", MessageBoxButton.OK, MessageBoxImage.Warning);
+            _viewModel.ErrorRequested += (_, message) => TransientNotice.Show(this, message);
             _viewModel.InitialMessagesLoaded += (_, _) =>
                 Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(ScrollToLatest));
             _viewModel.LatestMessagesChanged += (_, _) => ScrollToLatestIfNearBottom();
             DataContext = _viewModel;
             _services.Calls.ShowRequested += Calls_ShowRequested;
+            _services.Calls.NoticeRequested += (_, message) => TransientNotice.Show(this, message);
         }
         catch (Exception exception)
         {
@@ -89,7 +94,7 @@ public partial class MainWindow : Window
         _exiting = true;
         IsEnabled = false;
         _viewModel?.Dispose();
-        if (_callWindow is not null) { _callWindow.IsEnabled = false; _callWindow.Hide(); }
+        if (_callWindow is not null) { _callWindow.IsEnabled = false; _callWindow.Visibility = Visibility.Collapsed; _callWindow.Dispose(); }
         if (_initialization is not null)
         {
             _services = await _initialization;
@@ -129,49 +134,117 @@ public partial class MainWindow : Window
     {
         _ = sender;
         _ = e;
-        if (_viewModel is not null) { await _viewModel.SendDraftAsync(); ScrollToLatest(); }
+        if (_viewModel is null) { return; }
+        if (_viewModel.HasDraft) { await _viewModel.SendDraftAsync(); ScrollToLatest(); }
+        else { _viewModel.ShowAttachments = !_viewModel.ShowAttachments; }
     }
 
-    private async void Composer_PreviewKeyDown(object sender, System.Windows.Input.KeyEventArgs e)
+    private static string? ClipboardImageFile(IDataObject data) =>
+        data.GetDataPresent(DataFormats.FileDrop) && data.GetData(DataFormats.FileDrop) is string[] files
+            ? files.FirstOrDefault(path => Path.GetExtension(path).ToLowerInvariant() is ".png" or ".jpg" or ".jpeg" or ".gif" or ".webp")
+            : null;
+
+    private void Composer_PreviewCanExecute(object sender, CanExecuteRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste || _exiting || _viewModel?.SelectedConversation is null) return;
+        try
+        {
+            var data = Clipboard.GetDataObject();
+            if (data is not null && (data.GetDataPresent(DataFormats.Bitmap) || data.GetDataPresent("PNG") || ClipboardImageFile(data) is not null))
+            {
+                e.CanExecute = true;
+                e.Handled = true;
+            }
+        }
+        catch (System.Runtime.InteropServices.ExternalException) { }
+    }
+
+    private async void Composer_PreviewExecuted(object sender, ExecutedRoutedEventArgs e)
+    {
+        if (e.Command != ApplicationCommands.Paste || _exiting || _viewModel?.SelectedConversation is null) return;
+        try
+        {
+            var data = Clipboard.GetDataObject();
+            if (data is null) return;
+            if (ClipboardImageFile(data) is { } file)
+            {
+                e.Handled = true;
+                _viewModel.ShowAttachments = false;
+                await _viewModel.SendMediaAsync(file);
+                return;
+            }
+            var pngData = data.GetData("PNG");
+            if (pngData is MemoryStream oversizedStream && oversizedStream.Length > 100L * 1024 * 1024 ||
+                pngData is byte[] oversizedBytes && oversizedBytes.Length > 100L * 1024 * 1024)
+            {
+                e.Handled = true;
+                TransientNotice.Show(this, "Files cannot exceed 100 MB.");
+                return;
+            }
+            byte[]? png = pngData switch
+            {
+                MemoryStream stream when stream.Length <= 100L * 1024 * 1024 => stream.ToArray(),
+                byte[] bytes when bytes.Length <= 100L * 1024 * 1024 => bytes,
+                _ => null
+            };
+            var bitmap = png is null && data.GetDataPresent(DataFormats.Bitmap) ? Clipboard.GetImage() : null;
+            if (png is null && bitmap is null) return;
+            e.Handled = true;
+            var send = _viewModel.CaptureMediaSender();
+            if (send is null) return;
+            _viewModel.ShowAttachments = false;
+            bitmap?.Freeze();
+            var path = Path.Combine(Path.GetTempPath(), $"msgat-clipboard-{Guid.NewGuid():N}.png");
+            try
+            {
+                await Task.Run(() =>
+                {
+                    using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    if (png is not null) stream.Write(png);
+                    else
+                    {
+                        var encoder = new PngBitmapEncoder();
+                        encoder.Frames.Add(BitmapFrame.Create(bitmap!));
+                        encoder.Save(stream);
+                    }
+                });
+                await send(path);
+            }
+            finally
+            {
+                try { File.Delete(path); }
+                catch (IOException error) { Trace.TraceWarning("Clipboard cleanup failed: {0}", error.Message); }
+            }
+        }
+        catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException or ArgumentException or System.Runtime.InteropServices.ExternalException)
+        {
+            e.Handled = true;
+            TransientNotice.Show(this, "Failed to paste image");
+        }
+    }
+
+    private async void Media_Click(object sender, RoutedEventArgs e)
     {
         _ = sender;
-        if (e.Key == Key.V && Keyboard.Modifiers == ModifierKeys.Control && Clipboard.ContainsImage())
-        {
-            e.Handled = true;
-            await SendClipboardImageAsync();
-            return;
-        }
-        if (e.Key == Key.Enter && Keyboard.Modifiers != ModifierKeys.Shift)
-        {
-            e.Handled = true;
-            if (_viewModel is not null) { await _viewModel.SendDraftAsync(); ScrollToLatest(); }
-        }
+        _ = e;
+        if (_viewModel is null) { return; }
+        _viewModel.ShowAttachments = false;
+        await PickAndSendMediaAsync();
     }
 
-    private void Attachment_Click(object sender, RoutedEventArgs e)
+    private async void VoiceCall_Click(object sender, RoutedEventArgs e)
     {
+        _ = sender;
         _ = e;
-        if (sender is not Button button || _viewModel?.SelectedConversation is null) { return; }
-        var menu = new ContextMenu();
-        var media = new MenuItem { Header = "Photo or file…" };
-        media.Click += async (_, _) => await PickAndSendMediaAsync();
-        var call = new MenuItem { Header = "Voice call" };
-        call.Click += async (_, _) =>
-        {
-            try { await _services!.Calls.StartOutgoingAsync(_viewModel.SelectedConversation.Uuid); }
-            catch (InvalidOperationException exception) { MessageBox.Show(this, exception.Message, "MsgAT", MessageBoxButton.OK, MessageBoxImage.Warning); }
-        };
-        menu.Items.Add(media);
-        menu.Items.Add(call);
-        button.ContextMenu = menu;
-        menu.PlacementTarget = button;
-        menu.IsOpen = true;
-        e.Handled = true;
+        if (_viewModel?.SelectedConversation is null || _services is null) { return; }
+        _viewModel.ShowAttachments = false;
+        try { await _services.Calls.StartOutgoingAsync(_viewModel.SelectedConversation.Uuid); }
+        catch (InvalidOperationException exception) { TransientNotice.Show(this, exception.Message); }
     }
 
     private async Task PickAndSendMediaAsync()
     {
-        var picker = new OpenFileDialog { Filter = "Supported files|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp4;*.mov;*.pdf;*.zip|All files|*.*" };
+        var picker = new OpenFileDialog { Filter = "Media|*.png;*.jpg;*.jpeg;*.gif;*.webp;*.mp4;*.mov;*.webm" };
         if (picker.ShowDialog(this) == true && _viewModel is not null) { await _viewModel.SendMediaAsync(picker.FileName); }
     }
 
@@ -180,7 +253,7 @@ public partial class MainWindow : Window
         _ = sender;
         _ = e;
         if (_viewModel is null) { return; }
-        var dialog = new TextPromptDialog("Add friend", "UUID") { Owner = this };
+        var dialog = new TextPromptDialog("Add Friend", "Target UUID", myUuid: _viewModel.MyUuid) { Owner = this };
         if (dialog.ShowDialog() == true) { await _viewModel.AddFriendAsync(dialog.Value); }
     }
 
@@ -203,7 +276,7 @@ public partial class MainWindow : Window
         {
             if (dialog.ResetRequested)
             {
-                if (Confirm("Reset this identity and permanently delete all local conversations?"))
+                if (Confirm("Reset your identity?"))
                 {
                     IsEnabled = false;
                     await _services.ResetIdentityAndRestartAsync();
@@ -217,7 +290,7 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             Trace.TraceError("Settings operation failed: {0}", exception);
-            if (!_exiting) { MessageBox.Show(this, exception.Message, "MsgAT", MessageBoxButton.OK, MessageBoxImage.Warning); }
+            if (!_exiting) { TransientNotice.Show(this, exception.Message); }
             if (_services.IsDisposed) { ((App)System.Windows.Application.Current).ExitApplication(); }
         }
         finally
@@ -230,18 +303,16 @@ public partial class MainWindow : Window
     {
         _ = e;
         if (sender is not ListBoxItem container || container.DataContext is not ConversationItem conversation || _viewModel is null) { return; }
-        _viewModel.SelectedConversation = conversation;
-        container.IsSelected = true;
         var menu = new ContextMenu();
-        var clear = new MenuItem { Header = "Clear messages" };
+        var clear = new MenuItem { Header = "Clear Message" };
         clear.Click += (_, _) =>
         {
-            if (Confirm("Clear all messages in this conversation?")) { _viewModel.ClearSelectedMessages(); }
+            if (Confirm("Clear all messages in this conversation?")) { _viewModel.ClearMessages(conversation.Uuid); }
         };
-        var delete = new MenuItem { Header = "Delete friend" };
+        var delete = new MenuItem { Header = "Delete Friend" };
         delete.Click += async (_, _) =>
         {
-            if (Confirm("Delete this friend and all local messages?")) { await _viewModel.DeleteSelectedFriendAsync(); }
+            if (Confirm("Delete this friend and clear history?")) { await _viewModel.DeleteFriendAsync(conversation.Uuid); }
         };
         menu.Items.Add(clear);
         menu.Items.Add(delete);
@@ -254,7 +325,6 @@ public partial class MainWindow : Window
     private void Message_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
     {
         if (sender is not ListBoxItem container || container.DataContext is not MessageItem item || _viewModel is null) { return; }
-        container.IsSelected = true;
         var menu = new ContextMenu();
         if (!item.IsRevoked)
         {
@@ -262,36 +332,30 @@ public partial class MainWindow : Window
             reply.Click += (_, _) => { _viewModel.SetReply(item); Composer.Focus(); };
             menu.Items.Add(reply);
         }
-        if (!item.IsRevoked && item.Extension != "txt")
-        {
-            var open = new MenuItem { Header = "Open" };
-            open.Click += (_, _) => OpenAttachment(item);
-            menu.Items.Add(open);
-            var save = new MenuItem { Header = "Save as…" };
-            save.Click += (_, _) => SaveAttachment(item);
-            menu.Items.Add(save);
-        }
         if (!item.IsRevoked && item.Extension == "txt")
         {
-            var copy = new MenuItem { Header = "Copy text" };
-            copy.Click += (_, _) => Clipboard.SetText(item.Content);
+            var copy = new MenuItem { Header = "Copy Text" };
+            copy.Click += (_, _) => { Clipboard.SetText(item.Content); TransientNotice.Show(this, "Copied to clipboard"); };
             menu.Items.Add(copy);
         }
         if (item.CanModify)
         {
+            var revoke = new MenuItem { Header = "Revoke" };
+            revoke.Click += async (_, _) => await _viewModel.RevokeAsync(item); menu.Items.Add(revoke);
             if (item.Extension == "txt")
             {
                 var edit = new MenuItem { Header = "Edit" };
                 edit.Click += async (_, _) =>
                 {
-                    var dialog = new TextPromptDialog("Edit message", "Message", item.Content) { Owner = this };
-                    if (dialog.ShowDialog() == true) { await _viewModel.EditAsync(item, dialog.Value); }
+                    var dialog = new TextPromptDialog("Edit Message", "", item.Content) { Owner = this };
+                    if (dialog.ShowDialog() == true) await _viewModel.EditAsync(item, dialog.Value);
                 };
                 menu.Items.Add(edit);
             }
-            var revoke = new MenuItem { Header = "Revoke" };
-            revoke.Click += async (_, _) => await _viewModel.RevokeAsync(item);
-            menu.Items.Add(revoke);
+        }
+        if (!item.IsRevoked && item.Extension is "jpg" or "jpeg" or "png" or "webp" or "mp4" or "m4a")
+        {
+            var save = new MenuItem { Header = "Save Media" }; save.Click += (_, _) => SaveAttachment(item); menu.Items.Add(save);
         }
         if (menu.Items.Count > 0)
         {
@@ -311,14 +375,14 @@ public partial class MainWindow : Window
         e.Handled = true;
     }
 
-    private void ReplyPreview_Click(object sender, MouseButtonEventArgs e)
+    private async void ReplyPreview_Click(object sender, MouseButtonEventArgs e)
     {
-        if (sender is FrameworkElement { DataContext: MessageItem { ReplyToId: { } id } } && _viewModel?.RevealMessage(id) is { } target)
-        {
-            MessageList.SelectedItem = target;
-            MessageList.ScrollIntoView(target);
-            e.Handled = true;
-        }
+        if (sender is not FrameworkElement { DataContext: MessageItem { ReplyToId: { } id } } || _viewModel is null) return;
+        e.Handled = true;
+        if (_viewModel.RevealMessage(id) is not { } target) { TransientNotice.Show(this, "Quoted message not found"); return; }
+        MessageList.SelectedItem = target; MessageList.ScrollIntoView(target);
+        await Task.Delay(1500);
+        if (ReferenceEquals(MessageList.SelectedItem, target)) MessageList.SelectedItem = null;
     }
 
     private void CancelReply_Click(object sender, RoutedEventArgs e)
@@ -326,25 +390,6 @@ public partial class MainWindow : Window
         _ = sender;
         _ = e;
         _viewModel?.CancelReply();
-    }
-
-    private async Task SendClipboardImageAsync()
-    {
-        var image = Clipboard.GetImage();
-        if (image is null || _viewModel is null) { return; }
-        var temporaryPath = Path.Combine(Path.GetTempPath(), $"msgat-clipboard-{Guid.NewGuid():N}.png");
-        try
-        {
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(image));
-            await using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-            {
-                encoder.Save(stream);
-                await stream.FlushAsync();
-            }
-            await _viewModel.SendMediaAsync(temporaryPath);
-        }
-        finally { File.Delete(temporaryPath); }
     }
 
     private void AttachmentPreview_Click(object sender, MouseButtonEventArgs e)
@@ -360,31 +405,27 @@ public partial class MainWindow : Window
     {
         try
         {
-            if (item.Extension is "jpg" or "jpeg" or "png" or "bmp" or "gif" or "webp" or "mp4" or "mov" or "webm")
-            {
-                new AttachmentWindow(item.Content, item.Extension) { Owner = this }.Show();
-            }
-            else { Process.Start(new ProcessStartInfo(item.Content) { UseShellExecute = true }); }
+            var viewer = new MediaOverlay(item.Content, item.Extension, () => { if (MediaOverlayHost.Content is IDisposable disposable) disposable.Dispose(); MediaOverlayHost.Content = null; UpdateChatVisibility(); });
+            MediaOverlayHost.Content = viewer; UpdateChatVisibility();
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException or System.ComponentModel.Win32Exception)
         {
-            MessageBox.Show(this, error.Message, "MsgAT", MessageBoxButton.OK, MessageBoxImage.Warning);
+            TransientNotice.Show(this, item.Extension is "jpg" or "jpeg" or "png" or "webp" ? "Failed to load image" : "Failed to load video");
         }
     }
 
     private void SaveAttachment(MessageItem item)
     {
-        var picker = new SaveFileDialog { FileName = Path.GetFileName(item.Content), AddExtension = true, DefaultExt = "." + item.Extension };
-        if (picker.ShowDialog(this) != true) return;
+        if (new ConfirmationDialog("Do you want to save this media to your gallery?", "Save Media", false) { Owner = this }.ShowDialog() != true) return;
         try
         {
-            if (!string.Equals(Path.GetFullPath(picker.FileName), Path.GetFullPath(item.Content), StringComparison.OrdinalIgnoreCase))
-                File.Copy(item.Content, picker.FileName, overwrite: true);
+            var folder = item.Extension == "mp4" ? Environment.SpecialFolder.MyVideos : item.Extension == "m4a" ? Environment.SpecialFolder.MyMusic : Environment.SpecialFolder.MyPictures;
+            var directory = Path.Combine(Environment.GetFolderPath(folder), "MsgAT"); Directory.CreateDirectory(directory);
+            var destination = Path.Combine(directory, $"{item.MessageId}.{item.Extension}");
+            if (File.Exists(destination)) destination = Path.Combine(directory, $"{item.MessageId}_{Guid.NewGuid():N}.{item.Extension}");
+            File.Copy(item.Content, destination); TransientNotice.Show(this, "Saved to Gallery");
         }
-        catch (Exception error) when (error is IOException or UnauthorizedAccessException)
-        {
-            MessageBox.Show(this, error.Message, "MsgAT", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { TransientNotice.Show(this, "Failed to save"); }
     }
 
     private void MessageList_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
@@ -405,11 +446,24 @@ public partial class MainWindow : Window
     private void MessageList_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
         _ = sender;
+        UpdateViewingLatest();
         if (e.VerticalChange < 0 && e.VerticalOffset <= 1 &&
             ReferenceEquals(e.OriginalSource, GetScrollViewer(MessageList)))
         {
             LoadOlderMessagesAtTop();
         }
+    }
+
+    private void UpdateViewingLatest()
+    {
+        if (_viewModel is null || GetScrollViewer(MessageList) is not { } viewport) { return; }
+        var bounds = new Rect(0, 0, viewport.ActualWidth, viewport.ActualHeight);
+        _viewModel.IsViewingLatest = _viewModel.Messages.TakeLast(3).Any(item =>
+        {
+            if (MessageList.ItemContainerGenerator.ContainerFromItem(item) is not FrameworkElement row) { return false; }
+            return row.TransformToAncestor(viewport).TransformBounds(new Rect(row.RenderSize)).IntersectsWith(bounds);
+        });
+        if (_viewModel.IsViewingLatest) { _viewModel.MarkActiveConversationRead(); }
     }
 
     private void LoadOlderMessagesAtTop()
@@ -444,11 +498,19 @@ public partial class MainWindow : Window
         _ = sender;
         _ = e;
         if (_services is null) { return; }
-        _callWindow ??= new CallWindow(_services.Calls) { Owner = this };
-        _callWindow.Show();
-        _callWindow.WindowState = WindowState.Normal;
-        _callWindow.Activate();
+        if (_callWindow is null) { _callWindow = new CallOverlay(_services.Calls); _callWindow.CoverageChanged += (_, _) => UpdateChatVisibility(); CallOverlayHost.Content = _callWindow; }
+        UpdateChatVisibility();
+        Show(); WindowState = WindowState.Normal; Activate();
     }
+
+    private void UpdateChatVisibility()
+    {
+        if (_viewModel is null) return;
+        _viewModel.IsChatContentVisible = MediaOverlayHost.Content is null && _callWindow?.CoversChat != true;
+        _viewModel.MarkActiveConversationRead();
+    }
+
+    private void Latest_Click(object sender, RoutedEventArgs e) => ScrollToLatest();
 
     private void ScrollToLatest()
     {
@@ -458,7 +520,7 @@ public partial class MainWindow : Window
     private void ScrollToLatestIfNearBottom()
     {
         var scroll = GetScrollViewer(MessageList);
-        if (scroll is null || scroll.ScrollableHeight - scroll.VerticalOffset < 100) { ScrollToLatest(); }
+        if (scroll is null || _viewModel?.IsViewingLatest == true || _viewModel?.Messages.LastOrDefault()?.IsMine == true) { ScrollToLatest(); }
     }
 
     private static ScrollViewer? GetScrollViewer(DependencyObject root)
@@ -472,7 +534,7 @@ public partial class MainWindow : Window
         return null;
     }
 
-    private bool Confirm(string message) => MessageBox.Show(this, message, "MsgAT", MessageBoxButton.YesNo, MessageBoxImage.Warning) == MessageBoxResult.Yes;
+    private bool Confirm(string message) => new ConfirmationDialog(message) { Owner = this }.ShowDialog() == true;
 
     private void RestoreWindowPlacement()
     {

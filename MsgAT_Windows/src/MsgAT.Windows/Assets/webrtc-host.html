@@ -12,8 +12,11 @@
   let localIce = [];
   let descriptionSent = false;
   let commandQueue = Promise.resolve();
+  let generation = 0;
   const remoteAudio = document.getElementById("remoteAudio");
-  const post = value => chrome.webview.postMessage(value);
+  const post = (value, owner = generation) => {
+    if (owner === generation) chrome.webview.postMessage({ ...value, generation: owner });
+  };
 
   async function close() {
     pendingIce = [];
@@ -22,36 +25,54 @@
     remoteAudio.srcObject = null;
     if (pc) { pc.ontrack = null; pc.onicecandidate = null; pc.onconnectionstatechange = null; pc.close(); pc = null; }
     if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+    if (remoteAudio.setSinkId) await remoteAudio.setSinkId('default').catch(() => {});
   }
 
-  async function create(iceServers) {
+  async function create(iceServers, owner) {
     await close();
+    if (owner !== generation) throw new Error('Call ended');
     const configuration = { iceServers, sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" };
     pc = new RTCPeerConnection(configuration);
-    pc.ontrack = event => {
-      remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
-      remoteAudio.play().catch(error => post({ type: 'state', state: 'failed', detail: String(error) }));
-    };
     const connection = pc;
+    pc.ontrack = event => {
+      if (pc !== connection || owner !== generation) return;
+      remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
+      remoteAudio.play().catch(error => post({ type: 'state', state: 'failed', detail: String(error) }, owner));
+    };
     pc.onicecandidate = event => {
       if (pc !== connection || !event.candidate) return;
       const candidate = { type: 'ice', sdpMid: event.candidate.sdpMid ?? '0',
         sdpMLineIndex: event.candidate.sdpMLineIndex ?? 0, candidate: event.candidate.candidate };
-      if (descriptionSent) post(candidate);
+      if (descriptionSent) post(candidate, owner);
       else localIce.push(candidate);
     };
-    pc.onconnectionstatechange = () => post({ type: 'state', state: pc.connectionState });
-    stream = await navigator.mediaDevices.getUserMedia({ audio: {
+    pc.onconnectionstatechange = () => { if (pc === connection) post({ type: 'state', state: connection.connectionState }, owner); };
+    const captured = await navigator.mediaDevices.getUserMedia({ audio: {
       echoCancellation: true, noiseSuppression: true, autoGainControl: true,
       channelCount: 1, sampleRate: 48000
     }, video: false });
-    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    if (owner !== generation || pc !== connection) {
+      captured.getTracks().forEach(track => track.stop());
+      throw new Error('Call ended');
+    }
+    stream = captured;
+    stream.getTracks().forEach(track => connection.addTrack(track, stream));
   }
 
-  function publishDescription(type) {
-    post({ type, sdp: pc.localDescription.sdp });
+  async function publishDescription(type, owner) {
+    const connection = pc;
+    const sender = connection.getSenders().find(item => item.track && item.track.kind === 'audio');
+    if (sender) {
+      const parameters = sender.getParameters();
+      if (parameters.encodings && parameters.encodings.length) {
+        parameters.encodings.forEach(encoding => encoding.maxBitrate = 32000);
+        await sender.setParameters(parameters);
+      }
+    }
+    if (owner !== generation || pc !== connection) return;
+    post({ type, sdp: connection.localDescription.sdp }, owner);
     descriptionSent = true;
-    localIce.forEach(post);
+    localIce.forEach(candidate => post(candidate, owner));
     localIce = [];
   }
 
@@ -66,23 +87,59 @@
     catch (error) { post({ type: 'ice-warning', detail: String(error) }); }
   }
 
+  function optimizeOpus(sdp) {
+    const lines = sdp.split(/\r?\n/);
+    const mapping = lines.map(line => line.match(/^a=rtpmap:(\d+)\s+opus\/48000\/2/i)).find(Boolean);
+    if (!mapping) return sdp;
+    const pt = mapping[1];
+    const audio = lines.findIndex(line => line.startsWith('m=audio '));
+    if (audio >= 0) {
+      const parts = lines[audio].split(' ');
+      lines[audio] = [...parts.slice(0, 3), pt, ...parts.slice(3).filter(value => value !== pt)].join(' ');
+    }
+    const params = 'minptime=10;useinbandfec=1;usedtx=1;maxaveragebitrate=32000;stereo=0;sprop-maxcapturerate=16000';
+    const keys = new Set(params.split(';').map(value => value.split('=')[0]));
+    const prefix = `a=fmtp:${pt} `;
+    const index = lines.findIndex(line => line.startsWith(prefix) || line === `a=fmtp:${pt}`);
+    if (index >= 0) {
+      const retained = lines[index].slice(prefix.length).split(';').map(value => value.trim()).filter(value => value && !keys.has(value.split('=')[0].toLowerCase()));
+      lines[index] = prefix + [params, ...retained].join(';');
+    } else {
+      const position = lines.findIndex(line => line.startsWith(`a=rtpmap:${pt} `));
+      if (position >= 0) lines.splice(position + 1, 0, prefix + params);
+    }
+    return lines.join('\r\n');
+  }
+
   async function execute(command) {
       const p = command.payload;
+      const owner = command.generation;
+      const current = () => { if (owner !== generation) throw new Error('Call ended'); };
       try {
+        current();
         if (command.type === 'offer') {
-          await create(p.iceServers);
+          await create(p.iceServers, owner);
+          current();
           const offer = await pc.createOffer({ offerToReceiveAudio: true });
-          await pc.setLocalDescription(offer);
-          publishDescription('offer');
+          current();
+          await pc.setLocalDescription({ type: offer.type, sdp: optimizeOpus(offer.sdp) });
+          current();
+          await publishDescription('offer', owner);
         } else if (command.type === 'accept') {
-          await create(p.iceServers);
-          await pc.setRemoteDescription({ type: 'offer', sdp: p.sdp });
+          await create(p.iceServers, owner);
+          current();
+          await pc.setRemoteDescription({ type: 'offer', sdp: optimizeOpus(p.sdp) });
+          current();
           await flushIce();
+          current();
           const answer = await pc.createAnswer();
-          await pc.setLocalDescription(answer);
-          publishDescription('answer');
+          current();
+          await pc.setLocalDescription({ type: answer.type, sdp: optimizeOpus(answer.sdp) });
+          current();
+          await publishDescription('answer', owner);
         } else if (command.type === 'answer') {
-          await pc.setRemoteDescription({ type: 'answer', sdp: p.sdp });
+          await pc.setRemoteDescription({ type: 'answer', sdp: optimizeOpus(p.sdp) });
+          current();
           await flushIce();
         } else if (command.type === 'ice') {
           const candidate = { sdpMid: p.sdpMid, sdpMLineIndex: p.sdpMLineIndex, candidate: p.candidate };
@@ -90,27 +147,46 @@
           else if (pendingIce.length < 256) pendingIce.push(candidate);
         } else if (command.type === 'mute') {
           if (stream) stream.getAudioTracks().forEach(track => track.enabled = !p.muted);
+        } else if (command.type === 'speaker') {
+          try {
+            await remoteAudio.setSinkId(p.enabled ? 'default' : 'communications');
+            post({ type: 'speaker', enabled: p.enabled }, owner);
+          } catch (error) {
+            post({ type: 'speaker', enabled: remoteAudio.sinkId !== 'communications' }, owner);
+          }
         } else if (command.type === 'stats') {
           let value = null;
           if (pc) {
             const stats = await pc.getStats();
             stats.forEach(report => {
-              if (report.type === 'candidate-pair' && report.state === 'succeeded' &&
-                  typeof report.currentRoundTripTime === 'number' && report.currentRoundTripTime > 0) {
-                value = Math.round(report.currentRoundTripTime * 1000);
+              let seconds = null;
+              if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                seconds = report.currentRoundTripTime ?? report.roundTripTime;
+              } else if (report.type === 'remote-inbound-rtp') {
+                seconds = report.roundTripTime;
               }
+              const ms = Math.trunc(seconds * 1000);
+              if (typeof seconds === 'number' && Number.isFinite(ms) && ms > 0 && (value === null || ms < value)) value = ms;
             });
           }
-          post({ type: 'rtt', value });
+          if (value !== null) post({ type: 'rtt', value }, owner);
         } else if (command.type === 'close') {
           await close();
         }
       } catch (error) {
-        post({ type: 'state', state: 'failed', detail: String(error) });
+        const reason = (command.type === 'offer' || command.type === 'accept') &&
+          (error.name === 'NotAllowedError' || error.name === 'SecurityError') ? 'microphone-permission' : null;
+        post({ type: 'state', state: 'failed', reason, detail: String(error) }, owner);
       }
   }
   window.msgat = {
     command: command => {
+      if (command.type === 'close') {
+        generation = command.generation;
+        commandQueue = Promise.resolve();
+        return close();
+      }
+      if (command.type === 'offer' || command.type === 'accept') generation = command.generation;
       commandQueue = commandQueue.then(() => execute(command));
       return commandQueue;
     }

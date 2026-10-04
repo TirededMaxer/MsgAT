@@ -6,7 +6,7 @@
 
 以 Android 为行为与界面基准，修正 Android 自身的问题，再同步 Windows 和 macOS。三端核心功能、主界面与聊天界面层级、通话覆盖层、消息操作、提示和控件行为均纳入源码核对；桌面保留原来的双栏布局，颜色、字体、控件皮肤和动画采用各平台原有实现。
 
-本轮未启动客户端、未运行单元或设备测试、未修改本机实际音频输出，也未操作真实身份和聊天数据。正式签名 APK 通过 IDEA 的 Generate Signed App Bundle or APK 构建。实机验收由用户自行进行。2026-10-05 维护者授权提交、推送并公开仓库；本轮未新增 GitHub Release。
+本轮未启动客户端、未运行单元或设备测试、未修改本机实际音频输出，也未操作真实身份和聊天数据。正式签名 APK 通过 IDEA 的 Generate Signed App Bundle or APK 构建。实机验收由用户自行进行。2026-10-05 维护者授权提交、推送、公开仓库并发布全部安装包，发布标签为 `release-2026-10-05`。
 
 ## 范围清单
 
@@ -79,4 +79,4 @@ Windows 使用 WebView2 当前通话的默认/通信输出选择；Android 使�
 - 本轮安装包位于 `~/Downloads/MsgAT/`：app-release.apk、MsgAT-Windows-1.1-x64.exe、MsgAT-macOS-1.1-arm64-review.dmg。
 - 同目录包含 SHA256SUMS.txt、review-manifest.json、REVIEW-NOTES.txt。精确大小与散列以该次产物清单为准。下载目录只保留一个 MsgAT 文件夹，旧安装包及清单直接替换。
 
-功能类差异的修复保留，视觉项按用户澄清恢复平台风格；三端重新编译并封装，Android code 11 通过 IDEA 的 Generate Signed App Bundle or APK 生成正式签名包。跨平台音频、通知权限和实际布局仍需用户验收，当前不宣称 100% 实机运行证明。2026-10-05 已获准提交、推送并公开源码；不将该授权表述为全部设备测试通过，新版 Release 附件仍待单独发布。
+功能类差异的修复保留，视觉项按用户澄清恢复平台风格；三端重新编译并封装，Android code 11 通过 IDEA 的 Generate Signed App Bundle or APK 生成正式签名包。跨平台音频、通知权限和实际布局仍需用户验收，当前不宣称 100% 实机运行证明。2026-10-05 已获准提交、推送、公开源码并发布安装包；该授权不代表全部设备测试通过。GitHub Release 的 APK 和 DMG 使用带版本号的正式分发文件名，文件内容与本地交付一致。

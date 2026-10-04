@@ -6,14 +6,14 @@
 
 ## 版本与下载
 
-本 README 对应当前 `main` 分支。已发布安装包可从 [GitHub Releases](https://github.com/TirededMaxer/MsgAT/releases) 下载；目前最新 Release 为 Android 1.5、Windows/macOS 1.0、服务端 1.1，早于本轮源码更新。当前版本可按 [构建指南](docs/BUILDING.md) 构建。
+下载 [2026-10-05 Release](https://github.com/TirededMaxer/MsgAT/releases/tag/release-2026-10-05)，包含三端安装包、服务端 JAR、JSON 配置示例和 SHA-256 校验清单。
 
-| 组件 | 当前源码版本 | 分发格式 | 运行要求 |
+| 组件 | 版本 | 下载 | 运行要求 |
 | --- | --- | --- | --- |
-| Android | 1.6（versionCode 11） | APK | Android 10 或更新版本 |
-| Windows | 1.1 | 自包含 EXE | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
-| macOS | 1.1（build 15） | DMG | macOS 13 或更新版本，Apple Silicon |
-| 服务端 | 1.1（本轮增加 JSON 配置与性能优化） | JAR | Java 21 |
+| Android | 1.6（versionCode 11） | [APK](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Android-1.6.apk) | Android 10 或更新版本 |
+| Windows | 1.1 | [EXE](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Windows-1.1-x64.exe) | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
+| macOS | 1.1（build 15） | [DMG](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-macOS-1.1-arm64.dmg) | macOS 13 或更新版本，Apple Silicon |
+| 服务端 | 1.1（增加 JSON 配置与性能优化） | [JAR](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Console-1.1.jar) | Java 21 |
 
 Windows 包含 .NET 运行时。Mac DMG 打开后将 `MsgAT.app` 拖入“应用程序”；目前使用本机签名，未经过 Apple 公证，首次打开可能需要在系统“隐私与安全性”中允许。Android 正式 APK 使用项目发布密钥签名；自行构建需使用自己的密钥。Release 附带 `SHA256SUMS.txt`，供核对下载文件。
 

@@ -61,4 +61,4 @@ java -jar target/MsgAT_Console-1.1-obfuscated.jar
 
 保留 `.gradle/`、`.kotlin/`、`.build/`、SwiftPM/Xcode 缓存、Maven/NuGet 缓存及当前增量构建目录可减少重新构建耗时。这些目录由 `.gitignore` 排除。临时日志、诊断转储、Python 缓存和旧发布副本可清理，勿删除真实应用数据或签名密钥。
 
-本仓库四个组件独立版本化。已发布的 `release-2026-09-15` 标签对应 Android 1.5、Windows/macOS 1.0、服务端 1.1。当前源码版本为 Android 1.6、Windows/macOS 1.1、服务端 1.1；新版本安装包尚未新增到 Release。Release 附件应与最终发布标签的源码构建一致，并提供 SHA-256 校验清单。
+本仓库四个组件独立版本化。已发布的 `release-2026-09-15` 标签对应 Android 1.5、Windows/macOS 1.0、服务端 1.1。`release-2026-10-05` 对应 Android 1.6、Windows/macOS 1.1、服务端 1.1，提供正式签名 APK、Windows EXE、macOS DMG、服务端 JAR 和 JSON 配置示例。Release 附件应与最终发布标签的源码构建一致，并提供 SHA-256 校验清单。

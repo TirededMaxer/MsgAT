@@ -15,7 +15,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/sqlcipher/SQLCipher.swift.git", from: "4.10.0"),
-        .package(url: "https://github.com/stasel/WebRTC.git", from: "125.0.0")
+        .package(url: "https://github.com/stasel/WebRTC.git", from: "154.0.0")
     ],
     targets: [
         .target(

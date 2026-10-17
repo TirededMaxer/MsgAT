@@ -98,7 +98,7 @@ def macos():
         resource = app / 'Contents/Resources'
         for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
             shutil.copy2(ROOT / name, resource / name)
-        run('lipo', '-verify_arch', 'arm64', app / 'Contents/MacOS/MsgAT')
+        run('lipo', app / 'Contents/MacOS/MsgAT', '-verify_arch', 'arm64')
         run('codesign', '--force', '--deep', '--sign', '-', '--entitlements', ROOT / 'MsgAT_macOS/Sources/App/MsgAT.entitlements', app)
         run('codesign', '--verify', '--deep', '--strict', app)
         (stage / 'Applications').symlink_to('/Applications')

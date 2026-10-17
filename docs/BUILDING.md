@@ -1,64 +1,58 @@
-# 构建指南
+# 云端构建与发布
 
-以下命令均从仓库根目录开始，使用各组件固定的依赖声明。签名凭据由维护者在本地提供，不进入 Git。
+项目自 2026-10-17 起使用 GitHub-hosted runners 构建。本地保留源码、Gradle Wrapper、依赖声明及锁文件、资源、许可证和文档；安装包与构建中间文件不作为构建输入。
 
-## Android 1.6
+## 日常校验
 
-需要 Java 21、Android SDK Platform 36，以及支持项目 Gradle/Android 插件版本的 IntelliJ IDEA 或 Android Studio。
+推送和 Pull Request 自动运行 [CI](https://github.com/TirededMaxer/MsgAT/actions/workflows/ci.yml)，检查 Android、Windows、macOS 和服务端。也可从 Actions 页面手动运行。
 
-```bash
-cd MsgAT
-./gradlew assembleDebug
-```
+每个任务使用新的托管环境，依赖从公开仓库下载。Gradle 的 Actions 缓存、构建缓存和配置缓存均关闭；Maven、NuGet 和 SwiftPM 不恢复缓存。不依赖开发电脑上的 Android SDK、IDEA、Xcode、虚拟机或任何旧构建目录。
 
-正式 APK：在 IDE 打开 `MsgAT/`，执行 **Build → Generate Signed App Bundle or APK → APK**，选择自己的 keystore 和 `release`，生成 `app-release.apk`。项目发布密钥不随源码提供，其他签名的 APK 不能直接覆盖已安装的正式版本。
+## 生成安装包
 
-可选验证：`./gradlew testDebugUnitTest lintDebug`。
+进入 [Cloud packages](https://github.com/TirededMaxer/MsgAT/actions/workflows/packages.yml)，点击 **Run workflow**，选择 `main`：
 
-## Windows 1.1
+- `publish` 不勾选：只构建，不修改 Release。
+- `publish` 勾选：填写新的 `release-*` 标签，例如 `release-2026-10-17`；四端全部成功后发布。
 
-需要 .NET 9 SDK。开发和运行使用 Windows；可在其他系统交叉构建。
+完成后在该次运行的 **Artifacts → MsgAT-release** 下载完整安装包与校验文件。分平台附件保留 14 天，汇总附件保留 30 天；正式 Release 长期保存。
 
-```bash
-cd MsgAT_Windows
-dotnet restore MsgAT.Windows.slnx
-dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
-```
+| 平台 | 云端环境 | 构建结果 |
+| --- | --- | --- |
+| Android | Ubuntu、Java 21、SDK 36 | 使用原发布密钥签名的 APK，校验证书指纹和版本 |
+| Windows | Windows 2025、.NET 9 | x64 自包含单文件 EXE |
+| macOS | macOS 26 arm64、Xcode | arm64 App、ad-hoc 签名 DMG，验证签名与磁盘映像 |
+| 服务端 | Ubuntu、Java 21、Maven | 混淆 JAR、server-config.json、启动说明 |
 
-产物位于 `src/MsgAT.Windows/bin/Release/net9.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe`。运行时需要 WebView2 Evergreen Runtime。
+版本和文件名从各项目源码读取。`release-manifest.json` 记录提交、版本、云端运行链接及各文件 SHA-256；`SHA256SUMS.txt` 提供下载校验。打包实现见 `scripts/ci/packages.py`。
 
-可选验证：`dotnet test MsgAT.Windows.slnx -c Release`。
+Mac 当前沿用本机临时签名方案，未经过 Apple 公证；改成云端构建不会自动获得 Developer ID。Windows 仍需 WebView2 Runtime。
 
-## macOS 1.1
+## Android 签名 Secrets
 
-需要 macOS、Xcode 和网络访问以解析 Swift Package 依赖。
+以下内容放在仓库 **Settings → Secrets and variables → Actions**，不写入源码或日志：
 
-```bash
-cd MsgAT_macOS
-xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release \
-  -destination 'platform=macOS' -derivedDataPath build/XcodeDerivedData \
-  CODE_SIGNING_ALLOWED=NO build
-codesign --force --deep --sign - build/XcodeDerivedData/Build/Products/Release/MsgAT.app
-```
+| Secret | 内容 |
+| --- | --- |
+| ANDROID_KEYSTORE_BASE64 | 原发布 keystore 文件的 Base64 |
+| ANDROID_STORE_PASSWORD | keystore 密码 |
+| ANDROID_KEY_ALIAS | 发布密钥别名 |
+| ANDROID_KEY_PASSWORD | 发布密钥密码 |
 
-该命令使用本机临时签名，不提供 Apple 公证。对外发布时可使用维护者自己的 Developer ID 和公证流程。本次发布产物为 Apple Silicon arm64。
+当前原签名证书 SHA-256：`4a4f2fa7a3564906000c4daf577c03c61cc4876e5d29c0c8e723f9f297c42ce0`。工作流会拒绝使用其他证书签名的 APK，避免生成无法覆盖现有安装的版本。密钥仅还原到 runner 临时目录，签名后删除；正式打包仅由维护者手动触发，不在外部 Pull Request 中读取 Secrets。
 
-可选验证：`swift test`。
+Fork 仓库需要自行配置 Secrets；如果使用自己的签名，应在打包脚本中更新公开的预期证书指纹。原发布密钥的离线备份应保留在项目之外。
 
-## 服务端 1.1
+## 发布与保留规则
 
-需要 Java 21 和 Maven。
+发布任务仅有 `contents: write` 权限，使用当前工作流自带的 `GITHUB_TOKEN`，不需要个人访问令牌。
 
-```bash
-cd MsgAT_Console
-mvn package
-java -jar target/MsgAT_Console-1.1-obfuscated.jar
-```
+新 Release 先创建为草稿，上传 APK、EXE、DMG、JAR、配置、说明、许可证、构建清单与校验文件。远端全部文件的大小与 SHA-256 必须一致才正式发布。新版本发布成功后删除其他 Release，保留 Git 标签与提交历史。构建或上传失败时，上一份正式 Release 继续可用。
 
-发布附件将该混淆 JAR 重命名为 `MsgAT-Console-1.1.jar`。监听端口位于 JAR 同目录的 `server-config.json`，缺失时自动生成默认配置；示例见 `MsgAT_Console/server-config.example.json`。首次构建需下载依赖；已有完整本地依赖缓存时可添加 `-o` 离线构建。构建会保留 JVM 所需的 StackMapTable。
+重新执行同一提交、同一标签的失败运行可以补全草稿；其他提交必须使用新标签，不覆盖旧标签对应的包。
 
-## 缓存与发布
+## 本地目录
 
-保留 `.gradle/`、`.kotlin/`、`.build/`、SwiftPM/Xcode 缓存、Maven/NuGet 缓存及当前增量构建目录可减少重新构建耗时。这些目录由 `.gitignore` 排除。临时日志、诊断转储、Python 缓存和旧发布副本可清理，勿删除真实应用数据或签名密钥。
+本地不再维护 `.gradle/`、`.kotlin/`、`build/`、`target/`、`bin/`、`obj/`、`.build/`、DerivedData、`release-artifacts/` 等缓存与产物。它们由 `.gitignore` 排除。源码资源、锁文件、Wrapper、签名密钥离线备份和真实运行数据不能当作构建缓存删除。
 
-本仓库四个组件独立版本化。已发布的 `release-2026-09-15` 标签对应 Android 1.5、Windows/macOS 1.0、服务端 1.1。`release-2026-10-05` 对应 Android 1.6、Windows/macOS 1.1、服务端 1.1，提供正式签名 APK、Windows EXE、macOS DMG、服务端 JAR 和 JSON 配置示例。Release 附件应与最终发布标签的源码构建一致，并提供 SHA-256 校验清单。
+历史本机构建版本为 `release-2026-10-05`；以后的安装包来源在 Release 构建清单中标记为 GitHub-hosted runners。

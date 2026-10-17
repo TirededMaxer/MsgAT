@@ -19,8 +19,19 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    // GitHub-hosted release jobs restore the existing keystore into RUNNER_TEMP.
+    val cloudSigning = System.getenv("ANDROID_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { path ->
+        signingConfigs.create("cloudRelease") {
+            storeFile = file(path)
+            storePassword = requireNotNull(System.getenv("ANDROID_STORE_PASSWORD"))
+            keyAlias = requireNotNull(System.getenv("ANDROID_KEY_ALIAS"))
+            keyPassword = requireNotNull(System.getenv("ANDROID_KEY_PASSWORD"))
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = cloudSigning
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

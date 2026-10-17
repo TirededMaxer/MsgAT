@@ -59,4 +59,4 @@ java -jar MsgAT-Console-1.1.jar
 
 保留 4 KiB 最小填充、256 KiB 帧上限、TCP_NODELAY、TLS、按确认删除和 3 天离线保留策略。没有为降低开销关闭持久化或更换数据库密钥。SQLite 仍采用回滚日志以保留跨两个数据库文件删除账户时的原子性；磁盘同步、写入串行化及高并发下的吞吐上限仍需结合实际服务器负载评估。
 
-业务线程队列使用 Netty 的 [DefaultEventExecutorGroup](https://netty.io/4.2/api/io/netty/util/concurrent/DefaultEventExecutorGroup.html) 有界任务队列。安装包校验信息见下载目录中的 `SHA256SUMS.txt` 和 `server-manifest.json`。
+业务线程队列使用 Netty 的 [DefaultEventExecutorGroup](https://netty.io/4.2/api/io/netty/util/concurrent/DefaultEventExecutorGroup.html) 有界任务队列。安装包校验信息见下载目录中的 `SHA256SUMS.txt` 和 `release-manifest.json`。

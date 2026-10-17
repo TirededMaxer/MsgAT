@@ -10,6 +10,6 @@
 
 ## Verification
 
-Run the platform command documented in `docs/BUILDING.md` for every area changed. For protocol, storage, calling, or identity changes, also test a real upgrade from the previous release and run two-client interoperability checks on actual devices or VMs.
+Use the GitHub-hosted CI and Cloud packages workflows documented in `docs/BUILDING.md` for every area changed. Do not rely on locally retained build outputs or dependency caches. For protocol, storage, calling, or identity changes, also test a real upgrade from the previous release and run two-client interoperability checks on actual devices or VMs.
 
 Pull requests should explain user-visible behavior, data migration impact, security impact, and exact test coverage. Do not merge with failing compiler, lint, or test output.

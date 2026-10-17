@@ -1,0 +1,188 @@
+name: Cloud packages
+run-name: Cloud packages · ${{ github.ref_name }} · publish=${{ inputs.publish || false }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish verified packages as the only GitHub Release
+        type: boolean
+        default: false
+      tag:
+        description: New release tag (required only when publishing, e.g. release-2026-10-17)
+        type: string
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloud-packages
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: '1'
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check release inputs and signing configuration
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: python scripts/ci/packages.py preflight
+
+  android:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
+      - name: Install Android SDK packages
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.1.0"'
+      - name: Restore signing key into temporary runner storage
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: python scripts/ci/packages.py restore-signing
+      - name: Build signed APK from source
+        working-directory: MsgAT
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/msgat-signing/release.jks
+          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: ./gradlew --no-daemon --no-build-cache --no-configuration-cache clean assembleRelease
+      - name: Verify original signer and package APK
+        run: python scripts/ci/packages.py android
+      - name: Remove temporary signing key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/msgat-signing"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-android
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  windows:
+    needs: preflight
+    runs-on: windows-2025
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '9.0.x'
+          cache: false
+      - name: Restore dependencies from NuGet
+        working-directory: MsgAT_Windows
+        run: dotnet restore MsgAT.Windows.slnx
+      - name: Publish self-contained x64 EXE
+        working-directory: MsgAT_Windows
+        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true
+      - run: python scripts/ci/packages.py windows
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-windows
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  macos:
+    needs: preflight
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build arm64 app using locked Swift packages
+        run: >-
+          xcodebuild -project MsgAT_macOS/MsgAT.xcodeproj -scheme MsgAT
+          -configuration Release -destination 'platform=macOS,arch=arm64'
+          -derivedDataPath "$RUNNER_TEMP/msgat-derived"
+          -clonedSourcePackagesDirPath "$RUNNER_TEMP/msgat-packages"
+          -onlyUsePackageVersionsFromResolvedFile
+          CODE_SIGNING_ALLOWED=NO ARCHS=arm64 build
+      - name: Sign application and create DMG
+        run: python scripts/ci/packages.py macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-macos
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  relay:
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Build obfuscated JAR from source
+        working-directory: MsgAT_Console
+        run: mvn --batch-mode --no-transfer-progress -DskipTests clean package
+      - run: python scripts/ci/packages.py relay
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package-relay
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  bundle:
+    needs: [android, windows, macos, relay]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: package-*
+          path: dist
+          merge-multiple: true
+      - name: Assemble release files and checksums
+        run: python scripts/ci/packages.py bundle
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MsgAT-release
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 0
+
+  publish:
+    if: inputs.publish
+    needs: bundle
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: MsgAT-release
+          path: dist
+      - name: Publish complete Release and remove older Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: python scripts/ci/packages.py publish

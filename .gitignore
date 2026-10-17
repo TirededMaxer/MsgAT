@@ -67,3 +67,6 @@ MsgAT_Console/data/
 
 # Generated server settings (the example remains tracked).
 **/server-config.json
+
+# Android Studio signed-package export output
+/MsgAT/app/release/

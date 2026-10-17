@@ -6,14 +6,14 @@
 
 ## 版本与下载
 
-下载 [2026-10-05 Release](https://github.com/TirededMaxer/MsgAT/releases/tag/release-2026-10-05)，包含三端安装包、服务端 JAR、JSON 配置示例和 SHA-256 校验清单。
+下载 [最新 Release](https://github.com/TirededMaxer/MsgAT/releases/latest)，包含三端安装包、服务端 JAR、JSON 配置示例和 SHA-256 校验清单。
 
 | 组件 | 版本 | 下载 | 运行要求 |
 | --- | --- | --- | --- |
-| Android | 1.6（versionCode 11） | [APK](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Android-1.6.apk) | Android 10 或更新版本 |
-| Windows | 1.1 | [EXE](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Windows-1.1-x64.exe) | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
-| macOS | 1.1（build 15） | [DMG](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-macOS-1.1-arm64.dmg) | macOS 13 或更新版本，Apple Silicon |
-| 服务端 | 1.1（增加 JSON 配置与性能优化） | [JAR](https://github.com/TirededMaxer/MsgAT/releases/download/release-2026-10-05/MsgAT-Console-1.1.jar) | Java 21 |
+| Android | 1.6（versionCode 11） | [APK](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Android-1.6.apk) | Android 10 或更新版本 |
+| Windows | 1.1 | [EXE](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Windows-1.1-x64.exe) | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
+| macOS | 1.1（build 15） | [DMG](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-macOS-1.1-arm64.dmg) | macOS 13 或更新版本，Apple Silicon |
+| 服务端 | 1.1（增加 JSON 配置与性能优化） | [JAR](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Console-1.1.jar) | Java 21 |
 
 Windows 包含 .NET 运行时。Mac DMG 打开后将 `MsgAT.app` 拖入“应用程序”；目前使用本机签名，未经过 Apple 公证，首次打开可能需要在系统“隐私与安全性”中允许。Android 正式 APK 使用项目发布密钥签名；自行构建需使用自己的密钥。Release 附带 `SHA256SUMS.txt`，供核对下载文件。
 
@@ -71,7 +71,9 @@ java -jar MsgAT-Console-1.1.jar
 
 ## 构建与贡献
 
-请阅读 [构建指南](docs/BUILDING.md) 和 [贡献指南](CONTRIBUTING.md)。Gradle Wrapper、Swift 包锁文件、NuGet 版本定义等构建输入随仓库提交；构建产物、缓存、真实数据库、签名密钥和本地 IDE 配置不会提交。发布二进制作为 Release 附件提供。
+构建统一在 GitHub Actions 完成：[CI](https://github.com/TirededMaxer/MsgAT/actions/workflows/ci.yml) 负责四端检查，[Cloud packages](https://github.com/TirededMaxer/MsgAT/actions/workflows/packages.yml) 负责正式签名 APK、EXE、DMG 和服务端 JAR。进入 Cloud packages 手动运行，可下载完整构建附件，也可勾选发布并填写新标签；发布成功后只保留最新一份 Release。
+
+云端从源码和锁文件恢复依赖，不使用本地缓存。本地只维护源码、资源、构建脚本和文档。签名配置、触发方式及清单说明见 [构建指南](docs/BUILDING.md)，贡献约定见 [贡献指南](CONTRIBUTING.md)。
 
 ## 许可证
 

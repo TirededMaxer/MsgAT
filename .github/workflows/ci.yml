@@ -3,6 +3,7 @@ name: CI
 on:
   push:
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -17,8 +18,10 @@ jobs:
           distribution: temurin
           java-version: "21"
       - uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: true
       - working-directory: MsgAT
-        run: ./gradlew testDebugUnitTest lintDebug assembleDebug
+        run: ./gradlew --no-build-cache --no-configuration-cache testDebugUnitTest lintDebug assembleDebug
 
   windows:
     runs-on: windows-latest
@@ -33,13 +36,13 @@ jobs:
         run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
 
   macos:
-    runs-on: macos-latest
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - working-directory: MsgAT_macOS
         run: swift test
       - working-directory: MsgAT_macOS
-        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release -destination 'platform=macOS' -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
 
   relay:
     runs-on: ubuntu-latest

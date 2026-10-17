@@ -15,16 +15,16 @@
 | macOS | 1.1（build 15） | [DMG](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-macOS-1.1-arm64.dmg) | macOS 13 或更新版本，Apple Silicon |
 | 服务端 | 1.1（增加 JSON 配置与性能优化） | [JAR](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Console-1.1.jar) | Java 21 |
 
-Windows 包含 .NET 运行时。Mac DMG 打开后将 `MsgAT.app` 拖入“应用程序”；目前使用本机签名，未经过 Apple 公证，首次打开可能需要在系统“隐私与安全性”中允许。Android 正式 APK 使用项目发布密钥签名；自行构建需使用自己的密钥。Release 附带 `SHA256SUMS.txt`，供核对下载文件。
+Windows 包含 .NET 运行时。Mac DMG 打开后将 `MsgAT.app` 拖入“应用程序”；目前使用 ad-hoc 签名，未经过 Apple 公证，首次打开可能需要在系统“隐私与安全性”中允许。Android 正式 APK 使用项目发布密钥签名；自行构建需使用自己的密钥。Release 附带 `SHA256SUMS.txt`，供核对下载文件。
 
-## 本轮更新
+## 功能与改进
 
 - 保留 Mac 原生 SwiftUI 和 Windows WPF 双栏界面，修正设置滚动布局、连接状态、附件展开动画和 Windows 短消息气泡宽度。
 - 三端支持输入框聚焦后粘贴图片直接发送，并同步消息回执、未读状态、引用、媒体和语音处理。
 - Mac 通话支持临时切换到系统扬声器，并在关闭或结束通话时恢复先前输出。
 - 服务端增加 JAR 同目录 JSON 端口配置，离线消息分批发送，限制任务与网络写入积压，减少媒体分片的数据库重复扫描。
 
-详细改动见 [更新记录](CHANGELOG.md)。本轮完成本地编译、签名及产物检查；未额外运行设备测试或压力测试，不提供未经测量的并发容量及 CPU、内存占用结论。
+详细改动见 [更新记录](CHANGELOG.md)。安装包由 GitHub Actions 构建、签名和核验，具体版本、提交和云端运行链接记录在随包的构建清单中。
 
 ## 快速开始
 
@@ -67,6 +67,7 @@ java -jar MsgAT-Console-1.1.jar
 | `MsgAT_macOS/` | macOS：Swift、SwiftUI、原生 WebRTC |
 | `MsgAT_Console/` | 中继：Java 21、Netty、SQLite |
 | `docs/` | 构建、部署和协议说明 |
+| `scripts/ci/` | 云端打包、签名核验和发布脚本 |
 | `.github/` | CI、依赖更新、问题和 PR 模板 |
 
 ## 构建与贡献

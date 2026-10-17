@@ -26,7 +26,7 @@
 
 版本和文件名从各项目源码读取。`release-manifest.json` 记录提交、版本、云端运行链接及各文件 SHA-256；`SHA256SUMS.txt` 提供下载校验。打包实现见 `scripts/ci/packages.py`。
 
-Mac 当前沿用本机临时签名方案，未经过 Apple 公证；改成云端构建不会自动获得 Developer ID。Windows 仍需 WebView2 Runtime。
+Mac 当前使用 ad-hoc 签名，未经过 Apple 公证；改成云端构建不会自动获得 Developer ID。Windows 仍需 WebView2 Runtime。
 
 ## Android 签名 Secrets
 

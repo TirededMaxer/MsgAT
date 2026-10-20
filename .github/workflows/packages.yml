@@ -70,7 +70,7 @@ jobs:
       - name: Remove temporary signing key
         if: always()
         run: rm -rf "$RUNNER_TEMP/msgat-signing"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-android
           path: dist/*
@@ -95,7 +95,7 @@ jobs:
         working-directory: MsgAT_Windows
         run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true
       - run: python scripts/ci/packages.py windows
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-windows
           path: dist/*
@@ -119,7 +119,7 @@ jobs:
           CODE_SIGNING_ALLOWED=NO ARCHS=arm64 build
       - name: Sign application and create DMG
         run: python scripts/ci/packages.py macos
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-macos
           path: dist/*
@@ -141,7 +141,7 @@ jobs:
         working-directory: MsgAT_Console
         run: mvn --batch-mode --no-transfer-progress -DskipTests clean package
       - run: python scripts/ci/packages.py relay
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: package-relay
           path: dist/*
@@ -161,7 +161,7 @@ jobs:
           merge-multiple: true
       - name: Assemble release files and checksums
         run: python scripts/ci/packages.py bundle
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: MsgAT-release
           path: dist/*

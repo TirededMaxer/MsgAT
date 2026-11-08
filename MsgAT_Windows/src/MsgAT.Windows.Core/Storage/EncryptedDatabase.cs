@@ -410,7 +410,18 @@ public sealed class EncryptedDatabase : IDisposable
         return command;
     }
 
-    private void OnChanged() => Changed?.Invoke(this, EventArgs.Empty);
+    internal void NotifyBusinessChanges() => OnChanged();
+
+    private void OnChanged()
+    {
+        // Observer failures cannot turn a committed crypto transaction into an
+        // apparent failure, or prevent a recipient's transport acknowledgement.
+        foreach (EventHandler observer in Changed?.GetInvocationList() ?? [])
+        {
+            try { observer(this,EventArgs.Empty); }
+            catch (Exception error) { System.Diagnostics.Trace.TraceWarning("Database observer failed ({0})",error.GetType().Name); }
+        }
+    }
 
     private static void AddNullable(SqliteCommand command, string name, string? value) =>
         command.Parameters.AddWithValue(name, (object?)value ?? DBNull.Value);

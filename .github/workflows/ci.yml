@@ -38,6 +38,16 @@ jobs:
       - uses: ./.github/actions/native-security
       - working-directory: MsgAT_Windows
         run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
+      - name: Build isolated development app for actual-use acceptance
+        working-directory: MsgAT_Windows
+        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Debug --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: development-windows
+          path: MsgAT_Windows/src/MsgAT.Windows/bin/Debug/net10.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   macos:
     runs-on: macos-26

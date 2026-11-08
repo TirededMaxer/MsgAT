@@ -8,14 +8,14 @@ using MsgAT.Windows.Core.Storage;
 
 namespace MsgAT.Windows.Core.Network;
 
-public sealed class MessagingService : IDisposable
+public sealed class MessagingService : IAsyncDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly RelayClient _relay;
     private readonly SecureSettingsStore _settings;
     private readonly EncryptedDatabase _database;
     private readonly MediaStore _media;
-    private bool _disposed;
+    private readonly SecureMessaging _secure;
 
     public MessagingService(
         RelayClient relay,
@@ -27,41 +27,24 @@ public sealed class MessagingService : IDisposable
         _settings = settings;
         _database = database;
         _media = media;
-        _relay.StateChanged += RelayStateChanged;
+        _secure = new SecureMessaging(relay,settings,database);
     }
 
-    public void Dispose()
+    public event EventHandler<NotificationRequest>? NotificationRequested
     {
-        if (_disposed) { return; }
-        _relay.StateChanged -= RelayStateChanged;
-        _disposed = true;
+        add => _secure.NotificationRequested += value;
+        remove => _secure.NotificationRequested -= value;
     }
+    public event EventHandler<string>? OperationFailed
+    {
+        add => _secure.OperationFailed += value;
+        remove => _secure.OperationFailed -= value;
+    }
+    public ValueTask DisposeAsync() => _secure.DisposeAsync();
 
-    public async Task<bool> SendTextAsync(
-        string peerUuid,
-        string text,
-        string? replyToId = null,
-        string? replyToSender = null,
-        string? replyToContent = null,
-        CancellationToken cancellationToken = default)
-    {
-        var trimmed = text;
-        if (string.IsNullOrWhiteSpace(trimmed)) { return false; }
-        var conversation = RequireSendableConversation(peerUuid);
-        var id = Guid.NewGuid().ToString();
-        var timestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        _database.UpsertMessage(new ChatMessage(
-            id, peerUuid, true, trimmed, "txt", timestamp, IsRead: true,
-            ReplyToId: replyToId, ReplyToSender: replyToSender, ReplyToContent: replyToContent, Status: 0));
-        var payload = new MessagePayload(
-            _settings.MyUuid, id, 1, 0, "txt",
-            Convert.ToBase64String(Encoding.UTF8.GetBytes(trimmed)), timestamp,
-            replyToId, replyToSender, replyToContent);
-        var sent = await SendEncryptedAsync(peerUuid, conversation.PeerPublicKey, GhostPacket.Message, payload, cancellationToken)
-            .ConfigureAwait(false);
-        if (sent) { _database.UpdateMessageStatus(id, 1); }
-        return sent;
-    }
+    public Task<bool> SendTextAsync(string peerUuid,string text,string? replyToId=null,
+        string? replyToSender=null,string? replyToContent=null,CancellationToken cancellationToken=default) =>
+        _secure.SendTextAsync(peerUuid,text,replyToId,cancellationToken);
 
     public async Task<bool> SendMediaAsync(
         string peerUuid,
@@ -104,8 +87,8 @@ public sealed class MessagingService : IDisposable
         return true;
     }
 
-    public Task SendReadAcknowledgementAsync(string peerUuid, string messageId, CancellationToken cancellationToken = default) =>
-        SendControlMessageAsync(peerUuid, "ack_read", messageId, cancellationToken);
+    public Task MarkConversationReadAsync(string peerUuid,CancellationToken cancellationToken=default) =>
+        _secure.MarkReadAsync(peerUuid,cancellationToken);
 
     public async Task RevokeMessageAsync(string peerUuid, string messageId, CancellationToken cancellationToken = default)
     {
@@ -134,65 +117,25 @@ public sealed class MessagingService : IDisposable
         return target;
     }
 
-    public async Task AddFriendAsync(string rawUuid, CancellationToken cancellationToken = default)
-    {
-        if (_relay.State != SyncState.Synced) return;
-        var uuid = NormalizeUuid(rawUuid);
-        if (string.Equals(uuid, _settings.MyUuid, StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException("You cannot add your own UUID.");
-        }
-        if (_database.GetConversation(uuid) is not null) { return; }
-        _database.UpsertConversation(new Conversation(uuid, "Unknown"));
-        var payload = new
-        {
-            senderUuid = _settings.MyUuid,
-            nickname = _settings.Snapshot.Nickname ?? "Unknown",
-            senderPublicKey = _settings.MyX25519PublicKeyBase64
-        };
-        if (!await SendFallbackAsync(uuid, GhostPacket.SearchUser, payload, cancellationToken).ConfigureAwait(false))
-        {
-            _database.DeleteConversation(uuid);
-        }
-    }
+    public Task AddFriendAsync(string rawUuid,CancellationToken cancellationToken=default) =>
+        _secure.RequestContactAsync(NormalizeUuid(rawUuid),cancellationToken);
 
-    public async Task AcceptFriendRequestAsync(string senderUuid, CancellationToken cancellationToken = default)
-    {
-        var request = _database.GetFriendRequest(senderUuid);
-        if (request is null || _relay.State != SyncState.Synced || string.IsNullOrEmpty(request.PeerPublicKey)) return;
-        if (!await SendFallbackAsync(senderUuid, GhostPacket.FriendAccepted, new
-        {
-            senderUuid = _settings.MyUuid,
-            senderPublicKey = _settings.MyX25519PublicKeyBase64
-        }, cancellationToken).ConfigureAwait(false)) return;
-        _database.UpsertConversation(new Conversation(request.SenderUuid, request.Nickname, request.AvatarPath, request.PeerPublicKey));
-        _database.DeleteFriendRequest(senderUuid);
-    }
+    public Task AcceptFriendRequestAsync(string senderUuid,CancellationToken cancellationToken=default) =>
+        _secure.AcceptContactAsync(senderUuid,cancellationToken);
 
-    public void DeclineFriendRequest(string senderUuid) => _database.DeleteFriendRequest(senderUuid);
+    public Task DeclineFriendRequestAsync(string senderUuid,CancellationToken cancellationToken=default) =>
+        _secure.DeclineContactAsync(senderUuid,cancellationToken);
 
-    public async Task DeleteFriendAsync(string peerUuid, CancellationToken cancellationToken = default)
+    public async Task DeleteFriendAsync(string peerUuid,CancellationToken cancellationToken=default)
     {
-        var conversation = _database.GetConversation(peerUuid);
-        if (conversation is not null)
-        {
-            if (!string.IsNullOrWhiteSpace(conversation.PeerPublicKey))
-            {
-                await SendEncryptedAsync(peerUuid, conversation.PeerPublicKey, GhostPacket.FriendDeleted,
-                    new { senderUuid = _settings.MyUuid }, cancellationToken).ConfigureAwait(false);
-            }
-            else
-            {
-                await SendFallbackAsync(peerUuid, GhostPacket.RequestRevoked,
-                    new { senderUuid = _settings.MyUuid }, cancellationToken).ConfigureAwait(false);
-            }
-        }
-        ClearConversationData(peerUuid, deleteConversation: true);
+        var messages=_database.GetAllMessages(peerUuid);
+        await _secure.DeleteContactAsync(peerUuid,cancellationToken).ConfigureAwait(false);
+        foreach (var message in messages) if (message.Extension!="txt") _media.Delete(message.MessageId,message.Extension);
     }
 
     public void ClearMessages(string peerUuid) => ClearConversationData(peerUuid, deleteConversation: false);
 
-    public Task SendProfileAsync(CancellationToken cancellationToken = default) => _relay.SendProfileAsync(cancellationToken);
+    public Task SendProfileAsync(CancellationToken cancellationToken = default) => _secure.BroadcastProfileAsync(cancellationToken);
 
     public async Task<bool> PrepareIdentityResetAsync(CancellationToken cancellationToken = default)
     {
@@ -237,70 +180,6 @@ public sealed class MessagingService : IDisposable
 
     public Task<bool> SendCallSyncAsync(string peerUuid, long duration, CancellationToken cancellationToken = default) =>
         SendCallSignalAsync(peerUuid, GhostPacket.CallSync, new { duration }, cancellationToken);
-
-    private async void RelayStateChanged(object? sender, SyncState state)
-    {
-        _ = sender;
-        if (state != SyncState.Synced) { return; }
-        try { await ResendPendingMessagesAsync().ConfigureAwait(false); }
-        catch (Exception exception) { System.Diagnostics.Trace.TraceError("Message resend failed: {0}", exception); }
-    }
-
-    private async Task ResendPendingMessagesAsync()
-    {
-        foreach (var message in _database.GetPendingMessages())
-        {
-            if (_database.GetConversation(message.ConversationUuid) is not { PeerPublicKey.Length: > 0 }) { continue; }
-            if (message.Extension == "txt")
-            {
-                var conversation = RequireSendableConversation(message.ConversationUuid);
-                var payload = new MessagePayload(
-                    _settings.MyUuid, message.MessageId, 1, 0, "txt",
-                    Convert.ToBase64String(Encoding.UTF8.GetBytes(message.Content)), message.Timestamp,
-                    message.ReplyToId, message.ReplyToSender, message.ReplyToContent);
-                if (await SendEncryptedAsync(message.ConversationUuid, conversation.PeerPublicKey, GhostPacket.Message, payload, default)
-                    .ConfigureAwait(false))
-                {
-                    _database.UpdateMessageStatus(message.MessageId, 1);
-                }
-            }
-            else if (File.Exists(message.Content))
-            {
-                await ResendMediaAsync(message).ConfigureAwait(false);
-            }
-        }
-    }
-
-    private async Task ResendMediaAsync(ChatMessage message)
-    {
-        var conversation = RequireSendableConversation(message.ConversationUuid);
-        var chunks = MediaStore.ReadBase64Chunks(message.Content).ToArray();
-        for (var index = 0; index < chunks.Length; index++)
-        {
-            var payload = new MessagePayload(
-                _settings.MyUuid, message.MessageId, chunks.Length, index, message.Extension,
-                chunks[index], message.Timestamp, message.ReplyToId, message.ReplyToSender, message.ReplyToContent);
-            if (!await SendEncryptedAsync(
-                message.ConversationUuid, conversation.PeerPublicKey, GhostPacket.Message, payload, default).ConfigureAwait(false))
-            {
-                return;
-            }
-        }
-        _database.UpdateMessageStatus(message.MessageId, 1);
-    }
-
-    private Task<bool> SendControlMessageAsync(
-        string peerUuid,
-        string extension,
-        string data,
-        CancellationToken cancellationToken)
-    {
-        var conversation = RequireSendableConversation(peerUuid);
-        var payload = new MessagePayload(
-            _settings.MyUuid, Guid.NewGuid().ToString(), 1, 0, extension,
-            data, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        return SendEncryptedAsync(peerUuid, conversation.PeerPublicKey, GhostPacket.Message, payload, cancellationToken);
-    }
 
     private async Task SendActionAsync(
         string peerUuid,
@@ -352,28 +231,16 @@ public sealed class MessagingService : IDisposable
         CancellationToken cancellationToken)
     {
         var iv = RandomNumberGenerator.GetBytes(16);
-        var encrypted = CryptoService.EncryptEcdh(
-            _settings.IdentitySeed, peerPublicKey, iv, JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions));
+        var plaintext = JsonSerializer.SerializeToUtf8Bytes(payload,JsonOptions);
+        (byte[] CipherText,byte[] AuthTag) encrypted;
+        try { encrypted=_settings.WithRootSeed(seed => CryptoService.EncryptEcdh(seed,peerPublicKey,iv,plaintext)); }
+        finally { CryptographicOperations.ZeroMemory(plaintext); }
         return await _relay.SendAsync(new GhostPacket(
             packetType,
             CryptoService.CalculateMailboxId(peerUuid),
             iv,
             encrypted.CipherText,
             encrypted.AuthTag), cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<bool> SendFallbackAsync<T>(
-        string peerUuid,
-        byte packetType,
-        T payload,
-        CancellationToken cancellationToken)
-    {
-        var iv = RandomNumberGenerator.GetBytes(16);
-        var encrypted = CryptoService.EncryptFallback(
-            peerUuid, peerUuid, iv, JsonSerializer.SerializeToUtf8Bytes(payload, JsonOptions));
-        return await _relay.SendAsync(new GhostPacket(
-            packetType, CryptoService.CalculateMailboxId(peerUuid), iv,
-            encrypted.CipherText, encrypted.AuthTag), cancellationToken).ConfigureAwait(false);
     }
 
     private void ClearConversationData(string peerUuid, bool deleteConversation)

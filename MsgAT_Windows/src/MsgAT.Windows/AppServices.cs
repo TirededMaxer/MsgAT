@@ -23,8 +23,7 @@ public sealed class AppServices : IAsyncDisposable
         RelayClient relay,
         MessagingService messaging,
         WebRtcEngine webRtc,
-        CallService calls,
-        PacketRouter router)
+        CallService calls)
     {
         _dataDirectory = dataDirectory;
         Settings = settings;
@@ -34,7 +33,6 @@ public sealed class AppServices : IAsyncDisposable
         Messaging = messaging;
         WebRtc = webRtc;
         Calls = calls;
-        Router = router;
     }
 
     public SecureSettingsStore Settings { get; }
@@ -44,14 +42,17 @@ public sealed class AppServices : IAsyncDisposable
     public MessagingService Messaging { get; }
     public WebRtcEngine WebRtc { get; }
     public CallService Calls { get; }
-    public PacketRouter Router { get; }
 
     public static async Task<AppServices> CreateAsync(Dispatcher dispatcher, WebView2 webView)
     {
         var dataDirectory = RuntimePaths.DataDirectory;
         Directory.CreateDirectory(dataDirectory);
+        MsgAT.Windows.Core.Crypto.SecurityCore.RequireAvailable();
         var settings = new SecureSettingsStore(dataDirectory);
-        var database = new EncryptedDatabase(Path.Combine(dataDirectory, "msgat_v2_vault.db"), settings.DatabaseKey);
+        var databaseKey=settings.DatabaseKey;
+        EncryptedDatabase database;
+        try { database=new EncryptedDatabase(Path.Combine(dataDirectory,"msgat_v2_vault.db"),databaseKey); }
+        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(databaseKey); }
         var media = new MediaStore(dataDirectory);
         if (!string.IsNullOrWhiteSpace(settings.Snapshot.AvatarPath) && File.Exists(settings.Snapshot.AvatarPath))
         {
@@ -65,14 +66,13 @@ public sealed class AppServices : IAsyncDisposable
         var messaging = new MessagingService(relay, settings, database, media);
         var webRtc = new WebRtcEngine(webView);
         var calls = new CallService(dispatcher, webRtc, messaging, database, settings);
-        var router = new PacketRouter(relay, settings, database, media, calls);
-        router.NotificationRequested += (_, notification) =>
+        messaging.NotificationRequested += (_, notification) =>
         {
             dispatcher.BeginInvoke(() =>
                 ((App)System.Windows.Application.Current).ShowNotification(notification.Title, notification.Body));
         };
         await relay.StartAsync();
-        return new AppServices(dataDirectory, settings, database, media, relay, messaging, webRtc, calls, router);
+        return new AppServices(dataDirectory, settings, database, media, relay, messaging, webRtc, calls);
     }
 
     public async Task SaveNetworkSettingsAsync(SecureSettings updated)
@@ -122,10 +122,13 @@ public sealed class AppServices : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        Router.Dispose();
         Calls.Dispose();
-        Messaging.Dispose();
-        try { await Relay.DisposeAsync(); }
+        try
+        {
+            await Relay.StopAsync();
+            await Messaging.DisposeAsync();
+            await Relay.DisposeAsync();
+        }
         finally { Database.Dispose(); }
     }
 

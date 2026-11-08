@@ -28,6 +28,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _dispatcher = dispatcher;
         _services.Database.Changed += DatabaseChanged;
         _services.Relay.StateChanged += RelayStateChanged;
+        _services.Messaging.OperationFailed += SecureOperationFailed;
         RefreshConversations();
         RefreshFriendRequests();
         RelayStateChanged(this, _services.Relay.State);
@@ -146,7 +147,13 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         catch (InvalidOperationException exception) { ErrorRequested?.Invoke(this, exception.Message); }
     }
 
-    public void DeclineFriendRequest(FriendRequest request) => _services.Messaging.DeclineFriendRequest(request.SenderUuid);
+    public void DeclineFriendRequest(FriendRequest request) => _ = DeclineFriendRequestSafelyAsync(request);
+
+    private async Task DeclineFriendRequestSafelyAsync(FriendRequest request)
+    {
+        try { await _services.Messaging.DeclineFriendRequestAsync(request.SenderUuid); }
+        catch (InvalidOperationException) { ErrorRequested?.Invoke(this,"The contact request could not be declined."); }
+    }
 
     public async Task DeleteSelectedFriendAsync()
     {
@@ -216,6 +223,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _disposed = true;
         _services.Database.Changed -= DatabaseChanged;
         _services.Relay.StateChanged -= RelayStateChanged;
+        _services.Messaging.OperationFailed -= SecureOperationFailed;
     }
 
     private MessageItem CreateMessageItem(ChatMessage message)
@@ -287,19 +295,21 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (previousLast != Messages.LastOrDefault()?.MessageId) { LatestMessagesChanged?.Invoke(this, EventArgs.Empty); }
     }
 
-    private async Task SendReadAckSafelyAsync(string peer, string messageId)
+    private readonly HashSet<string> _readPending = new(StringComparer.Ordinal);
+
+    private async Task MarkReadSafelyAsync(string peer)
     {
-        try { await _services.Messaging.SendReadAcknowledgementAsync(peer, messageId); }
+        try { await _services.Messaging.MarkConversationReadAsync(peer); }
         catch (InvalidOperationException) { }
+        finally { _readPending.Remove(peer); }
     }
 
     public void MarkActiveConversationRead()
     {
         if (_disposed || _services.IsDisposed || !IsViewingLatest || !IsChatContentVisible || SelectedConversation is null ||
             System.Windows.Application.Current.MainWindow is not { IsActive: true, IsVisible: true }) { return; }
-        var unread = _services.Database.MarkConversationRead(SelectedConversation.Uuid);
-        if (unread is null) { return; }
-        _ = SendReadAckSafelyAsync(SelectedConversation.Uuid, unread.MessageId);
+        var peer=SelectedConversation.Uuid;
+        if (_readPending.Add(peer)) _ = MarkReadSafelyAsync(peer);
     }
 
     private void RefreshConversations()
@@ -336,6 +346,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SyncState.Syncing => "Syncing...",
             _ => "Disconnected"
         });
+    }
+
+    private void SecureOperationFailed(object? sender,string message)
+    {
+        _dispatcher.BeginInvoke(() => { if (!_disposed) ErrorRequested?.Invoke(this,message); });
     }
 }
 

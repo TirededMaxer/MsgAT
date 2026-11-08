@@ -35,10 +35,15 @@ public static partial class SecurityCore
     [DefaultDllImportSearchPaths(DllImportSearchPath.AssemblyDirectory | DllImportSearchPath.System32)]
     private static partial void Free(ref NativeBuffer buffer);
 
+    public static void RequireAvailable()
+    {
+        if (AbiVersion()!=2) throw new InvalidOperationException("The native security component has an incompatible version.");
+    }
+
     public static unsafe JsonElement Call(object request)
     {
         ArgumentNullException.ThrowIfNull(request);
-        if (AbiVersion() != 2) throw new InvalidOperationException("The native security component has an incompatible version.");
+        RequireAvailable();
         byte[] encoded = JsonSerializer.SerializeToUtf8Bytes(request);
         NativeBuffer buffer = default;
         byte[]? responseBytes = null;

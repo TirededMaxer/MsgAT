@@ -6,15 +6,9 @@ using System.Text;
 
 namespace MsgAT.Windows.Core.Storage;
 
-public interface IDeviceBoundSecretProtector : ISecretProtector
-{
-    void DestroyKey();
-    void EnsureAvailable(bool requireExistingKey);
-}
-
 /// <summary>Nonexportable TPM RSA-OAEP key wrapping, with AES-256-GCM vault encryption.</summary>
 [SupportedOSPlatform("windows")]
-public sealed class TpmSecretProtector : IDeviceBoundSecretProtector
+public sealed class TpmSecretProtector
 {
     private static readonly CngProvider Provider = new("Microsoft Platform Crypto Provider");
     private readonly string _keyName;

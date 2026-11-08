@@ -3,7 +3,6 @@ using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
-using System.Text.Json;
 using MsgAT.Windows.Core.Crypto;
 using MsgAT.Windows.Core.Models;
 using MsgAT.Windows.Core.Protocol;
@@ -13,14 +12,24 @@ namespace MsgAT.Windows.Core.Network;
 
 public sealed class RelayClient : IAsyncDisposable
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly SecureSettingsStore _settings;
     private readonly SemaphoreSlim _sendGate = new(1, 1);
     private readonly object _stateGate = new();
     private CancellationTokenSource? _lifetime;
     private Task? _connectionLoop;
-    private SslStream? _stream;
+    private volatile SslStream? _stream;
     private SyncState _state;
+    private long _epoch;
+    private long _pendingBytes;
+    internal long ConnectionEpoch => Interlocked.Read(ref _epoch);
+
+    internal void CompleteSync(long epoch) { if (epoch==ConnectionEpoch && _stream is not null) State=SyncState.Synced; }
+    internal void AbortConnection(long epoch)
+    {
+        var stream=_stream;
+        if (epoch!=ConnectionEpoch) return;
+        try { stream?.Dispose(); } catch (IOException) { }
+    }
 
     public RelayClient(SecureSettingsStore settings)
     {
@@ -93,27 +102,46 @@ public sealed class RelayClient : IAsyncDisposable
         State = SyncState.Disconnected;
     }
 
-    public async Task<bool> SendAsync(GhostPacket packet, CancellationToken cancellationToken = default)
+    public Task<bool> SendAsync(GhostPacket packet, CancellationToken cancellationToken = default) => SendCoreAsync(packet,null,cancellationToken);
+    internal Task<bool> SendForEpochAsync(GhostPacket packet,long epoch,CancellationToken token) => SendCoreAsync(packet,epoch,token);
+
+    private async Task<bool> SendCoreAsync(GhostPacket packet,long? expectedEpoch,CancellationToken cancellationToken)
     {
         var stream = _stream;
-        if (stream is null || !stream.CanWrite) { return false; }
+        if (stream is null || !stream.CanWrite || (expectedEpoch is not null && expectedEpoch!=ConnectionEpoch)) { return false; }
         byte[] frame;
         try { frame = GhostPacketCodec.Encode(packet); }
         catch (ArgumentException exception)
         {
-            System.Diagnostics.Trace.TraceWarning("Outbound packet was rejected: {0}", exception.Message);
+            System.Diagnostics.Trace.TraceWarning("Outbound packet was rejected ({0})", exception.GetType().Name);
             return false;
         }
-        await _sendGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        if (Interlocked.Add(ref _pendingBytes,frame.Length)>4L*1024*1024)
+        {
+            Interlocked.Add(ref _pendingBytes,-frame.Length);
+            AbortConnection(ConnectionEpoch);
+            return false;
+        }
+        using var deadline=CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(10));
+        var entered=false;
         try
         {
-            if (!ReferenceEquals(stream, _stream) || !stream.CanWrite) { return false; }
-            await stream.WriteAsync(frame, cancellationToken).ConfigureAwait(false);
-            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            await _sendGate.WaitAsync(deadline.Token).ConfigureAwait(false);
+            entered=true;
+            if (!ReferenceEquals(stream, _stream) || !stream.CanWrite || (expectedEpoch is not null && expectedEpoch!=ConnectionEpoch)) { return false; }
+            await stream.WriteAsync(frame, deadline.Token).ConfigureAwait(false);
+            await stream.FlushAsync(deadline.Token).ConfigureAwait(false);
             return true;
         }
         catch (Exception error) when (error is IOException or ObjectDisposedException) { return false; }
-        finally { _sendGate.Release(); }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        { if (ReferenceEquals(stream,_stream)) AbortConnection(ConnectionEpoch); return false; }
+        finally
+        {
+            if (entered) _sendGate.Release();
+            Interlocked.Add(ref _pendingBytes,-frame.Length);
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -142,7 +170,7 @@ public sealed class RelayClient : IAsyncDisposable
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { break; }
             catch (Exception exception) when (exception is not OperationCanceledException)
             {
-                System.Diagnostics.Trace.TraceWarning("Relay connection failed: {0}", exception.Message);
+                System.Diagnostics.Trace.TraceWarning("Relay connection failed ({0})", exception.GetType().Name);
             }
             finally
             {
@@ -173,6 +201,7 @@ public sealed class RelayClient : IAsyncDisposable
             EnabledSslProtocols = SslProtocols.Tls12 | SslProtocols.Tls13,
             CertificateRevocationCheckMode = X509RevocationMode.Online
         }, cancellationToken).ConfigureAwait(false);
+        Interlocked.Increment(ref _epoch);
         _stream = ssl;
         State = SyncState.Syncing;
         await SendAsync(GhostPacket.Empty(GhostPacket.AuthRequest, _settings.MyMailboxId), cancellationToken)
@@ -241,13 +270,12 @@ public sealed class RelayClient : IAsyncDisposable
                     packet.NonceOrIv,
                     payload,
                     new byte[16]), cancellationToken).ConfigureAwait(false);
-                await SendProfileAsync(cancellationToken).ConfigureAwait(false);
                 break;
             case GhostPacket.DeleteAccount:
                 if (_deletionReply is { } deletion && packet.NonceOrIv.AsSpan().SequenceEqual(deletion.Nonce)) deletion.Result.TrySetResult(true);
                 break;
             case GhostPacket.OfflineEnd:
-                State = SyncState.Synced;
+                if (PacketReceived is { } sync) await sync(packet,cancellationToken).ConfigureAwait(false);
                 break;
             case GhostPacket.Heartbeat:
                 break;
@@ -258,29 +286,6 @@ public sealed class RelayClient : IAsyncDisposable
                 }
                 break;
         }
-    }
-
-    public async Task SendProfileAsync(CancellationToken cancellationToken = default)
-    {
-        var settings = _settings.Snapshot;
-        string? avatarData = null;
-        if (!string.IsNullOrWhiteSpace(settings.AvatarPath) && File.Exists(settings.AvatarPath))
-        {
-            avatarData = Convert.ToBase64String(await File.ReadAllBytesAsync(settings.AvatarPath, cancellationToken).ConfigureAwait(false));
-        }
-        var profile = JsonSerializer.SerializeToUtf8Bytes(new
-        {
-            uuid = _settings.MyUuid,
-            nickname = settings.Nickname ?? "Unknown",
-            avatarPath = settings.AvatarPath ?? "",
-            avatarData
-        }, JsonOptions);
-        await SendAsync(new GhostPacket(
-            GhostPacket.UpdateProfile,
-            _settings.MyMailboxId,
-            new byte[16],
-            profile,
-            new byte[16]), cancellationToken).ConfigureAwait(false);
     }
 
     private async Task HeartbeatLoopAsync(CancellationToken cancellationToken)

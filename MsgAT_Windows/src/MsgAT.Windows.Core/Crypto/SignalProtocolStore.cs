@@ -52,65 +52,62 @@ internal sealed class SignalProtocolStore
     public T Transaction<T>(Func<VaultTransaction, T> operation, bool notify = false) =>
         _database.ProtocolTransaction(operation, notify);
 
-    public JsonObject PublicBundle(bool forceRefresh = false) => Transaction(db =>
+    public void NotifyBusinessChanges() => _database.NotifyBusinessChanges();
+
+    public JsonObject PublicBundle(bool forceRefresh = false) => Transaction(db => _settings.WithRootSeed(seed =>
     {
         var saved = Local(db);
-        var seed = _settings.IdentitySeed;
-        try
+        var request = new JsonObject
         {
-            var request = new JsonObject
+            ["operation"] = "provision_identity", ["seed"] = Convert.ToBase64String(seed), ["prekey_count"] = 100
+        };
+        if (saved is not null)
+        {
+            Require(Text(saved.Value.Identity, "uuid") == _settings.MyUuid, "Vault identity mismatch");
+            var body = Object(Convert.FromBase64String(Text(saved.Value.Bundle, "body")));
+            var ids = body["prekeys"]?.AsArray().Select(key => Number(key!.AsObject(), "id")).ToArray()
+                ?? throw new InvalidDataException("Stored bundle has no prekeys");
+            Require(ids.Length is >= 1 and <= 100, "Invalid stored prekey range");
+            var available = db.Number("SELECT COUNT(*) FROM protocol_keys WHERE kind='ec' AND id>=$p0 AND id<=$p1", ids.Min(), ids.Max());
+            if (!forceRefresh && Number(body, "expires_at") > Seconds + 2 * 86400 && available >= 20)
+                return saved.Value.Bundle;
+            request["operation"] = "refresh_identity";
+            request["local"] = saved.Value.Identity.DeepClone();
+            foreach (var (kind, field) in new[] { ("ec", "first_prekey_id"), ("signed", "signed_prekey_id"), ("pq", "pq_prekey_id") })
             {
-                ["operation"] = "provision_identity", ["seed"] = Convert.ToBase64String(seed), ["prekey_count"] = 100
-            };
-            if (saved is not null)
-            {
-                Require(Text(saved.Value.Identity, "uuid") == _settings.MyUuid, "Vault identity mismatch");
-                var body = Object(Convert.FromBase64String(Text(saved.Value.Bundle, "body")));
-                var ids = body["prekeys"]?.AsArray().Select(key => Number(key!.AsObject(), "id")).ToArray()
-                    ?? throw new InvalidDataException("Stored bundle has no prekeys");
-                Require(ids.Length is >= 1 and <= 100, "Invalid stored prekey range");
-                var available = db.Number("SELECT COUNT(*) FROM protocol_keys WHERE kind='ec' AND id>=$p0 AND id<=$p1", ids.Min(), ids.Max());
-                if (!forceRefresh && Number(body, "expires_at") > Seconds + 2 * 86400 && available >= 20)
-                    return saved.Value.Bundle;
-                request["operation"] = "refresh_identity";
-                request["local"] = saved.Value.Identity.DeepClone();
-                foreach (var (kind, field) in new[] { ("ec", "first_prekey_id"), ("signed", "signed_prekey_id"), ("pq", "pq_prekey_id") })
-                {
-                    var next = db.Number("SELECT next_id FROM protocol_key_counters WHERE kind=$p0", kind);
-                    Require(next is >= 1 and <= uint.MaxValue, "Missing or exhausted prekey counter");
-                    request[field] = next;
-                }
+                var next = db.Number("SELECT next_id FROM protocol_key_counters WHERE kind=$p0", kind);
+                Require(next is >= 1 and <= uint.MaxValue, "Missing or exhausted prekey counter");
+                request[field] = next;
             }
-            else Require(!db.Exists("SELECT 1 FROM protocol_peers UNION ALL SELECT 1 FROM protocol_keys LIMIT 1"), "Protocol identity is missing from an existing vault");
-            var result = Call(request);
-            Require(Text(result, "uuid") == _settings.MyUuid, "Invalid provisioned identity");
-            var bundle = result["public_bundle"]!.AsObject();
-            var state = result["private_state"]!.AsObject();
-            var identity = state["local_identity"]!.AsObject();
-            Require(saved is null || Canonical(saved.Value.Identity) == Canonical(identity), "Prekey refresh cannot replace identity");
-            db.Execute("INSERT INTO protocol_local(id,identity_json,bundle_json) VALUES(1,$p0,$p1) ON CONFLICT(id) DO UPDATE SET identity_json=excluded.identity_json,bundle_json=excluded.bundle_json", Canonical(identity), Canonical(bundle));
-            foreach (var (field, kind) in KeyKinds)
-            {
-                var records = state[field]!.AsArray();
-                Require(records.Count > 0, "Missing provisioned keys");
-                long next = 1;
-                foreach (var value in records)
-                {
-                    var key = value!.AsObject();
-                    var id = Number(key, "id");
-                    Require(id is >= 1 and <= uint.MaxValue, "Invalid provisioned key identifier");
-                    db.Execute("INSERT INTO protocol_keys(kind,id,record,last_resort) VALUES($p0,$p1,$p2,$p3)", kind,id,Text(key,"record"),key["last_resort"]?.GetValue<bool>() == true ? 1 : 0);
-                    db.Execute("INSERT INTO protocol_key_ages(kind,id,created_at) VALUES($p0,$p1,$p2)",kind,id,Seconds);
-                    next = Math.Max(next,id+1);
-                }
-                db.Execute("INSERT INTO protocol_key_counters(kind,next_id) VALUES($p0,$p1) ON CONFLICT(kind) DO UPDATE SET next_id=MAX(next_id,excluded.next_id)",kind,next);
-            }
-            db.Execute("DELETE FROM protocol_keys WHERE (kind,id) IN (SELECT kind,id FROM protocol_key_ages WHERE created_at<$p0)",Seconds-15*86400);
-            db.Execute("DELETE FROM protocol_key_ages WHERE NOT EXISTS (SELECT 1 FROM protocol_keys k WHERE k.kind=protocol_key_ages.kind AND k.id=protocol_key_ages.id)");
-            return (JsonObject)bundle.DeepClone();
         }
-        finally { CryptographicOperations.ZeroMemory(seed); }
-    });
+        else Require(!db.Exists("SELECT 1 FROM protocol_peers UNION ALL SELECT 1 FROM protocol_keys LIMIT 1"), "Protocol identity is missing from an existing vault");
+        var result = Call(request);
+        Require(Text(result, "uuid") == _settings.MyUuid, "Invalid provisioned identity");
+        var bundle = result["public_bundle"]!.AsObject();
+        var state = result["private_state"]!.AsObject();
+        var identity = state["local_identity"]!.AsObject();
+        Require(saved is null || Canonical(saved.Value.Identity) == Canonical(identity), "Prekey refresh cannot replace identity");
+        db.Execute("INSERT INTO protocol_local(id,identity_json,bundle_json) VALUES(1,$p0,$p1) ON CONFLICT(id) DO UPDATE SET identity_json=excluded.identity_json,bundle_json=excluded.bundle_json", Canonical(identity), Canonical(bundle));
+        foreach (var (field, kind) in KeyKinds)
+        {
+            var records = state[field]!.AsArray();
+            Require(records.Count > 0, "Missing provisioned keys");
+            long next = 1;
+            foreach (var value in records)
+            {
+                var key = value!.AsObject();
+                var id = Number(key, "id");
+                Require(id is >= 1 and <= uint.MaxValue, "Invalid provisioned key identifier");
+                db.Execute("INSERT INTO protocol_keys(kind,id,record,last_resort) VALUES($p0,$p1,$p2,$p3)", kind,id,Text(key,"record"),key["last_resort"]?.GetValue<bool>() == true ? 1 : 0);
+                db.Execute("INSERT INTO protocol_key_ages(kind,id,created_at) VALUES($p0,$p1,$p2)",kind,id,Seconds);
+                next = Math.Max(next,id+1);
+            }
+            db.Execute("INSERT INTO protocol_key_counters(kind,next_id) VALUES($p0,$p1) ON CONFLICT(kind) DO UPDATE SET next_id=MAX(next_id,excluded.next_id)",kind,next);
+        }
+        db.Execute("DELETE FROM protocol_keys WHERE (kind,id) IN (SELECT kind,id FROM protocol_key_ages WHERE created_at<$p0)",Seconds-15*86400);
+        db.Execute("DELETE FROM protocol_key_ages WHERE NOT EXISTS (SELECT 1 FROM protocol_keys k WHERE k.kind=protocol_key_ages.kind AND k.id=protocol_key_ages.id)");
+        return (JsonObject)bundle.DeepClone();
+    }));
 
     public bool HasSession(string recipient) => Transaction(db => Peer(db,recipient)?["session_record"] is JsonValue);
 

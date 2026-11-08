@@ -32,6 +32,16 @@ public sealed record GhostPacket(
     public const byte CallEnd = 0x17;
     public const byte CallBusy = 0x18;
     public const byte CallSync = 0x19;
+    public const byte V2Submit = 0x40;
+    public const byte V2KeyPublish = 0x41;
+    public const byte V2KeyPublished = 0x42;
+    public const byte V2KeyClaim = 0x43;
+    public const byte V2KeyResponse = 0x44;
+    public const byte V2Stored = 0x45;
+    public const byte V2Delivery = 0x46;
+    public const byte V2Received = 0x47;
+    public const byte V2Sync = 0x48;
+    public const byte V2SyncEnd = 0x49;
 
     public static GhostPacket Empty(byte type, string? mailboxId = null) =>
         new(type, mailboxId, new byte[16], [], new byte[16]);

@@ -8,12 +8,6 @@ using MsgAT.Windows.Core.Crypto;
 
 namespace MsgAT.Windows.Core.Storage;
 
-public interface ISecretProtector
-{
-    byte[] Protect(byte[] plaintext);
-    byte[] Unprotect(byte[] ciphertext);
-}
-
 /// <summary>Read-only compatibility for an existing local V1 vault, never new identities.</summary>
 [SupportedOSPlatform("windows")]
 internal static class LegacyDpapiVault
@@ -50,7 +44,7 @@ public sealed class SecureSettingsStore
     private readonly string _vaultPath;
     private readonly string _identityMarkerPath;
     private readonly string _hardwareMarkerPath;
-    private readonly IDeviceBoundSecretProtector _protector;
+    private readonly TpmSecretProtector _protector;
     // The only long-lived identity cache is authenticated hardware ciphertext.
     private byte[] _sealedVault = [];
     private SecureSettings _settings = new();
@@ -73,15 +67,11 @@ public sealed class SecureSettingsStore
     public SecureSettings Snapshot { get { lock (_gate) return _settings with { }; } }
     public string MyUuid { get { lock (_gate) return _uuid; } }
     public string MyMailboxId => CryptoService.CalculateMailboxId(MyUuid);
-    public string MyX25519PublicKeyBase64 => WithRootSeed(CryptoService.GetX25519PublicKeyBase64);
     public bool IsConfigured
     {
         get { var settings=Snapshot; return !string.IsNullOrWhiteSpace(settings.ServerAddress) && settings.ServerPort is > 0 and <= 65535; }
     }
 
-    // Compatibility for callers being migrated to WithRootSeed. Callers own and
-    // must zero this buffer; it is never retained by the settings object.
-    internal byte[] IdentitySeed => OpenIdentity((seed,_) => seed.ToArray());
     public byte[] DatabaseKey => OpenIdentity((seed,envelope) => RootKeyHierarchy.Unwrap(seed,"database",envelope));
 
     internal T WithRootSeed<T>(Func<byte[],T> operation)

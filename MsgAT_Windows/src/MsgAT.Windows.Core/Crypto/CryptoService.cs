@@ -54,21 +54,6 @@ public static class CryptoService
         byte[] authTag) =>
         Decrypt(GetEcdhKey(seed, peerPublicKeyBase64), iv, cipherText, authTag);
 
-    public static (byte[] CipherText, byte[] AuthTag) EncryptFallback(
-        string firstUuid,
-        string secondUuid,
-        byte[] iv,
-        byte[] plaintext) =>
-        Encrypt(GetFallbackKey(firstUuid, secondUuid), iv, plaintext);
-
-    public static byte[] DecryptFallback(
-        string firstUuid,
-        string secondUuid,
-        byte[] iv,
-        byte[] cipherText,
-        byte[] authTag) =>
-        Decrypt(GetFallbackKey(firstUuid, secondUuid), iv, cipherText, authTag);
-
     private static Ed25519PrivateKeyParameters GetEd25519PrivateKey(byte[] seed)
     {
         ValidateSeed(seed);
@@ -79,15 +64,6 @@ public static class CryptoService
     {
         ValidateSeed(seed);
         return new X25519PrivateKeyParameters(seed, 0);
-    }
-
-    private static byte[] GetFallbackKey(string firstUuid, string secondUuid)
-    {
-        var values = new[] { firstUuid, secondUuid };
-        Array.Sort(values, StringComparer.Ordinal);
-        return Digest(
-            new Blake2bDigest(256),
-            Encoding.UTF8.GetBytes($"{values[0]}|MSGAT|{values[1]}"));
     }
 
     private static byte[] GetEcdhKey(byte[] seed, string peerPublicKeyBase64)

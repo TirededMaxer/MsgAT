@@ -4,7 +4,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
-import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.withStateAtLeast
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.launch
@@ -39,16 +39,50 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
 
-        val app = MsgATApp.instance
-        if (!app.isReady) {
-            android.app.AlertDialog.Builder(this)
-                .setTitle("MsgAT could not start")
-                .setMessage(app.startupFailure ?: "The device identity vault is unavailable.")
-                .setCancelable(false)
-                .setPositiveButton(android.R.string.ok) { _, _ -> finish() }
-                .show()
-            return
+        setContent {
+            MsgAtTheme {
+                Box(modifier=androidx.compose.ui.Modifier.fillMaxSize(),contentAlignment=androidx.compose.ui.Alignment.Center) {
+                    androidx.compose.material3.CircularProgressIndicator()
+                }
+            }
         }
+        lifecycleScope.launch {
+            val app=MsgATApp.instance
+            val state=app.awaitStartup()
+            lifecycle.withStateAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED) {
+                if (state==MsgATApp.StartupState.FAILED) {
+                    android.app.AlertDialog.Builder(this@MainActivity)
+                        .setTitle("MsgAT could not start")
+                        .setMessage(app.startupFailure ?: "The device identity vault is unavailable.")
+                        .setCancelable(false)
+                        .setPositiveButton(android.R.string.ok) { _,_ -> finish() }
+                        .show()
+                } else showReadyInterface(app)
+            }
+        }
+    }
+
+    private var interfaceReady=false
+
+    override fun onResume() {
+        super.onResume()
+        if (interfaceReady) startConnection()
+    }
+
+    private fun startConnection() {
+        if (!MsgATApp.instance.isReady || !nettyClient.isConfigured()) return
+        nettyClient.connect()
+        try {
+            startForegroundService(android.content.Intent(this,org.msgat.core.network.MsgATService::class.java))
+        } catch (error: RuntimeException) {
+            // The foreground UI connection remains usable if the OS refuses
+            // background execution or its data-sync budget is exhausted.
+            android.util.Log.w("MsgAT_Service","Background start refused: ${error.javaClass.simpleName}")
+        }
+    }
+
+    private fun showReadyInterface(app: MsgATApp) {
+        interfaceReady=true
         securePrefs = app.securePrefs
         db = app.db
         nettyClient = app.nettyClient
@@ -70,12 +104,7 @@ class MainActivity : ComponentActivity() {
             requestPermissions(permissionsToRequest.toTypedArray(), 1001)
         }
 
-        val serviceIntent = android.content.Intent(this, org.msgat.core.network.MsgATService::class.java)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
+        startConnection()
 
         val viewModelFactory = object : ViewModelProvider.Factory {
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -118,7 +147,7 @@ class MainActivity : ComponentActivity() {
                                 isIdentityMissing = viewModel.isIdentityMissing,
                                 onNavigateToChat = { uuid -> navController.navigate("chat/$uuid") },
                                 onAddConversation = viewModel::addConversation,
-                                onSaveSettings = viewModel::saveSettings,
+                                onSaveSettings = { settings -> viewModel.saveSettings(settings); startConnection() },
                                 onDeleteConversation = viewModel::deleteConversation,
                                 onClearMessages = viewModel::clearMessages,
                                 onResetIdentity = {

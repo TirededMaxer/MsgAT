@@ -47,12 +47,16 @@ public sealed class AppServices : IAsyncDisposable
     {
         var dataDirectory = RuntimePaths.DataDirectory;
         Directory.CreateDirectory(dataDirectory);
-        MsgAT.Windows.Core.Crypto.SecurityCore.RequireAvailable();
-        var settings = new SecureSettingsStore(dataDirectory);
-        var databaseKey=settings.DatabaseKey;
-        EncryptedDatabase database;
-        try { database=new EncryptedDatabase(Path.Combine(dataDirectory,"msgat_v2_vault.db"),databaseKey); }
-        finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(databaseKey); }
+        var opened=await Task.Run(() =>
+        {
+            MsgAT.Windows.Core.Crypto.SecurityCore.RequireAvailable();
+            var identity=new SecureSettingsStore(dataDirectory);
+            var key=identity.DatabaseKey;
+            try { return (Settings:identity,Database:new EncryptedDatabase(Path.Combine(dataDirectory,"msgat_v2_vault.db"),key)); }
+            finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(key); }
+        });
+        var settings=opened.Settings;
+        var database=opened.Database;
         var media = new MediaStore(dataDirectory);
         if (!string.IsNullOrWhiteSpace(settings.Snapshot.AvatarPath) && File.Exists(settings.Snapshot.AvatarPath))
         {
@@ -77,7 +81,7 @@ public sealed class AppServices : IAsyncDisposable
 
     public async Task SaveNetworkSettingsAsync(SecureSettings updated)
     {
-        Settings.Update(current => current with
+        await Task.Run(() => Settings.Update(current => current with
         {
             ServerAddress = updated.ServerAddress,
             ServerPort = updated.ServerPort,
@@ -88,7 +92,7 @@ public sealed class AppServices : IAsyncDisposable
             TurnUseTls = updated.TurnUseTls,
             ServerCertificateSha256 = updated.ServerCertificateSha256,
             AllowDevelopmentCertificate = updated.AllowDevelopmentCertificate
-        });
+        }));
         await Relay.ReconnectAsync();
     }
 

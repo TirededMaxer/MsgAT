@@ -26,6 +26,13 @@ jobs:
           android: 'true'
       - working-directory: MsgAT
         run: ./gradlew --no-build-cache --no-configuration-cache lintDebug assembleDebug
+      - uses: actions/upload-artifact@v4
+        with:
+          name: development-android
+          path: MsgAT/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   windows:
     runs-on: windows-latest

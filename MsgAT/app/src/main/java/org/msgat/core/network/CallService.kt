@@ -14,6 +14,10 @@ class CallService : Service() {
     private var isForeground = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (!org.msgat.MsgATApp.instance.isReady) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         val action = intent?.action
         if (action == "ACTION_ACCEPT_CALL") {
             CallManager.getInstance().acceptCall()

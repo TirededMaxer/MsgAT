@@ -64,8 +64,8 @@ public sealed class SecureSettingsStore
     }
 
     public event EventHandler? Changed;
-    public SecureSettings Snapshot { get { lock (_gate) return _settings with { }; } }
-    public string MyUuid { get { lock (_gate) return _uuid; } }
+    public SecureSettings Snapshot => Volatile.Read(ref _settings);
+    public string MyUuid => Volatile.Read(ref _uuid);
     public string MyMailboxId => CryptoService.CalculateMailboxId(MyUuid);
     public bool IsConfigured
     {
@@ -87,6 +87,7 @@ public sealed class SecureSettingsStore
         {
             var updated=update(_settings) ?? throw new InvalidOperationException("Settings update returned null.");
             ValidateSettings(updated);
+            if (updated==_settings) return;
             OpenIdentity((seed,envelope) => { Save(updated,seed,envelope); return true; });
         }
         Changed?.Invoke(this,EventArgs.Empty);
@@ -117,7 +118,7 @@ public sealed class SecureSettingsStore
                 _protector.DestroyKey();
                 _protector.EnsureAvailable(requireExistingKey:false);
                 Save(settings,seed,envelope);
-                _uuid=CryptoService.CalculateUuid(seed);
+                Volatile.Write(ref _uuid,CryptoService.CalculateUuid(seed));
             }
             finally { CryptographicOperations.ZeroMemory(seed); CryptographicOperations.ZeroMemory(key); }
         }
@@ -162,7 +163,7 @@ public sealed class SecureSettingsStore
             try
             {
                 Save(new SecureSettings { RelayTlsSecurityV2=true },seed,RootKeyHierarchy.Wrap(seed,"database",key));
-                _uuid=CryptoService.CalculateUuid(seed);
+                Volatile.Write(ref _uuid,CryptoService.CalculateUuid(seed));
             }
             finally { CryptographicOperations.ZeroMemory(seed); CryptographicOperations.ZeroMemory(key); }
             return;
@@ -197,9 +198,9 @@ public sealed class SecureSettingsStore
             ValidateSettings(settings);
             var opened=RootKeyHierarchy.Unwrap(seedBytes,"database",databaseEnvelope);
             CryptographicOperations.ZeroMemory(opened);
-            _uuid=CryptoService.CalculateUuid(seedBytes);
+            Volatile.Write(ref _uuid,CryptoService.CalculateUuid(seedBytes));
             if (!hardware || resetTls || root.GetProperty("formatVersion").GetInt32()==2) Save(settings,seedBytes,databaseEnvelope);
-            else { _settings=settings; _sealedVault=ciphertext; WriteMarker(_hardwareMarkerPath,"TPM device envelope v2"u8); }
+            else { Volatile.Write(ref _settings,settings); _sealedVault=ciphertext; WriteMarker(_hardwareMarkerPath,"TPM device envelope v2"u8); }
         }
         finally
         {
@@ -241,7 +242,7 @@ public sealed class SecureSettingsStore
             }
             File.Move(temporaryPath,_vaultPath,overwrite:true);
             _sealedVault=ciphertext;
-            _settings=settings;
+            Volatile.Write(ref _settings,settings);
             WriteMarker(_hardwareMarkerPath,"TPM device envelope v2"u8);
         }
         finally

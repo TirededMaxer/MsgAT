@@ -14,7 +14,7 @@ namespace MsgAT.Windows.Core.Network;
 internal sealed class SecureMessaging : IAsyncDisposable
 {
     private sealed class VisibleFailure(string message) : InvalidOperationException(message) { }
-    private sealed record Work(Func<CancellationToken,Task> Run,CancellationToken Token,TaskCompletionSource<bool> Result,bool NotifyFailure);
+    private sealed record Work(Func<CancellationToken,Task> Run,TaskCompletionSource<bool> Result,bool NotifyFailure,CancellationToken Token);
     private readonly RelayClient _relay;
     private readonly SecureSettingsStore _settings;
     private readonly SignalProtocolStore _store;
@@ -153,7 +153,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
         try { await FlushAsync(_lifetime.Token).ConfigureAwait(false); }
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
         catch (Exception error) { Report(error); } // Already committed: preserve success and retry later.
-    },token,notifyFailure:false);
+    },notifyFailure:false,token:token);
 
     private async Task HandleAsync(GhostPacket packet,CancellationToken token)
     {
@@ -202,7 +202,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
                     await FlushAsync(ct).ConfigureAwait(false);
                     break;
             }
-        },token).ConfigureAwait(false);
+        },token:token).ConfigureAwait(false);
     }
 
     private async Task BeginSyncAsync(long connection,CancellationToken token)
@@ -328,7 +328,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
                     }
                     await FlushAsync(token).ConfigureAwait(false);
                     await PullAsync(token).ConfigureAwait(false);
-                },_lifetime.Token).ConfigureAwait(false); }
+                },token:_lifetime.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { break; }
                 catch (Exception) { _relay.AbortConnection(_epoch); }
             }
@@ -336,11 +336,11 @@ internal sealed class SecureMessaging : IAsyncDisposable
         catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
     }
 
-    private Task<bool> Submit(Func<CancellationToken,Task> operation,CancellationToken token,bool notifyFailure=true)
+    private Task<bool> Submit(Func<CancellationToken,Task> operation,bool notifyFailure=true,CancellationToken token=default)
     {
         if (Volatile.Read(ref _disposed)!=0) return Task.FromException<bool>(new ObjectDisposedException(nameof(SecureMessaging)));
         var result=new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        if (!_commands.Writer.TryWrite(new Work(operation,token,result,notifyFailure)))
+        if (!_commands.Writer.TryWrite(new Work(operation,result,notifyFailure,token)))
         {
             _relay.AbortConnection(_relay.ConnectionEpoch);
             result.TrySetException(new InvalidOperationException("The secure-operation queue is busy. Try again shortly."));
@@ -353,6 +353,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
         {
             await foreach (var work in _commands.Reader.ReadAllAsync(_lifetime.Token).ConfigureAwait(false))
             {
+                if (_lifetime.IsCancellationRequested) { work.Result.TrySetCanceled(); break; }
                 try
                 {
                     work.Token.ThrowIfCancellationRequested();

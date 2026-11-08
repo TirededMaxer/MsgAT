@@ -20,9 +20,7 @@ abstract class AppDatabase : RoomDatabase() {
         // Returns a singleton instance of the Room database.
         fun getInstance(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
-                val instance = buildDatabase(context)
-                INSTANCE = instance
-                instance
+                INSTANCE ?: buildDatabase(context).also { INSTANCE=it }
             }
         }
 
@@ -34,7 +32,7 @@ abstract class AppDatabase : RoomDatabase() {
 
             val factory = SupportOpenHelperFactory(passphrase)
 
-            return Room.databaseBuilder(
+            val instance=Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 DATABASE_NAME
@@ -48,6 +46,13 @@ abstract class AppDatabase : RoomDatabase() {
                     }
                 })
                 .build()
+            try {
+                instance.openHelper.writableDatabase
+                return instance
+            } catch (error: Exception) {
+                instance.close()
+                throw error
+            } finally { passphrase.fill(0) }
         }
 
         // Retrieves or generates the secure 256-bit key used for SQLCipher encryption.

@@ -22,27 +22,29 @@ internal sealed class SignalProtocolStore
     private static readonly (string Field, string Kind)[] KeyKinds =
         [("prekeys", "ec"), ("signed_prekeys", "signed"), ("pq_prekeys", "pq")];
 
+    private static readonly string[] Schema =
+    [
+    "CREATE TABLE IF NOT EXISTS protocol_local(id INTEGER PRIMARY KEY CHECK(id=1),identity_json TEXT NOT NULL,bundle_json TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_keys(kind TEXT NOT NULL,id INTEGER NOT NULL,record TEXT NOT NULL,last_resort INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(kind,id))",
+    "CREATE TABLE IF NOT EXISTS protocol_key_counters(kind TEXT PRIMARY KEY NOT NULL,next_id INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_key_ages(kind TEXT NOT NULL,id INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(kind,id))",
+    "CREATE TABLE IF NOT EXISTS protocol_peers(uuid TEXT PRIMARY KEY NOT NULL,state_json TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_pq_uses(fingerprint TEXT PRIMARY KEY NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_outbox(event_id TEXT PRIMARY KEY NOT NULL,recipient TEXT NOT NULL,payload_hash TEXT NOT NULL,wire TEXT NOT NULL,delivered INTEGER NOT NULL DEFAULT 0)",
+    "CREATE TABLE IF NOT EXISTS protocol_pending_events(event_id TEXT PRIMARY KEY NOT NULL,recipient TEXT NOT NULL,kind TEXT NOT NULL,body_json TEXT NOT NULL,created_at INTEGER NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_key_requests(recipient TEXT PRIMARY KEY NOT NULL,request_id TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS protocol_inbox(sender TEXT NOT NULL,event_id TEXT NOT NULL,payload_hash TEXT NOT NULL,PRIMARY KEY(sender,event_id))",
+    "CREATE TABLE IF NOT EXISTS protocol_received_wires(wire_hash TEXT PRIMARY KEY NOT NULL,sender TEXT NOT NULL,event_id TEXT NOT NULL)",
+    "CREATE TABLE IF NOT EXISTS contact_states(uuid TEXT PRIMARY KEY NOT NULL,outgoing INTEGER NOT NULL DEFAULT 0,incoming INTEGER NOT NULL DEFAULT 0,accepted INTEGER NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0)"
+    ];
+
     public SignalProtocolStore(EncryptedDatabase database, SecureSettingsStore settings)
     {
         _database = database;
         _settings = settings;
         Transaction(db =>
         {
-            foreach (var sql in new[]
-            {
-                "CREATE TABLE IF NOT EXISTS protocol_local(id INTEGER PRIMARY KEY CHECK(id=1),identity_json TEXT NOT NULL,bundle_json TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_keys(kind TEXT NOT NULL,id INTEGER NOT NULL,record TEXT NOT NULL,last_resort INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(kind,id))",
-                "CREATE TABLE IF NOT EXISTS protocol_key_counters(kind TEXT PRIMARY KEY NOT NULL,next_id INTEGER NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_key_ages(kind TEXT NOT NULL,id INTEGER NOT NULL,created_at INTEGER NOT NULL,PRIMARY KEY(kind,id))",
-                "CREATE TABLE IF NOT EXISTS protocol_peers(uuid TEXT PRIMARY KEY NOT NULL,state_json TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_pq_uses(fingerprint TEXT PRIMARY KEY NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_outbox(event_id TEXT PRIMARY KEY NOT NULL,recipient TEXT NOT NULL,payload_hash TEXT NOT NULL,wire TEXT NOT NULL,delivered INTEGER NOT NULL DEFAULT 0)",
-                "CREATE TABLE IF NOT EXISTS protocol_pending_events(event_id TEXT PRIMARY KEY NOT NULL,recipient TEXT NOT NULL,kind TEXT NOT NULL,body_json TEXT NOT NULL,created_at INTEGER NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_key_requests(recipient TEXT PRIMARY KEY NOT NULL,request_id TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS protocol_inbox(sender TEXT NOT NULL,event_id TEXT NOT NULL,payload_hash TEXT NOT NULL,PRIMARY KEY(sender,event_id))",
-                "CREATE TABLE IF NOT EXISTS protocol_received_wires(wire_hash TEXT PRIMARY KEY NOT NULL,sender TEXT NOT NULL,event_id TEXT NOT NULL)",
-                "CREATE TABLE IF NOT EXISTS contact_states(uuid TEXT PRIMARY KEY NOT NULL,outgoing INTEGER NOT NULL DEFAULT 0,incoming INTEGER NOT NULL DEFAULT 0,accepted INTEGER NOT NULL DEFAULT 0,blocked INTEGER NOT NULL DEFAULT 0)"
-            }) db.Execute(sql);
+            foreach (var sql in Schema) db.Execute(sql);
             return true;
         });
     }
@@ -112,7 +114,7 @@ internal sealed class SignalProtocolStore
 
     public bool HasSession(string recipient) => Transaction(db => Peer(db,recipient)?["session_record"] is JsonValue);
 
-    public bool Enqueue(Pending message, VaultTransaction db)
+    public static bool Enqueue(Pending message, VaultTransaction db)
     {
         Validate(message.EventId,message.Kind,message.CreatedAt);
         Require(IsAccountId(message.Recipient), "Invalid recipient identity");

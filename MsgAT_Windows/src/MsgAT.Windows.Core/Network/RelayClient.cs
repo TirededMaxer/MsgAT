@@ -230,7 +230,8 @@ public sealed class RelayClient : IAsyncDisposable
         switch (packet.Type)
         {
             case GhostPacket.AuthChallenge:
-                var signed = CryptoService.SignChallenge(_settings.IdentitySeed, packet.NonceOrIv);
+                if (packet.NonceOrIv.Length!=16) throw new InvalidDataException("Invalid authentication challenge.");
+                var signed = _settings.WithRootSeed(seed => CryptoService.SignChallenge(seed, packet.NonceOrIv));
                 var payload = new byte[signed.PublicKey.Length + signed.Signature.Length];
                 signed.PublicKey.CopyTo(payload, 0);
                 signed.Signature.CopyTo(payload, signed.PublicKey.Length);

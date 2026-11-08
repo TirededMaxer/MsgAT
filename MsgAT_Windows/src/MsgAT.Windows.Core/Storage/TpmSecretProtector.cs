@@ -9,6 +9,7 @@ namespace MsgAT.Windows.Core.Storage;
 public interface IDeviceBoundSecretProtector : ISecretProtector
 {
     void DestroyKey();
+    void EnsureAvailable(bool requireExistingKey);
 }
 
 /// <summary>Nonexportable TPM RSA-OAEP key wrapping, with AES-256-GCM vault encryption.</summary>

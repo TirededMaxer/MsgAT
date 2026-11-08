@@ -14,9 +14,7 @@ public final class MediaStorageManager {
     }
 
     public var mediaDirectory: URL {
-        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let mediaDir = appSupport.appendingPathComponent("org.msgat.mac/media", isDirectory: true)
-        return mediaDir
+        RuntimePaths.applicationSupport.appendingPathComponent("media", isDirectory: true)
     }
 
     public func getMediaFile(msgId: String, ext: String) -> URL {

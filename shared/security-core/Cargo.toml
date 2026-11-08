@@ -1,0 +1,33 @@
+[package]
+name = "msgat-security-core"
+version = "2.0.0"
+edition = "2024"
+rust-version = "1.98.1"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+name = "msgat_security_core"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+async-trait = "0.1.79"
+base64 = "0.22.1"
+ed25519-dalek = "2.2.0"
+futures-executor = "0.3"
+hkdf = "0.12.4"
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "850942581c06fa65c0323fd52029afa02fa1a1ba", features = ["mlkem1024"] }
+rand = "0.9.4"
+prost = "0.14"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
+zeroize = "1.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

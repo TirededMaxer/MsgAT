@@ -59,142 +59,24 @@ public final class SessionListViewModel: ObservableObject {
         guard uuid.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil,
               uuid != currentUuid, (try? MsgDao.shared.getConversationByUuid(uuid)) == nil else { return }
 
-        let conv = Conversation(uuid: uuid, alias: "Unknown")
-        try? MsgDao.shared.insertConversation(conv)
-
-        let myUuid = KeychainManager.shared.myUuid
-        let myNickname = KeychainManager.shared.myNickname ?? "Unknown"
-        let myPub = KeychainManager.shared.myX25519PublicKeyBase64
-
-        let dict = [
-            "senderUuid": myUuid,
-            "nickname": myNickname,
-            "senderPublicKey": myPub
-        ]
-
-        guard let json = try? JSONSerialization.data(withJSONObject: dict) else { return }
-
-        var ivBytes = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-        let iv = Data(ivBytes)
-
-        guard let (cipher, tag) = try? CryptoManager.encryptPayloadFallback(
-            myUuid: uuid,
-            targetUuid: uuid,
-            iv: iv,
-            plaintext: json
-        ) else { return }
-
-        let targetMailbox = CryptoManager.calculateMailboxId(uuid: uuid)
-        let packet = GhostPacket(
-            type: GhostPacket.typeSearchUser,
-            targetMailboxId: targetMailbox,
-            nonceOrIv: iv,
-            encryptedData: cipher,
-            authTag: tag
-        )
-        if !NWClient.shared.sendPacket(packet) { try? MsgDao.shared.deleteConversation(uuid) }
-        loadData()
+        SecureMessaging.shared.requestContact(uuid)
     }
 
     public func acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
-        guard syncState == .synced else { return }
-        guard let req = try? MsgDao.shared.getFriendRequestByUuid(senderUuid), !req.peerPublicKey.isEmpty else { return }
-        let conv = Conversation(uuid: senderUuid, alias: nickname, avatarPath: avatarPath, peerPublicKey: req.peerPublicKey)
-
-        let myUuid = KeychainManager.shared.myUuid
-        let myPub = KeychainManager.shared.myX25519PublicKeyBase64
-        let dict = ["senderUuid": myUuid, "senderPublicKey": myPub]
-
-        guard let json = try? JSONSerialization.data(withJSONObject: dict) else { return }
-
-        var ivBytes = [UInt8](repeating: 0, count: 16)
-        _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-        let iv = Data(ivBytes)
-
-        guard let (cipher, tag) = try? CryptoManager.encryptPayloadFallback(
-            myUuid: senderUuid,
-            targetUuid: senderUuid,
-            iv: iv,
-            plaintext: json
-        ) else { return }
-
-        let targetMailbox = CryptoManager.calculateMailboxId(uuid: senderUuid)
-        let packet = GhostPacket(
-            type: GhostPacket.typeFriendAccepted,
-            targetMailboxId: targetMailbox,
-            nonceOrIv: iv,
-            encryptedData: cipher,
-            authTag: tag
-        )
-        guard NWClient.shared.sendPacket(packet) else { return }
-        do {
-            try MsgDao.shared.insertConversation(conv)
-            try MsgDao.shared.deleteFriendRequest(senderUuid)
-        } catch { resetErrorMessage = error.localizedDescription }
-        loadData()
+        SecureMessaging.shared.acceptContact(senderUuid, nickname: nickname, avatarPath: avatarPath)
     }
 
     public func declineFriendRequest(senderUuid: String) {
-        try? MsgDao.shared.deleteFriendRequest(senderUuid)
-        loadData()
+        SecureMessaging.shared.declineContact(senderUuid)
     }
 
     public func deleteConversation(uuid: String) {
-        if let convo = try? MsgDao.shared.getConversationByUuid(uuid) {
-            let targetMailbox = CryptoManager.calculateMailboxId(uuid: uuid)
-            var ivBytes = [UInt8](repeating: 0, count: 16)
-            _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-            let iv = Data(ivBytes)
-
-            let myUuid = KeychainManager.shared.myUuid
-            let dict = ["senderUuid": myUuid]
-            if let json = try? JSONSerialization.data(withJSONObject: dict) {
-                if !convo.peerPublicKey.isEmpty {
-                    let myPriv = KeychainManager.shared.x25519PrivateKey
-                    if let (cipher, tag) = try? CryptoManager.encryptPayloadECDH(
-                        myPrivateKey: myPriv,
-                        peerPublicKeyBase64: convo.peerPublicKey,
-                        iv: iv,
-                        plaintext: json
-                    ) {
-                        let packet = GhostPacket(
-                            type: GhostPacket.typeFriendDeleted,
-                            targetMailboxId: targetMailbox,
-                            nonceOrIv: iv,
-                            encryptedData: cipher,
-                            authTag: tag
-                        )
-                        NWClient.shared.sendPacket(packet)
-                    }
-                } else {
-                    if let (cipher, tag) = try? CryptoManager.encryptPayloadFallback(
-                        myUuid: uuid,
-                        targetUuid: uuid,
-                        iv: iv,
-                        plaintext: json
-                    ) {
-                        let packet = GhostPacket(
-                            type: GhostPacket.typeRequestRevoked,
-                            targetMailboxId: targetMailbox,
-                            nonceOrIv: iv,
-                            encryptedData: cipher,
-                            authTag: tag
-                        )
-                        NWClient.shared.sendPacket(packet)
-                    }
-                }
+        if let messages = try? MsgDao.shared.getMessageListByConversation(uuid) {
+            for message in messages where message.ext != "txt" {
+                MediaStorageManager.shared.deleteMediaFile(msgId: message.messageId, ext: message.ext)
             }
         }
-
-        if let msgs = try? MsgDao.shared.getMessageListByConversation(uuid) {
-            for m in msgs where m.ext != "txt" {
-                MediaStorageManager.shared.deleteMediaFile(msgId: m.messageId, ext: m.ext)
-            }
-        }
-        try? MsgDao.shared.deleteConversation(uuid)
-        try? MsgDao.shared.clearMessages(conversationUuid: uuid)
-        loadData()
+        SecureMessaging.shared.deleteContact(uuid)
     }
 
     public func clearMessages(uuid: String) {
@@ -324,37 +206,6 @@ public final class SessionListViewModel: ObservableObject {
     }
 
     public func broadcastProfileUpdate() {
-        guard NWClient.shared.connectionState == .synced || NWClient.shared.connectionState == .syncing else { return }
-
-        let myUuid = KeychainManager.shared.myUuid
-        let myNickname = KeychainManager.shared.myNickname ?? "Unknown"
-        let myAvatarPath = KeychainManager.shared.myAvatarPath ?? ""
-        let myMailbox = KeychainManager.shared.myMailboxId
-
-        var avatarDataStr = ""
-        if !myAvatarPath.isEmpty {
-            let avatarUrl = URL(fileURLWithPath: myAvatarPath)
-            if let data = try? Data(contentsOf: avatarUrl) {
-                avatarDataStr = data.base64EncodedString()
-            }
-        }
-
-        let profileDict: [String: String] = [
-            "uuid": myUuid,
-            "nickname": myNickname,
-            "avatarPath": myAvatarPath,
-            "avatarData": avatarDataStr
-        ]
-
-        if let json = try? JSONSerialization.data(withJSONObject: profileDict) {
-            let updatePacket = GhostPacket(
-                type: GhostPacket.typeUpdateProfile,
-                targetMailboxId: myMailbox,
-                nonceOrIv: Data(count: 16),
-                encryptedData: json,
-                authTag: Data(count: 16)
-            )
-            NWClient.shared.sendPacket(updatePacket)
-        }
+        SecureMessaging.shared.broadcastProfile()
     }
 }

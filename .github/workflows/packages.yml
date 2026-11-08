@@ -41,7 +41,7 @@ jobs:
   android:
     needs: preflight
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -53,6 +53,9 @@ jobs:
           cache-disabled: true
       - name: Install Android SDK packages
         run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.1.0"'
+      - uses: ./.github/actions/native-security
+        with:
+          android: 'true'
       - name: Restore signing key into temporary runner storage
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -81,13 +84,14 @@ jobs:
   windows:
     needs: preflight
     runs-on: windows-2025
-    timeout-minutes: 30
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '9.0.x'
           cache: false
+      - uses: ./.github/actions/native-security
       - name: Restore dependencies from NuGet
         working-directory: MsgAT_Windows
         run: dotnet restore MsgAT.Windows.slnx
@@ -106,9 +110,10 @@ jobs:
   macos:
     needs: preflight
     runs-on: macos-26
-    timeout-minutes: 45
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
+      - uses: ./.github/actions/native-security
       - name: Build arm64 app using locked Swift packages
         run: >-
           xcodebuild -project MsgAT_macOS/MsgAT.xcodeproj -scheme MsgAT

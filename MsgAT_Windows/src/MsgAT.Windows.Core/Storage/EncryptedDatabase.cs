@@ -31,7 +31,7 @@ public sealed class EncryptedDatabase : IDisposable
 
         if (IsPlaintextSqlite(databasePath))
         {
-            MigratePlaintextDatabase(databasePath, _password);
+            throw new InvalidDataException("Refusing an unauthenticated plaintext database in the encrypted V2 vault location.");
         }
 
         _connection = OpenEncrypted(databasePath, _password);
@@ -438,6 +438,7 @@ public sealed class EncryptedDatabase : IDisposable
             PRAGMA cipher_memory_security = ON;
             PRAGMA foreign_keys = ON;
             PRAGMA journal_mode = WAL;
+            PRAGMA synchronous = FULL;
             PRAGMA busy_timeout = 5000;
             """;
         command.ExecuteNonQuery();
@@ -452,53 +453,4 @@ public sealed class EncryptedDatabase : IDisposable
             && header.SequenceEqual("SQLite format 3\0"u8);
     }
 
-    private static void MigratePlaintextDatabase(string path, string password)
-    {
-        var encryptedPath = path + ".encrypted-" + Guid.NewGuid().ToString("N");
-        try
-        {
-            using (File.Create(encryptedPath)) { }
-            var sourceBuilder = new SqliteConnectionStringBuilder
-            {
-                DataSource = path,
-                Mode = SqliteOpenMode.ReadWrite,
-                Pooling = false
-            };
-            using (var source = new SqliteConnection(sourceBuilder.ConnectionString))
-            {
-                source.Open();
-                using var checkpoint = source.CreateCommand();
-                checkpoint.CommandText = "PRAGMA wal_checkpoint(TRUNCATE)";
-                checkpoint.ExecuteNonQuery();
-
-                using var export = source.CreateCommand();
-                export.CommandText = """
-                    ATTACH DATABASE $path AS encrypted KEY $key;
-                    SELECT sqlcipher_export('encrypted');
-                    DETACH DATABASE encrypted;
-                    """;
-                export.Parameters.AddWithValue("$path", encryptedPath);
-                export.Parameters.AddWithValue("$key", password);
-                export.ExecuteNonQuery();
-            }
-
-            using (var validation = OpenEncrypted(encryptedPath, password))
-            {
-                using var command = validation.CreateCommand();
-                command.CommandText = "PRAGMA integrity_check";
-                if (!string.Equals(command.ExecuteScalar()?.ToString(), "ok", StringComparison.OrdinalIgnoreCase))
-                {
-                    throw new InvalidDataException("The encrypted database migration failed integrity validation.");
-                }
-            }
-
-            File.Replace(encryptedPath, path, null, ignoreMetadataErrors: true);
-            File.Delete(path + "-wal");
-            File.Delete(path + "-shm");
-        }
-        finally
-        {
-            File.Delete(encryptedPath);
-        }
-    }
 }

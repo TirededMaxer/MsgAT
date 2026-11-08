@@ -26,7 +26,7 @@ data class ServerSettings(
     val turnPassword: String,
     val turnUseTls: Boolean,
     val serverCertificateSha256: String = "",
-    val allowDevelopmentCertificate: Boolean = true
+    val allowDevelopmentCertificate: Boolean = false
 )
 
 @Composable

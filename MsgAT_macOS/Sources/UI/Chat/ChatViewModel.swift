@@ -99,8 +99,7 @@ public final class ChatViewModel: ObservableObject {
 
     public func markAsRead() {
         guard isViewingLatest, isContentVisible else { return }
-        guard let last = try? MsgDao.shared.markConversationRead(conversationUuid: targetUuid) else { return }
-        sendReadAck(messageId: last.messageId)
+        SecureMessaging.shared.markRead(targetUuid)
     }
 
     public func sendMessage(
@@ -108,75 +107,10 @@ public final class ChatViewModel: ObservableObject {
         replyTo: ChatMessage? = nil,
         onFail: (() -> Void)? = nil
     ) {
-        let trimmed = text
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-
-        let myUuid = KeychainManager.shared.myUuid
-        let myPrivKey = KeychainManager.shared.x25519PrivateKey
-        let peerPubKey = conversation?.peerPublicKey ?? ""
-        guard !peerPubKey.isEmpty else {
-            onFail?()
-            return
-        }
-
-        let msgId = UUID().uuidString
-        let timestamp = Int64(Date().timeIntervalSince1970 * 1000)
-
-        let chatMsg = ChatMessage(
-            messageId: msgId,
-            conversationUuid: targetUuid,
-            isMine: true,
-            content: trimmed,
-            ext: "txt",
-            timestamp: timestamp,
-            isRead: true,
-            replyToId: replyTo?.messageId,
-            replyToSender: replyTo != nil ? (replyTo!.isMine ? KeychainManager.shared.myUuid : targetUuid) : nil,
-            replyToContent: replyTo != nil ? (replyTo!.ext == "txt" ? replyTo!.content : "[\(replyTo!.ext.uppercased())]") : nil,
-            status: 0
-        )
-        try? MsgDao.shared.insertMessage(chatMsg)
-        loadMessages()
-
-        Task.detached {
-            let base64Data = trimmed.data(using: .utf8)?.base64EncodedString() ?? ""
-            let payload = MessagePayload(
-                senderUuid: myUuid,
-                fileId: msgId,
-                total: 1,
-                index: 0,
-                ext: "txt",
-                data: base64Data,
-                timestamp: timestamp,
-                replyToId: chatMsg.replyToId,
-                replyToSender: chatMsg.replyToSender,
-                replyToContent: chatMsg.replyToContent
-            )
-
-            guard let jsonStr = payload.toJsonString(), let jsonBytes = jsonStr.data(using: .utf8) else { return }
-
-            var ivBytes = [UInt8](repeating: 0, count: 16)
-            _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-            let iv = Data(ivBytes)
-
-            guard let (cipher, tag) = try? CryptoManager.encryptPayloadECDH(
-                myPrivateKey: myPrivKey,
-                peerPublicKeyBase64: peerPubKey,
-                iv: iv,
-                plaintext: jsonBytes
-            ) else { return }
-
-            let targetMailbox = CryptoManager.calculateMailboxId(uuid: self.targetUuid)
-            let packet = GhostPacket(
-                type: GhostPacket.typeMessage,
-                targetMailboxId: targetMailbox,
-                nonceOrIv: iv,
-                encryptedData: cipher,
-                authTag: tag
-            )
-
-            if NWClient.shared.sendPacket(packet) {
-                try? MsgDao.shared.updateMessageStatus(messageId: msgId, status: 1)
+        SecureMessaging.shared.sendText(to: targetUuid, text: text, reply: replyTo) { saved in
+            Task { @MainActor in
+                if saved { self.loadMessages() } else { onFail?() }
             }
         }
     }
@@ -282,47 +216,6 @@ public final class ChatViewModel: ObservableObject {
             if allSent {
                 try? MsgDao.shared.updateMessageStatus(messageId: msgId, status: 1)
             }
-        }
-    }
-
-    public func sendReadAck(messageId: String) {
-        let myUuid = KeychainManager.shared.myUuid
-        let myPrivKey = KeychainManager.shared.x25519PrivateKey
-        let peerPubKey = conversation?.peerPublicKey ?? ""
-        guard !peerPubKey.isEmpty else { return }
-
-        Task.detached {
-            let payload = MessagePayload(
-                senderUuid: myUuid,
-                fileId: UUID().uuidString,
-                total: 1,
-                index: 0,
-                ext: "ack_read",
-                data: messageId,
-                timestamp: Int64(Date().timeIntervalSince1970 * 1000)
-            )
-            guard let jsonStr = payload.toJsonString(), let jsonBytes = jsonStr.data(using: .utf8) else { return }
-
-            var ivBytes = [UInt8](repeating: 0, count: 16)
-            _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-            let iv = Data(ivBytes)
-
-            guard let (cipher, tag) = try? CryptoManager.encryptPayloadECDH(
-                myPrivateKey: myPrivKey,
-                peerPublicKeyBase64: peerPubKey,
-                iv: iv,
-                plaintext: jsonBytes
-            ) else { return }
-
-            let targetMailbox = CryptoManager.calculateMailboxId(uuid: self.targetUuid)
-            let packet = GhostPacket(
-                type: GhostPacket.typeMessage,
-                targetMailboxId: targetMailbox,
-                nonceOrIv: iv,
-                encryptedData: cipher,
-                authTag: tag
-            )
-            NWClient.shared.sendPacket(packet)
         }
     }
 

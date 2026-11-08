@@ -1,0 +1,43 @@
+name: Native security core
+description: Build the locked libsignal core from source without restoring build caches
+inputs:
+  android:
+    description: Build ARM64 and ARMv7 JNI libraries
+    default: 'false'
+  release:
+    description: Build the release native library
+    default: 'true'
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    - name: Install pinned Rust and verified Protobuf compiler
+      shell: bash
+      run: python scripts/ci/native_tools.py
+    - name: Prepare Android toolchains
+      if: inputs.android == 'true'
+      shell: bash
+      run: |
+        rustup target add --toolchain 1.98.1 aarch64-linux-android armv7-linux-androideabi
+        "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;26.3.11579264"
+    - uses: ilammy/msvc-dev-cmd@v1
+      if: runner.os == 'Windows'
+      with:
+        arch: x64
+    - name: Compile native library
+      shell: bash
+      env:
+        NATIVE_RELEASE: ${{ inputs.release }}
+        NATIVE_ANDROID: ${{ inputs.android }}
+      run: |
+        flags=()
+        if [[ "$NATIVE_RELEASE" == true ]]; then flags+=(--release); fi
+        if [[ "$NATIVE_ANDROID" == true ]]; then
+          for target in aarch64-linux-android armv7-linux-androideabi; do
+            python scripts/native/security_core.py "${flags[@]}" --target "$target" --android-jni --ndk "$ANDROID_HOME/ndk/26.3.11579264"
+          done
+        else
+          python scripts/native/security_core.py "${flags[@]}"
+        fi

@@ -8,7 +8,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import org.msgat.data.db.ChatMessage
 
 object NotificationHelper {
     private const val CHANNEL_ID = "msgat_messages"
@@ -73,33 +72,29 @@ object NotificationHelper {
     }
 
     // Displays a high-priority heads-up notification for incoming chat messages.
-    fun showMessageNotification(context: Context, senderUuid: String, senderAlias: String, ext: String, content: String) {
+    fun showPrivateMessageNotification(context: Context, senderUuid: String) {
+        if (!androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) return
         createChannels(context)
-
-        val displayContent = if (ext == "txt") content else "[Media]"
-        val title = if (senderAlias.isNotBlank() && senderAlias != "Unknown") senderAlias else senderUuid.take(8)
-
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP
-
         }
-
-        val pendingIntent = PendingIntent.getActivity(
-            context, senderUuid.hashCode(), intent,
-            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
-        )
-
-        val builder = NotificationCompat.Builder(context, CHANNEL_ID)
+        val pendingIntent = PendingIntent.getActivity(context,0,intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
+        val notification = NotificationCompat.Builder(context,CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_dialog_email)
-            .setContentTitle(title)
-            .setContentText(displayContent)
+            .setContentTitle("MsgAT")
+            .setContentText("New message")
+            .setVisibility(NotificationCompat.VISIBILITY_SECRET)
+            .setLocalOnly(true)
+            .setCategory(NotificationCompat.CATEGORY_MESSAGE)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(Notification.DEFAULT_ALL)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-
+            .build()
+        // A separate tag namespace cannot overwrite foreground/call notifications.
         val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(senderUuid.hashCode(), builder.build())
+        try { manager.notify("message:$senderUuid",0,notification) }
+        catch (_: SecurityException) { /* Permission can be revoked between check and delivery. */ }
     }
 
     // Dismisses all active notifications for the application.
@@ -109,7 +104,7 @@ object NotificationHelper {
             val activeNotifications = manager.activeNotifications
             for (notification in activeNotifications) {
                 if (notification.id != 1 && notification.id != CALL_NOTIFICATION_ID) {
-                    manager.cancel(notification.id)
+                    manager.cancel(notification.tag,notification.id)
                 }
             }
         } else {

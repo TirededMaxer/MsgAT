@@ -30,6 +30,17 @@ public class GhostPacket {
     public static final byte TYPE_CALL_BUSY = 0x18;
     public static final byte TYPE_CALL_SYNC = 0x19;
 
+    public static final byte TYPE_V2_SUBMIT = 0x40;
+    public static final byte TYPE_V2_KEY_PUBLISH = 0x41;
+    public static final byte TYPE_V2_KEY_PUBLISHED = 0x42;
+    public static final byte TYPE_V2_KEY_CLAIM = 0x43;
+    public static final byte TYPE_V2_KEY_RESPONSE = 0x44;
+    public static final byte TYPE_V2_STORED = 0x45;
+    public static final byte TYPE_V2_DELIVERY = 0x46;
+    public static final byte TYPE_V2_RECEIVED = 0x47;
+    public static final byte TYPE_V2_SYNC = 0x48;
+    public static final byte TYPE_V2_SYNC_END = 0x49;
+
     private final byte type;
     private final String targetMailboxId;
     private final byte[] nonceOrIv;

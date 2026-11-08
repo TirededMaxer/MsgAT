@@ -560,6 +560,6 @@ public partial class MainWindow : Window
         File.WriteAllText(path, JsonSerializer.Serialize(new WindowPlacement(Left, Top, Width, Height)));
     }
 
-    private static string PlacementPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "MsgAT", "window-v2.json");
+    private static string PlacementPath() => Path.Combine(MsgAT.Windows.Core.Storage.RuntimePaths.DataDirectory, "window-v2.json");
     private sealed record WindowPlacement(double Left, double Top, double Width, double Height);
 }

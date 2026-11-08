@@ -48,11 +48,10 @@ public sealed class AppServices : IAsyncDisposable
 
     public static async Task<AppServices> CreateAsync(Dispatcher dispatcher, WebView2 webView)
     {
-        var localData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        var dataDirectory = Path.Combine(localData, "MsgAT");
+        var dataDirectory = RuntimePaths.DataDirectory;
         Directory.CreateDirectory(dataDirectory);
         var settings = new SecureSettingsStore(dataDirectory);
-        var database = new EncryptedDatabase(Path.Combine(dataDirectory, "msgat_vault.db"), settings.DatabaseKey);
+        var database = new EncryptedDatabase(Path.Combine(dataDirectory, "msgat_v2_vault.db"), settings.DatabaseKey);
         var media = new MediaStore(dataDirectory);
         if (!string.IsNullOrWhiteSpace(settings.Snapshot.AvatarPath) && File.Exists(settings.Snapshot.AvatarPath))
         {
@@ -106,9 +105,13 @@ public sealed class AppServices : IAsyncDisposable
         }
 
         await DisposeAsync();
-        DeleteIfExists(Path.Combine(_dataDirectory, "msgat_vault.db"));
-        DeleteIfExists(Path.Combine(_dataDirectory, "msgat_vault.db-wal"));
-        DeleteIfExists(Path.Combine(_dataDirectory, "msgat_vault.db-shm"));
+        foreach (var name in new[] { "msgat_vault.db", "msgat_v2_vault.db" })
+        {
+            foreach (var suffix in new[] { "", "-wal", "-shm" })
+            {
+                DeleteIfExists(Path.Combine(_dataDirectory, name + suffix));
+            }
+        }
         Media.DeleteAll();
         Settings.RotateIdentity();
 

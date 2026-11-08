@@ -19,14 +19,15 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import org.msgat.core.crypto.securestorage.SecurePrefs
-import org.msgat.data.db.MsgDao
+import org.msgat.data.db.AppDatabase
 import org.msgat.model.GhostPacket
 import org.msgat.ui.chat.SyncState
 import java.util.concurrent.atomic.AtomicBoolean
 
 class NettyClient(
     private val prefs: SecurePrefs,
-    private val msgDao: MsgDao
+    database: AppDatabase,
+    onMessageCommitted: (String) -> Unit
 ) {
     private val _connectionState = MutableStateFlow(SyncState.DISCONNECTED)
     val connectionState: StateFlow<SyncState> = _connectionState.asStateFlow()
@@ -40,6 +41,19 @@ class NettyClient(
     private val connecting = AtomicBoolean(false)
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var reconnectJob: Job? = null
+    private val reconnectLock = Any()
+
+    val secureMessaging = SecureMessaging(database,prefs,
+        send = { epoch,packet -> generation.get()==epoch && sendPacket(packet) },
+        stateChanged = { epoch,state ->
+            if (generation.get()==epoch) {
+                if (state==SyncState.SYNCED) resetBackoff()
+                _connectionState.value=state
+            }
+        },
+        closeTransport = { epoch -> if (generation.get()==epoch) channel?.close() },
+        onMessageCommitted = onMessageCommitted
+    )
 
     @Volatile private var deletionReply: Pair<ByteArray, kotlinx.coroutines.CompletableDeferred<Boolean>>? = null
 
@@ -55,13 +69,7 @@ class NettyClient(
     }
 
     fun sendProfile() {
-        scope.launch {
-            if (connectionState.value != SyncState.SYNCED) return@launch
-            try {
-                sendPacket(GhostPacket(GhostPacket.TYPE_UPDATE_PROFILE,
-                    org.msgat.core.crypto.CryptoManager.calculateMailboxId(prefs.myUuid), ByteArray(16), prefs.profilePayload(), ByteArray(16)))
-            } catch (error: Exception) { android.util.Log.e("MsgAT", "Profile update failed", error) }
-        }
+        secureMessaging.broadcastProfile()
     }
 
     fun resetBackoff() {
@@ -76,16 +84,21 @@ class NettyClient(
 
     private fun scheduleReconnect() {
         if (isManualDisconnect || !isConfigured()) return
+        synchronized(reconnectLock) {
+        if (reconnectJob?.isActive == true) return
         val delayMs = calculateBackoffDelayMs()
+        val expectedGeneration=generation.get()
         retryAttempt++
         android.util.Log.i("MsgAT_Netty", "Scheduling reconnect attempt #$retryAttempt in ${delayMs}ms")
         _connectionState.value = SyncState.DISCONNECTED
-        if (reconnectJob?.isActive == true) return
         reconnectJob = scope.launch {
             kotlinx.coroutines.delay(delayMs)
-            if (!isManualDisconnect && (channel == null || channel?.isActive != true)) {
+            val owner=kotlinx.coroutines.currentCoroutineContext()[Job]
+            synchronized(reconnectLock) { if (reconnectJob===owner) reconnectJob=null }
+            if (!isManualDisconnect && generation.get()==expectedGeneration && (channel == null || channel?.isActive != true)) {
                 connect()
             }
+        }
         }
     }
 
@@ -101,7 +114,7 @@ class NettyClient(
         val port = prefs.serverPort
         val currentGeneration = generation.incrementAndGet()
 
-        val newWorkerGroup = NioEventLoopGroup()
+        val newWorkerGroup = NioEventLoopGroup(1)
         workerGroup = newWorkerGroup
         val bootstrap = Bootstrap()
 
@@ -132,6 +145,8 @@ class NettyClient(
             bootstrap.group(newWorkerGroup)
                 .channel(NioSocketChannel::class.java)
                 .option(ChannelOption.SO_KEEPALIVE, true)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.WRITE_BUFFER_WATER_MARK,io.netty.channel.WriteBufferWaterMark(1024*1024,4*1024*1024))
                 .handler(object : ChannelInitializer<SocketChannel>() {
                     // Configures the Netty channel pipeline with encoders, decoders, and handlers.
                     override fun initChannel(ch: SocketChannel) {
@@ -150,7 +165,10 @@ class NettyClient(
 
                         p.addLast(GhostPacketCodec())
 
-                        p.addLast(GhostClientHandler(prefs, msgDao,
+                        p.addLast(GhostClientHandler(prefs,
+                            onLegacySyncEnd = { if (generation.get()==currentGeneration) secureMessaging.beginSync(currentGeneration) },
+                            onSecurePacket = { packet -> if (generation.get()==currentGeneration) secureMessaging.handle(currentGeneration,packet) },
+                            onDisconnected = { secureMessaging.disconnected(currentGeneration) },
                             onDeleteConfirmed = { packet ->
                                 deletionReply?.let { (nonce, result) ->
                                     if (packet.nonceOrIv?.contentEquals(nonce) == true) result.complete(true)
@@ -180,6 +198,7 @@ class NettyClient(
                     channel = (future as io.netty.channel.ChannelFuture).channel()
                     val connectedChannel = channel
                     connectedChannel?.closeFuture()?.addListener {
+                        secureMessaging.disconnected(currentGeneration)
                         if (channel === connectedChannel) channel = null
                         newWorkerGroup.shutdownGracefully()
                         if (!isManualDisconnect && generation.get() == currentGeneration) {
@@ -206,9 +225,9 @@ class NettyClient(
     // Gracefully closes the active Netty channel and shuts down the event loop group.
     fun disconnect() {
         isManualDisconnect = true
-        generation.incrementAndGet()
-        reconnectJob?.cancel()
-        reconnectJob = null
+        val previousGeneration=generation.getAndIncrement()
+        secureMessaging.disconnected(previousGeneration)
+        synchronized(reconnectLock) { reconnectJob?.cancel(); reconnectJob = null }
         connecting.set(false)
         val current = channel
         channel = null
@@ -221,18 +240,21 @@ class NettyClient(
 
     fun close() {
         disconnect()
+        secureMessaging.close()
         scope.cancel()
     }
 
     // Asynchronously flushes a GhostPacket through the pipeline to the server.
     fun sendPacket(packet: GhostPacket): Boolean {
-        return if (channel?.isActive == true) {
-            channel?.writeAndFlush(packet)?.addListener { future ->
-                if (!future.isSuccess) (future as io.netty.channel.ChannelFuture).channel().close()
-            }
-            true
-        } else {
-            false
-        }
+        val target=channel ?: return false
+        if (!target.isActive || !target.isWritable || packet.payloadLen>GhostPacket.MAX_PACKET_SIZE-105) return false
+        val key=io.netty.util.AttributeKey.valueOf<java.util.concurrent.atomic.AtomicLong>("MSGAT_PENDING_BYTES")
+        val count=target.attr(key).get() ?: java.util.concurrent.atomic.AtomicLong().let { target.attr(key).setIfAbsent(it) ?: it }
+        val cost=maxOf(4096,105+packet.payloadLen).toLong()
+        if (count.addAndGet(cost)>4L*1024*1024) { count.addAndGet(-cost); target.close(); return false }
+        val promise=target.newPromise()
+        promise.addListener { result -> count.addAndGet(-cost); if (!result.isSuccess) target.close() }
+        return try { target.writeAndFlush(packet,promise); true }
+        catch (error: RuntimeException) { promise.tryFailure(error); false }
     }
 }

@@ -19,6 +19,7 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     private long replayCursor;
     private boolean isAuthenticated = false;
     private byte[] currentChallengeNonce = null;
+    private long challengeIssuedAtNanos;
     private String pendingMailboxId = null;
 
     // Constructor to initialize the handler with a routing table instance.
@@ -47,8 +48,13 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
 
     // Handles incoming authentication request by generating and sending a challenge nonce to the client.
     private void handleAuthRequest(ChannelHandlerContext ctx, GhostPacket packet) {
+        if (currentChallengeNonce != null) {
+            ctx.close();
+            return;
+        }
         this.pendingMailboxId = packet.getTargetMailboxId();
         this.currentChallengeNonce = new byte[16];
+        this.challengeIssuedAtNanos = System.nanoTime();
         RANDOM.nextBytes(currentChallengeNonce);
 
         GhostPacket challenge = new GhostPacket(
@@ -60,7 +66,8 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
     // Verifies the client's signed authentication response; if valid, registers the client and pushes offline messages.
     private void handleAuthResponse(ChannelHandlerContext ctx, GhostPacket packet) {
         byte[] payload = packet.getEncryptedData();
-        if (currentChallengeNonce == null || pendingMailboxId == null || payload == null || payload.length != 96) {
+        if (currentChallengeNonce == null || pendingMailboxId == null || payload == null || payload.length != 96
+                || System.nanoTime() - challengeIssuedAtNanos > java.util.concurrent.TimeUnit.SECONDS.toNanos(30)) {
             ctx.close();
             return;
         }
@@ -72,6 +79,8 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
         if (pendingMailboxId.equals(CryptoUtils.calculateMailboxId(uuid))
                 && verifySignature(publicKey, currentChallengeNonce, signature)) {
             this.isAuthenticated = true;
+            ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("AUTHENTICATED_UUID")).set(uuid);
+            ctx.channel().attr(io.netty.util.AttributeKey.<byte[]>valueOf("ROOT_PUBLIC_KEY")).set(publicKey.clone());
             synchronized (routingTable) {
                 routingTable.register(this.pendingMailboxId, ctx.channel());
                 ctx.channel().attr(io.netty.util.AttributeKey.<String>valueOf("MAILBOX_ID")).set(this.pendingMailboxId);
@@ -81,6 +90,7 @@ public class AuthChallengeHandler extends SimpleChannelInboundHandler<GhostPacke
                 String mailbox = this.pendingMailboxId;
                 ctx.channel().closeFuture().addListener(done -> routingTable.remove(mailbox, ctx.channel()));
             }
+            Arrays.fill(currentChallengeNonce, (byte) 0);
             currentChallengeNonce = null;
             drainOffline(ctx);
         } else {

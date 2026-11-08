@@ -27,6 +27,8 @@ public class DatabaseManager {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
 
+            SignalKeyDirectory.initialize(conn);
+
             stmt.execute("CREATE TABLE IF NOT EXISTS users (" +
                     "uuid TEXT PRIMARY KEY, " +
                     "mailbox_id TEXT, " +
@@ -137,13 +139,6 @@ public class DatabaseManager {
             try (var result = statement.executeQuery()) { return result.next() ? result.getString(1) : null; }
         } catch (SQLException error) {
             throw new IllegalStateException("Unable to resolve mailbox", error);
-        }
-    }
-
-    public static void wipeOfflineDatabaseFile() {
-        File f = new File(DB_DIR + "/msgat_offline.db");
-        if (f.exists()) {
-            f.delete();
         }
     }
 

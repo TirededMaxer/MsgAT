@@ -27,6 +27,8 @@
     <PackageReference Include="SkiaSharp" />
   </ItemGroup>
   <ItemGroup>
+    <Content Include="..\..\NativeSecurity\win-x64\msgat_security_core.dll" Link="msgat_security_core.dll"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <EmbeddedResource Include="Assets\webrtc-host.html" LogicalName="MsgAT.Windows.Assets.webrtc-host.html" />
     <EmbeddedResource Include="Assets\Licenses\SkiaSharp-LICENSE.txt" />
     <EmbeddedResource Include="Assets\Licenses\SkiaSharp-THIRD-PARTY-NOTICES.txt" />

@@ -5,6 +5,7 @@ import AVFoundation
 public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        guard KeychainManager.startupFailure == nil else { return }
         NotificationHelper.shared.requestAuthorization()
         NSApp.dockTile.badgeLabel = nil
 
@@ -25,7 +26,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
             NWClient.shared.connect()
         }
 
-        // 4. Secure Window Anti-Capture (FLAG_SECURE equivalent on macOS)
+        // Legacy sharing preference only; it does not block modern screen capture.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             for window in NSApp.windows {
                 window.sharingType = .none
@@ -42,6 +43,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     public func applicationWillTerminate(_ notification: Notification) {
+        guard KeychainManager.startupFailure == nil else { return }
         CallManager.shared.endCall()
         CallManager.shared.restoreAudioOutput()
     }

@@ -5,6 +5,10 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.runtime.*
 import androidx.lifecycle.ProcessLifecycleOwner
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.collect
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -36,9 +40,25 @@ class MainActivity : ComponentActivity() {
         window.addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE)
 
         val app = MsgATApp.instance
+        if (!app.isReady) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("MsgAT could not start")
+                .setMessage(app.startupFailure ?: "The device identity vault is unavailable.")
+                .setCancelable(false)
+                .setPositiveButton(android.R.string.ok) { _, _ -> finish() }
+                .show()
+            return
+        }
         securePrefs = app.securePrefs
         db = app.db
         nettyClient = app.nettyClient
+        lifecycleScope.launch {
+            repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                nettyClient.secureMessaging.errors.collect { message ->
+                    android.widget.Toast.makeText(this@MainActivity,message,android.widget.Toast.LENGTH_LONG).show()
+                }
+            }
+        }
 
         val permissionsToRequest = mutableListOf<String>()
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {

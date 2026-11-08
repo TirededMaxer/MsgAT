@@ -41,8 +41,7 @@ public sealed class WebRtcEngine
     {
         _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
         var userDataDirectory = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "MsgAT",
+            MsgAT.Windows.Core.Storage.RuntimePaths.DataDirectory,
             "WebView2");
         Directory.CreateDirectory(userDataDirectory);
         // Native Android peers may not resolve Chromium's multicast .local ICE names across VM adapters.

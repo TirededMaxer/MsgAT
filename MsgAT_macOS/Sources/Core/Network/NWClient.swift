@@ -103,6 +103,9 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
                 self.handleDisconnection()
             case .waiting(let error):
                 print("[NWClient] Connection waiting: \(error)")
+                // A refused endpoint can remain waiting without a path change.
+                // Recreate it through the same bounded retry path as failures.
+                self.handleDisconnection()
             default:
                 break
             }
@@ -114,6 +117,7 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     public func disconnect() { onQueue { disconnectOnQueue() } }
 
     private func disconnectOnQueue() {
+        SecureMessaging.shared.disconnected()
         isManualDisconnect = true
         heartbeatTask?.cancel()
         heartbeatTask = nil
@@ -132,6 +136,7 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     }
 
     private func handleDisconnection() {
+        SecureMessaging.shared.disconnected()
         heartbeatTask?.cancel()
         heartbeatTask = nil
 

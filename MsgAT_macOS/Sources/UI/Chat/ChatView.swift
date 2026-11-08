@@ -145,7 +145,7 @@ public struct ChatView: View {
                 }
 
                 HStack(alignment: .bottom, spacing: 8) {
-                    ImagePasteComposer(text: $inputText, onPasteImage: pasteClipboardImage)
+                    ImagePasteComposer(text: $inputText, onPasteImage: pasteClipboardImage, onSubmit: handleSend)
                         .frame(minHeight: 36)
                         .background(Color(NSColor.controlBackgroundColor), in: RoundedRectangle(cornerRadius: 5))
                         .overlay(RoundedRectangle(cornerRadius: 5).stroke(Color.secondary.opacity(0.25)))
@@ -402,6 +402,7 @@ private enum PastedImageSource: Sendable {
 private struct ImagePasteComposer: NSViewRepresentable {
     @Binding var text: String
     let onPasteImage: () -> Bool
+    let onSubmit: () -> Void
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -427,6 +428,7 @@ private struct ImagePasteComposer: NSViewRepresentable {
         editor.textContainer?.containerSize = NSSize(width: 0, height: CGFloat.greatestFiniteMagnitude)
         editor.delegate = context.coordinator
         editor.onPasteImage = onPasteImage
+        editor.onSubmit = onSubmit
         editor.setAccessibilityLabel("Message")
         scroll.documentView = editor
         return scroll
@@ -436,6 +438,7 @@ private struct ImagePasteComposer: NSViewRepresentable {
         context.coordinator.parent = self
         guard let editor = scroll.documentView as? PasteTextView else { return }
         editor.onPasteImage = onPasteImage
+        editor.onSubmit = onSubmit
         if editor.string != text {
             editor.string = text
             editor.setSelectedRange(NSRange(location: text.utf16.count, length: 0))
@@ -467,6 +470,16 @@ private struct ImagePasteComposer: NSViewRepresentable {
 
     final class PasteTextView: NSTextView {
         var onPasteImage: (() -> Bool)?
+        var onSubmit: (() -> Void)?
+        override func keyDown(with event: NSEvent) {
+            let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+            if (event.keyCode == 36 || event.keyCode == 76), !hasMarkedText(),
+               modifiers.intersection([.shift, .control, .option, .command]).isEmpty {
+                onSubmit?()
+                return
+            }
+            super.keyDown(with: event)
+        }
         override func paste(_ sender: Any?) {
             if onPasteImage?() == true { return }
             super.paste(sender)

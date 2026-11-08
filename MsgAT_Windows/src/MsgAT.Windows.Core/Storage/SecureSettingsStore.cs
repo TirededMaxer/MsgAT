@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using MsgAT.Windows.Core.Crypto;
 
 namespace MsgAT.Windows.Core.Storage;
@@ -26,15 +27,7 @@ public sealed class DpapiSecretProtector : ISecretProtector
     public byte[] Unprotect(byte[] ciphertext)
     {
         EnsureWindows();
-        try
-        {
-            return ProtectedData.Unprotect(ciphertext, Entropy, DataProtectionScope.CurrentUser);
-        }
-        catch (CryptographicException)
-        {
-            // Legacy Kotlin/JNA vaults used DPAPI without optional entropy.
-            return ProtectedData.Unprotect(ciphertext, null, DataProtectionScope.CurrentUser);
-        }
+        return ProtectedData.Unprotect(ciphertext, Entropy, DataProtectionScope.CurrentUser);
     }
 
     private static void EnsureWindows()
@@ -48,11 +41,13 @@ public sealed class DpapiSecretProtector : ISecretProtector
 
 public sealed record SecureSettings
 {
-    public int FormatVersion { get; init; } = 2;
+    public int FormatVersion { get; init; } = 3;
     public required string IdentitySeedBase64 { get; init; }
-    public required string DatabaseKeyBase64 { get; init; }
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? DatabaseKeyBase64 { get; init; }
+    public string? DatabaseKeyEnvelopeBase64 { get; init; }
     public string? ServerAddress { get; init; }
-    public int ServerPort { get; init; }
+    public int ServerPort { get; init; } = 34478;
     public string? Nickname { get; init; }
     public string? AvatarPath { get; init; }
     public string? TurnServer { get; init; }
@@ -61,8 +56,11 @@ public sealed record SecureSettings
     public string? TurnPassword { get; init; }
     public bool TurnUseTls { get; init; }
     public string? ServerCertificateSha256 { get; init; }
-    public bool AllowDevelopmentCertificate { get; init; } = true;
+    public bool AllowDevelopmentCertificate { get; init; }
     public bool RelayTlsCompatibilityV1 { get; init; }
+    public bool RelayTlsSecurityV2 { get; init; }
+
+    public override string ToString() => $"MsgAT settings (format {FormatVersion}; secrets redacted)";
 }
 
 public sealed class SecureSettingsStore
@@ -74,6 +72,8 @@ public sealed class SecureSettingsStore
 
     private readonly object _gate = new();
     private readonly string _vaultPath;
+    private readonly string _identityMarkerPath;
+    private readonly string _hardwareMarkerPath;
     private readonly ISecretProtector _protector;
     private SecureSettings _settings;
 
@@ -82,18 +82,20 @@ public sealed class SecureSettingsStore
         ArgumentException.ThrowIfNullOrWhiteSpace(dataDirectory);
         Directory.CreateDirectory(dataDirectory);
         _vaultPath = Path.Combine(dataDirectory, "msgat_vault.sec");
-        _protector = protector ?? CreatePlatformProtector();
+        _identityMarkerPath = Path.Combine(dataDirectory, "identity.initialized");
+        _hardwareMarkerPath = Path.Combine(dataDirectory, "identity.hardware-v2");
+        _protector = protector ?? CreatePlatformProtector(dataDirectory, _vaultPath);
         _settings = LoadOrCreate();
-        if (!_settings.RelayTlsCompatibilityV1)
+        if (!_settings.RelayTlsSecurityV2)
         {
             _settings = _settings with
             {
-                AllowDevelopmentCertificate = true,
-                ServerCertificateSha256 = null,
-                RelayTlsCompatibilityV1 = true
+                AllowDevelopmentCertificate = false,
+                RelayTlsSecurityV2 = true
             };
             SaveLocked();
         }
+        WriteIdentityMarker();
     }
 
     public event EventHandler? Changed;
@@ -104,7 +106,21 @@ public sealed class SecureSettingsStore
     }
 
     public byte[] IdentitySeed => Decode32(Snapshot.IdentitySeedBase64, "identity seed");
-    public byte[] DatabaseKey => Decode32(Snapshot.DatabaseKeyBase64, "database key");
+    public byte[] DatabaseKey
+    {
+        get
+        {
+            var snapshot = Snapshot;
+            var seed = Decode32(snapshot.IdentitySeedBase64, "identity seed");
+            try
+            {
+                return RootKeyHierarchy.Unwrap(seed, "database",
+                    Convert.FromBase64String(snapshot.DatabaseKeyEnvelopeBase64 ??
+                        throw new InvalidDataException("The wrapped database key is missing.")));
+            }
+            finally { CryptographicOperations.ZeroMemory(seed); }
+        }
+    }
     public string MyUuid => CryptoService.CalculateUuid(IdentitySeed);
     public string MyMailboxId => CryptoService.CalculateMailboxId(MyUuid);
     public string MyX25519PublicKeyBase64 => CryptoService.GetX25519PublicKeyBase64(IdentitySeed);
@@ -116,6 +132,11 @@ public sealed class SecureSettingsStore
         lock (_gate)
         {
             var updated = update(_settings) ?? throw new InvalidOperationException("Settings update returned null.");
+            if (updated.IdentitySeedBase64 != _settings.IdentitySeedBase64 ||
+                updated.DatabaseKeyEnvelopeBase64 != _settings.DatabaseKeyEnvelopeBase64)
+            {
+                throw new InvalidOperationException("Identity keys can only be replaced by Reset Identity.");
+            }
             Validate(updated);
             _settings = updated;
             SaveLocked();
@@ -144,18 +165,22 @@ public sealed class SecureSettingsStore
     public void RotateIdentity()
     {
         var newSeed = RandomNumberGenerator.GetBytes(32);
-        var newDatabaseKey = RandomNumberGenerator.GetBytes(32);
         lock (_gate)
         {
+            var replacement = CreateDefaults(newSeed);
+            if (_protector is IDeviceBoundSecretProtector device) device.DestroyKey();
             _settings = _settings with
             {
-                IdentitySeedBase64 = Convert.ToBase64String(newSeed),
-                DatabaseKeyBase64 = Convert.ToBase64String(newDatabaseKey),
+                FormatVersion = 3,
+                IdentitySeedBase64 = replacement.IdentitySeedBase64,
+                DatabaseKeyBase64 = null,
+                DatabaseKeyEnvelopeBase64 = replacement.DatabaseKeyEnvelopeBase64,
                 Nickname = null,
                 AvatarPath = null
             };
             SaveLocked();
         }
+        CryptographicOperations.ZeroMemory(newSeed);
         Changed?.Invoke(this, EventArgs.Empty);
     }
 
@@ -163,6 +188,10 @@ public sealed class SecureSettingsStore
     {
         if (!File.Exists(_vaultPath))
         {
+            if (File.Exists(_identityMarkerPath))
+            {
+                throw new InvalidDataException("The identity vault is missing. Refusing to silently replace the identity.");
+            }
             var created = CreateDefaults();
             _settings = created;
             SaveLocked();
@@ -171,25 +200,50 @@ public sealed class SecureSettingsStore
 
         try
         {
-            var plaintext = _protector.Unprotect(File.ReadAllBytes(_vaultPath));
+            if (new FileInfo(_vaultPath).Length > 66560) throw new InvalidDataException("Identity vault exceeds its size limit.");
+            var sealedBytes = File.ReadAllBytes(_vaultPath);
+            var migrateDeviceProtection = _protector is IDeviceBoundSecretProtector && !sealedBytes.AsSpan(0, Math.Min(4,sealedBytes.Length)).SequenceEqual("MTR3"u8);
+            if (migrateDeviceProtection && File.Exists(_hardwareMarkerPath))
+            {
+                throw new InvalidDataException("Refusing to downgrade the hardware-protected identity vault.");
+            }
+            var plaintext = migrateDeviceProtection ? UnprotectLegacyOnWindows(sealedBytes) : _protector.Unprotect(sealedBytes);
             try
             {
                 var json = JsonSerializer.Deserialize<SecureSettings>(plaintext, JsonOptions);
-                if (json is not null && json.FormatVersion == 2)
+                if (json is not null && json.FormatVersion is 2 or 3)
                 {
+                    var upgradeFormat = json.FormatVersion == 2;
+                    if (json.FormatVersion == 2)
+                    {
+                        var seed = Decode32(json.IdentitySeedBase64, "identity seed");
+                        try
+                        {
+                            var replacement = CreateDefaults(seed);
+                            json = json with
+                            {
+                                FormatVersion = 3,
+                                DatabaseKeyBase64 = null,
+                                DatabaseKeyEnvelopeBase64 = replacement.DatabaseKeyEnvelopeBase64
+                            };
+                        }
+                        finally { CryptographicOperations.ZeroMemory(seed); }
+                    }
                     Validate(json);
+                    if (migrateDeviceProtection || upgradeFormat)
+                    {
+                        _settings = json;
+                        SaveLocked();
+                    }
                     return json;
                 }
             }
             catch (JsonException)
             {
-                // Try the Java Properties format used by the previous Windows client.
+                throw new InvalidDataException("The identity vault is not a supported JSON vault.");
             }
-
-            var migrated = MigrateLegacyProperties(Encoding.Latin1.GetString(plaintext));
-            _settings = migrated;
-            SaveLocked();
-            return migrated;
+            finally { CryptographicOperations.ZeroMemory(plaintext); }
+            throw new InvalidDataException("Unsupported identity vault version. Refusing identity replacement.");
         }
         catch (Exception exception) when (exception is IOException or CryptographicException or FormatException or JsonException)
         {
@@ -199,74 +253,68 @@ public sealed class SecureSettingsStore
         }
     }
 
-    private static SecureSettings MigrateLegacyProperties(string source)
-    {
-        var values = new Dictionary<string, string>(StringComparer.Ordinal);
-        foreach (var rawLine in source.Split('\n'))
-        {
-            var line = rawLine.TrimEnd('\r').Trim();
-            if (line.Length == 0 || line[0] is '#' or '!')
-            {
-                continue;
-            }
-            var separator = line.IndexOfAny(['=', ':']);
-            if (separator <= 0)
-            {
-                continue;
-            }
-            values[UnescapeProperty(line[..separator].Trim())] = UnescapeProperty(line[(separator + 1)..].Trim());
-        }
-
-        values.TryGetValue("PRIVATE_KEY", out var seed);
-        values.TryGetValue("DB_PASSPHRASE", out var databaseKey);
-        var migrated = new SecureSettings
-        {
-            IdentitySeedBase64 = seed ?? Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
-            DatabaseKeyBase64 = databaseKey ?? Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
-            ServerAddress = ValueOrNull(values, "server_ip"),
-            ServerPort = ParseInt(values, "server_port"),
-            Nickname = ValueOrNull(values, "my_nickname"),
-            AvatarPath = ValueOrNull(values, "my_avatar_path"),
-            TurnServer = ValueOrNull(values, "turn_server"),
-            TurnPort = ParseInt(values, "turn_port", 3478),
-            TurnUsername = ValueOrNull(values, "turn_username"),
-            TurnPassword = ValueOrNull(values, "turn_password"),
-            TurnUseTls = ParseBool(values, "turn_use_tls")
-        };
-        Validate(migrated);
-        return migrated;
-    }
-
     private void SaveLocked()
     {
         var plaintext = JsonSerializer.SerializeToUtf8Bytes(_settings, JsonOptions);
-        var ciphertext = _protector.Protect(plaintext);
         var temporaryPath = _vaultPath + ".tmp-" + Guid.NewGuid().ToString("N");
         try
         {
+            var ciphertext = _protector.Protect(plaintext);
             using (var stream = new FileStream(temporaryPath, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
                 stream.Write(ciphertext);
                 stream.Flush(flushToDisk: true);
             }
             File.Move(temporaryPath, _vaultPath, overwrite: true);
+            if (_protector is IDeviceBoundSecretProtector)
+            {
+                using var marker = new FileStream(_hardwareMarkerPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+                marker.Write("TPM device envelope v2"u8);
+                marker.Flush(flushToDisk: true);
+            }
         }
         finally
         {
             File.Delete(temporaryPath);
+            CryptographicOperations.ZeroMemory(plaintext);
         }
     }
 
-    private static SecureSettings CreateDefaults() => new()
+    private static SecureSettings CreateDefaults()
     {
-        IdentitySeedBase64 = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32)),
-        DatabaseKeyBase64 = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32))
-    };
+        var seed = RandomNumberGenerator.GetBytes(32);
+        try { return CreateDefaults(seed); }
+        finally { CryptographicOperations.ZeroMemory(seed); }
+    }
+
+    private static SecureSettings CreateDefaults(byte[] seed)
+    {
+        var databaseKey = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            return new SecureSettings
+            {
+                IdentitySeedBase64 = Convert.ToBase64String(seed),
+                DatabaseKeyEnvelopeBase64 = Convert.ToBase64String(RootKeyHierarchy.Wrap(seed, "database", databaseKey))
+            };
+        }
+        finally { CryptographicOperations.ZeroMemory(databaseKey); }
+    }
 
     private static void Validate(SecureSettings settings)
     {
-        _ = Decode32(settings.IdentitySeedBase64, "identity seed");
-        _ = Decode32(settings.DatabaseKeyBase64, "database key");
+        if (settings.FormatVersion != 3)
+        {
+            throw new InvalidDataException("Unsupported secure settings version.");
+        }
+        var seed = Decode32(settings.IdentitySeedBase64, "identity seed");
+        try
+        {
+            var key = RootKeyHierarchy.Unwrap(seed, "database",
+                Convert.FromBase64String(settings.DatabaseKeyEnvelopeBase64 ?? throw new InvalidDataException("Missing database key envelope.")));
+            CryptographicOperations.ZeroMemory(key);
+        }
+        finally { CryptographicOperations.ZeroMemory(seed); }
         if (settings.ServerPort is < 0 or > 65535 || settings.TurnPort is < 0 or > 65535)
         {
             throw new InvalidDataException("A stored network port is outside the valid range.");
@@ -283,47 +331,34 @@ public sealed class SecureSettingsStore
             : throw new InvalidDataException($"Invalid {label} length.");
     }
 
-    private static string? ValueOrNull(Dictionary<string, string> values, string key) =>
-        values.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
-
-    private static int ParseInt(Dictionary<string, string> values, string key, int fallback = 0) =>
-        values.TryGetValue(key, out var value) && int.TryParse(value, out var parsed) ? parsed : fallback;
-
-    private static bool ParseBool(Dictionary<string, string> values, string key) =>
-        values.TryGetValue(key, out var value) && bool.TryParse(value, out var parsed) && parsed;
-
-    private static string UnescapeProperty(string value)
+    private void WriteIdentityMarker()
     {
-        var result = new StringBuilder(value.Length);
-        for (var index = 0; index < value.Length; index++)
-        {
-            if (value[index] != '\\' || ++index >= value.Length)
-            {
-                result.Append(value[Math.Min(index, value.Length - 1)]);
-                continue;
-            }
-            var escaped = value[index];
-            if (escaped == 'u' && index + 4 < value.Length &&
-                int.TryParse(value.AsSpan(index + 1, 4), System.Globalization.NumberStyles.HexNumber,
-                    System.Globalization.CultureInfo.InvariantCulture, out var scalar))
-            {
-                result.Append((char)scalar);
-                index += 4;
-            }
-            else
-            {
-                result.Append(escaped switch { 'n' => '\n', 'r' => '\r', 't' => '\t', 'f' => '\f', _ => escaped });
-            }
-        }
-        return result.ToString();
+        using var marker = new FileStream(_identityMarkerPath, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read);
+        marker.Write("MsgAT identity initialized v2"u8);
+        marker.Flush(flushToDisk: true);
     }
 
-    private static DpapiSecretProtector CreatePlatformProtector()
+    private static TpmSecretProtector CreatePlatformProtector(string dataDirectory, string vaultPath)
     {
         if (!OperatingSystem.IsWindows())
         {
-            throw new PlatformNotSupportedException("The production settings vault requires Windows DPAPI.");
+            throw new PlatformNotSupportedException("The production settings vault requires Windows TPM protection.");
         }
-        return new DpapiSecretProtector();
+        var protector = new TpmSecretProtector(dataDirectory);
+        var existing = new byte[4];
+        if (File.Exists(vaultPath))
+        {
+            using var stream = File.OpenRead(vaultPath);
+            if (stream.Length > 66560) throw new InvalidDataException("Identity vault exceeds its size limit.");
+            _ = stream.ReadAtLeast(existing, existing.Length, throwOnEndOfStream: false);
+        }
+        protector.EnsureAvailable(TpmSecretProtector.IsDeviceEnvelope(existing));
+        return protector;
+    }
+
+    private static byte[] UnprotectLegacyOnWindows(byte[] ciphertext)
+    {
+        if (!OperatingSystem.IsWindows()) throw new PlatformNotSupportedException("Legacy vault migration is Windows-only.");
+        return new DpapiSecretProtector().Unprotect(ciphertext);
     }
 }

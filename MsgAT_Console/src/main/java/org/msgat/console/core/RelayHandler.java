@@ -26,6 +26,15 @@ public class RelayHandler extends SimpleChannelInboundHandler<GhostPacket> {
             return;
         }
         switch (packet.getType()) {
+            case GhostPacket.TYPE_V2_SUBMIT:
+            case GhostPacket.TYPE_V2_RECEIVED:
+            case GhostPacket.TYPE_V2_SYNC:
+                CiphertextRelay.handle(ctx, packet, routingTable);
+                break;
+            case GhostPacket.TYPE_V2_KEY_PUBLISH:
+            case GhostPacket.TYPE_V2_KEY_CLAIM:
+                KeyDirectoryHandler.handle(ctx, packet);
+                break;
             case GhostPacket.TYPE_MESSAGE:
                 handleIncomingMessage(ctx, packet);
                 break;

@@ -37,5 +37,16 @@ class GhostPacket(
         const val TYPE_CALL_END: Byte = 0x17
         const val TYPE_CALL_BUSY: Byte = 0x18
         const val TYPE_CALL_SYNC: Byte = 0x19
+
+        const val TYPE_V2_SUBMIT: Byte = 0x40
+        const val TYPE_V2_KEY_PUBLISH: Byte = 0x41
+        const val TYPE_V2_KEY_PUBLISHED: Byte = 0x42
+        const val TYPE_V2_KEY_CLAIM: Byte = 0x43
+        const val TYPE_V2_KEY_RESPONSE: Byte = 0x44
+        const val TYPE_V2_STORED: Byte = 0x45
+        const val TYPE_V2_DELIVERY: Byte = 0x46
+        const val TYPE_V2_RECEIVED: Byte = 0x47
+        const val TYPE_V2_SYNC: Byte = 0x48
+        const val TYPE_V2_SYNC_END: Byte = 0x49
     }
 }

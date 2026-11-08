@@ -8,6 +8,10 @@
 
 每个任务使用新的托管环境，依赖从公开仓库下载。Gradle 的 Actions 缓存、构建缓存和配置缓存均关闭；Maven、NuGet 和 SwiftPM 不恢复缓存。不依赖开发电脑上的 Android SDK、IDEA、Xcode、虚拟机或任何旧构建目录。
 
+V2 客户端先通过 `.github/actions/native-security` 构建共享加密核心，再构建原生应用。Rust 版本由 `shared/security-core/rust-toolchain.toml` 固定，libsignal/SPQR 及其他 Rust 依赖由提交号和 `Cargo.lock` 固定；Protobuf 3.25.5 编译器从官方 Maven 仓库下载，按各平台固定 SHA-256 验证。Android 使用固定 NDK 26.3.11579264 生成 ARM64、ARMv7 JNI 库，Mac 静态链接 ARM64 库，Windows 将 x64 原生 DLL 随应用打包。库文件不进入 Git，也不从开发电脑上传。相同提交的构建来源可追溯，不承诺不同运行时间的安装包逐字节一致。
+
+V2 仍在重构中。云端编译和打包成功只证明构建链路；硬件身份保护、聊天及其他交互必须通过实际客户端验收，不可据此宣称重构已完成。
+
 ## 生成安装包
 
 进入 [Cloud packages](https://github.com/TirededMaxer/MsgAT/actions/workflows/packages.yml)，点击 **Run workflow**，选择 `main`：

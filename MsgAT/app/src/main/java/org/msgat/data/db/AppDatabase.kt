@@ -13,6 +13,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun msgDao(): MsgDao
 
     companion object {
+        const val DATABASE_NAME = "msgat_v2_vault.db"
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
@@ -36,15 +37,28 @@ abstract class AppDatabase : RoomDatabase() {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
-                "msgat_vault.db"
+                DATABASE_NAME
             )
                 .openHelperFactory(factory)
+                .addCallback(object : RoomDatabase.Callback() {
+                    override fun onOpen(db: androidx.sqlite.db.SupportSQLiteDatabase) {
+                        db.execSQL("PRAGMA synchronous=FULL")
+                        db.execSQL("PRAGMA cipher_memory_security=ON")
+                        org.msgat.core.crypto.SignalProtocolStore.createSchema(db)
+                    }
+                })
                 .build()
         }
 
         // Retrieves or generates the secure 256-bit key used for SQLCipher encryption.
         private fun getSecureDbKey(context: Context): ByteArray {
             return org.msgat.core.crypto.securestorage.SecurePrefs(context).getDatabasePassphrase()
+        }
+
+        @Synchronized
+        fun closeForIdentityReset() {
+            INSTANCE?.close()
+            INSTANCE = null
         }
     }
 }

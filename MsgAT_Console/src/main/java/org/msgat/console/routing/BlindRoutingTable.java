@@ -133,9 +133,4 @@ public class BlindRoutingTable {
         replayingChannels.clear();
     }
 
-    // Emergency wipe is distinct from an ordinary server restart.
-    public synchronized void secureWipe() {
-        closeConnections();
-        org.msgat.console.db.DatabaseManager.wipeOfflineDatabaseFile();
-    }
 }

@@ -1,0 +1,5 @@
+module MsgATNativeSecurity {
+    header "include/MsgATSecurity.h"
+    link "msgat_security_core"
+    export *
+}

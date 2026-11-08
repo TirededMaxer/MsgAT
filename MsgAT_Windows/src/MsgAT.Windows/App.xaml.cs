@@ -20,7 +20,7 @@ public partial class App : System.Windows.Application
     {
         System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         base.OnStartup(e);
-        _singleInstance = new Mutex(initiallyOwned: true, "Local\\MsgAT.Windows.Singleton", out var createdNew);
+        _singleInstance = new Mutex(initiallyOwned: true, MsgAT.Windows.Core.Storage.RuntimePaths.SingleInstanceName, out var createdNew);
         if (!createdNew)
         {
             MessageBox.Show("MsgAT is already running.", "MsgAT", MessageBoxButton.OK, MessageBoxImage.Information);

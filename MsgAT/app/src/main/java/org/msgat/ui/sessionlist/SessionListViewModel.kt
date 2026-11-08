@@ -53,115 +53,31 @@ class SessionListViewModel(
     val friendRequests: StateFlow<List<org.msgat.data.db.FriendRequest>> = msgDao.getAllFriendRequests()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    // Accepts an incoming friend request and creates a new local conversation.
     fun acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
-        if (nettyClient.connectionState.value != org.msgat.ui.chat.SyncState.SYNCED) return
-        viewModelScope.launch {
-            val request = msgDao.getFriendRequestByUuid(senderUuid) ?: return@launch
-            val peerPub = request.peerPublicKey
-            if (peerPub.isEmpty()) return@launch
-
-            try {
-                val payloadJson = """{"senderUuid":"${securePrefs.myUuid}","senderPublicKey":"${securePrefs.myX25519PublicKeyBase64}"}"""
-                val iv = ByteArray(16)
-                java.security.SecureRandom().nextBytes(iv)
-
-                val (cipherText, authTag) = org.msgat.core.crypto.CryptoManager.encryptPayloadFallback(senderUuid, senderUuid, iv, payloadJson.toByteArray(Charsets.UTF_8))
-
-                val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(senderUuid)
-                val packet = org.msgat.model.GhostPacket(
-                    type = org.msgat.model.GhostPacket.TYPE_FRIEND_ACCEPTED,
-                    targetMailboxId = targetMailboxId,
-                    nonceOrIv = iv,
-                    encryptedData = cipherText,
-                    authTag = authTag
-                )
-                if (nettyClient.sendPacket(packet)) {
-                    msgDao.insertConversation(Conversation(senderUuid, nickname, avatarPath, peerPub))
-                    msgDao.deleteFriendRequest(senderUuid)
-                }
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        viewModelScope.launch { nettyClient.secureMessaging.acceptContact(senderUuid,nickname,avatarPath) }
     }
 
-    // Declines and removes a pending friend request from the database.
     fun declineFriendRequest(senderUuid: String) {
-        viewModelScope.launch {
-            msgDao.deleteFriendRequest(senderUuid)
-        }
+        viewModelScope.launch { nettyClient.secureMessaging.declineContact(senderUuid) }
     }
 
-    // Adds a new conversation thread by target UUID.
     fun addConversation(rawUuid: String, initialDisplayName: String = "Unknown") {
-        if (nettyClient.connectionState.value != org.msgat.ui.chat.SyncState.SYNCED) return
-        val uuid = rawUuid.trim().lowercase()
-        if (!uuid.matches(Regex("[a-f0-9]{64}")) || uuid == securePrefs.myUuid) return
+        val uuid=rawUuid.trim().lowercase()
+        if (!uuid.matches(Regex("[a-f0-9]{64}")) || uuid==securePrefs.myUuid) return
         viewModelScope.launch {
-            if (msgDao.getConversationByUuid(uuid) != null) return@launch
-            msgDao.insertConversation(Conversation(uuid, initialDisplayName))
-
-            try {
-                val payloadJson = org.json.JSONObject().apply {
-                    put("senderUuid", securePrefs.myUuid)
-                    put("nickname", securePrefs.myNickname ?: "Unknown")
-                    put("senderPublicKey", securePrefs.myX25519PublicKeyBase64)
-                }.toString()
-                val iv = ByteArray(16)
-                java.security.SecureRandom().nextBytes(iv)
-
-                val (cipherText, authTag) = org.msgat.core.crypto.CryptoManager.encryptPayloadFallback(uuid, uuid, iv, payloadJson.toByteArray(Charsets.UTF_8))
-
-                val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(uuid)
-                val packet = org.msgat.model.GhostPacket(
-                    type = org.msgat.model.GhostPacket.TYPE_SEARCH_USER,
-                    targetMailboxId = targetMailboxId,
-                    nonceOrIv = iv,
-                    encryptedData = cipherText,
-                    authTag = authTag
-                )
-                if (!nettyClient.sendPacket(packet)) msgDao.deleteConversation(uuid)
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
+            if (msgDao.getConversationByUuid(uuid)==null) nettyClient.secureMessaging.requestContact(uuid)
         }
     }
 
-    // Removes a conversation thread and all its associated messages.
     fun deleteConversation(uuid: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            val convo = msgDao.getConversationByUuid(uuid)
-            if (convo != null) {
-                val peerPublicKeyBase64 = convo.peerPublicKey
-                val iv = ByteArray(16)
-                java.security.SecureRandom().nextBytes(iv)
-                val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(uuid)
-
-                if (peerPublicKeyBase64.isNotEmpty()) {
-                    // Send TYPE_FRIEND_DELETED
-                    val myPrivateKey = securePrefs.getX25519PrivateKey()
-                    val payloadJson = """{"senderUuid":"${securePrefs.myUuid}"}"""
-                    val (cipherText, authTag) = org.msgat.core.crypto.CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, payloadJson.toByteArray(Charsets.UTF_8))
-                    val packet = org.msgat.model.GhostPacket(org.msgat.model.GhostPacket.TYPE_FRIEND_DELETED, targetMailboxId, iv, cipherText, authTag)
-                    nettyClient.sendPacket(packet)
-                } else {
-                    // Send TYPE_REQUEST_REVOKED
-                    val payloadJson = """{"senderUuid":"${securePrefs.myUuid}"}"""
-                    val (cipherText, authTag) = org.msgat.core.crypto.CryptoManager.encryptPayloadFallback(uuid, uuid, iv, payloadJson.toByteArray(Charsets.UTF_8))
-                    val packet = org.msgat.model.GhostPacket(org.msgat.model.GhostPacket.TYPE_REQUEST_REVOKED, targetMailboxId, iv, cipherText, authTag)
-                    nettyClient.sendPacket(packet)
+            val messages=msgDao.getMessageListByConversation(uuid)
+            if (nettyClient.secureMessaging.deleteContact(uuid)) {
+                val context=org.msgat.MsgATApp.instance.applicationContext
+                for (message in messages) if (message.ext!="txt") {
+                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context,message.messageId,message.ext)
                 }
             }
-            val msgs = msgDao.getMessageListByConversation(uuid)
-            val context = org.msgat.MsgATApp.instance.applicationContext
-            for (m in msgs) {
-                if (m.ext != "txt") {
-                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, m.messageId, m.ext)
-                }
-            }
-            msgDao.deleteConversation(uuid)
-            msgDao.clearMessages(uuid)
         }
     }
 

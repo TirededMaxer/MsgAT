@@ -308,19 +308,8 @@ class CallManager private constructor(private val context: Context) {
         _callState.value = CallState.INCOMING_RINGING
         startTimeoutTimer()
 
-        val db = org.msgat.data.db.AppDatabase.getInstance(context).msgDao()
-        scope.launch(Dispatchers.IO) {
-            val conv = db.getConversationByUuid(peerUuid)
-            val alias = conv?.alias ?: "Unknown"
-            if (!org.msgat.MsgATApp.instance.isAppInForeground) {
-                org.msgat.NotificationHelper.showMessageNotification(
-                    context,
-                    peerUuid,
-                    alias,
-                    "txt",
-                    "[Incoming Voice Call]"
-                )
-            }
+        if (!org.msgat.MsgATApp.instance.isAppInForeground) {
+            org.msgat.NotificationHelper.showPrivateMessageNotification(context,peerUuid)
         }
     }
 

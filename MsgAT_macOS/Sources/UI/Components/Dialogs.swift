@@ -144,9 +144,9 @@ public struct ServerSettings {
     public var turnPassword: String
     public var turnUseTls: Bool
     public var serverCertificateSha256: String = ""
-    public var allowDevelopmentCertificate: Bool = true
+    public var allowDevelopmentCertificate: Bool = false
 
-    public init(ip: String, port: String, turnServer: String, turnPort: String, turnUsername: String, turnPassword: String, turnUseTls: Bool, serverCertificateSha256: String = "", allowDevelopmentCertificate: Bool = true) {
+    public init(ip: String, port: String, turnServer: String, turnPort: String, turnUsername: String, turnPassword: String, turnUseTls: Bool, serverCertificateSha256: String = "", allowDevelopmentCertificate: Bool = false) {
         self.ip = ip
         self.port = port
         self.turnServer = turnServer

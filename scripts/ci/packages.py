@@ -96,7 +96,7 @@ def macos():
         app = stage / 'MsgAT.app'
         run('ditto', Path(os.environ['RUNNER_TEMP']) / 'msgat-derived/Build/Products/Release/MsgAT.app', app)
         resource = app / 'Contents/Resources'
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+        for name in ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md'):
             shutil.copy2(ROOT / name, resource / name)
         run('lipo', app / 'Contents/MacOS/MsgAT', '-verify_arch', 'arm64')
         run('codesign', '--force', '--deep', '--sign', '-', '--entitlements', ROOT / 'MsgAT_macOS/Sources/App/MsgAT.entitlements', app)
@@ -128,7 +128,7 @@ def bundle():
         path = DIST / filename(component)
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f'Missing package: {path.name}')
-    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+    for name in ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md'):
         copy(ROOT / name, name)
     manifest = {'commit': os.environ['GITHUB_SHA'], 'versions': versions(),
                 'buildOrigin': 'GitHub-hosted runners, no restored dependency/build caches',

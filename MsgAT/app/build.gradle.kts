@@ -17,6 +17,7 @@ android {
         versionName = "1.6"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     // GitHub-hosted release jobs restore the existing keystore into RUNNER_TEMP.
@@ -30,6 +31,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix = ".development"
+            versionNameSuffix = "-development"
+        }
         release {
             signingConfig = cloudSigning
             isMinifyEnabled = false
@@ -61,6 +66,21 @@ android {
             excludes += "META-INF/DEPENDENCIES"
         }
     }
+}
+
+val verifyNativeSecurity by tasks.registering {
+    val libraries = listOf("arm64-v8a", "armeabi-v7a").map {
+        layout.projectDirectory.file("src/main/jniLibs/$it/libmsgat_security_jni.so")
+    }
+    inputs.files(libraries)
+    doLast {
+        check(libraries.all { it.asFile.isFile && it.asFile.length() > 0 }) {
+            "Build both Android native security targets with scripts/native/security_core.py --android-jni before packaging."
+        }
+    }
+}
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }.configureEach {
+    dependsOn(verifyNativeSecurity)
 }
 
 dependencies {

@@ -15,7 +15,7 @@ public struct MsgATDatabaseError: LocalizedError, Sendable {
 
 private let msgatSQLiteTransient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
 
-/// Serial SQLCipher store backed by a random Keychain passphrase.
+/// Serial SQLCipher store whose data key is wrapped by the local root identity.
 public final class AppDatabase: @unchecked Sendable {
     public static let shared = AppDatabase()
 
@@ -25,23 +25,17 @@ public final class AppDatabase: @unchecked Sendable {
 
     private init() {
         do {
-            guard let appSupport = FileManager.default.urls(
-                for: .applicationSupportDirectory,
-                in: .userDomainMask
-            ).first else {
-                throw CocoaError(.fileNoSuchFile)
-            }
-            let appDirectory = appSupport.appendingPathComponent("org.msgat.mac", isDirectory: true)
+            let appDirectory = RuntimePaths.applicationSupport
             try FileManager.default.createDirectory(
                 at: appDirectory,
                 withIntermediateDirectories: true,
                 attributes: [.posixPermissions: 0o700]
             )
 
-            databaseURL = appDirectory.appendingPathComponent("msgat_vault.sqlite")
+            databaseURL = appDirectory.appendingPathComponent("msgat_v2_vault.sqlite")
             let key = KeychainManager.shared.getOrCreateDatabasePassphrase()
             if Self.isPlaintextSQLite(at: databaseURL) {
-                try Self.migratePlaintextDatabase(at: databaseURL, key: key)
+                throw MsgATDatabaseError(operation: "Open V2 vault", detail: "Refusing an unauthenticated plaintext database in the encrypted vault location.")
             }
 
             try openEncryptedDatabase(key: key)
@@ -70,6 +64,41 @@ public final class AppDatabase: @unchecked Sendable {
         try queue.sync {
             guard let handle else { throw Self.databaseError("Execute", handle: nil) }
             try Self.execute(handle: handle, sql: sql, values: values)
+        }
+    }
+
+    /// The closure runs synchronously on the database queue. Never perform network
+    /// operations or call the queue-owning public DAO from inside this closure.
+    func transaction<T>(notifyChanged: Bool = false, _ operation: (Transaction) throws -> T) throws -> T {
+        let result = try queue.sync {
+            guard let handle else { throw Self.databaseError("Begin transaction", handle: nil) }
+            try Self.execute(handle: handle, sql: "BEGIN IMMEDIATE")
+            let transaction = Transaction(handle: handle)
+            defer { transaction.active = false }
+            do {
+                let result = try operation(transaction)
+                try Self.execute(handle: handle, sql: "COMMIT")
+                return result
+            } catch {
+                try? Self.execute(handle: handle, sql: "ROLLBACK")
+                throw error
+            }
+        }
+        if notifyChanged { NotificationCenter.default.post(name: MsgDao.didChangeNotification, object: nil) }
+        return result
+    }
+
+    final class Transaction {
+        fileprivate var active = true
+        private let handle: OpaquePointer
+        fileprivate init(handle: OpaquePointer) { self.handle = handle }
+        func execute(_ sql: String, values: [DatabaseValue] = []) throws {
+            guard active else { throw MsgATDatabaseError(operation: "Transaction", detail: "Transaction is no longer active") }
+            try AppDatabase.execute(handle: handle, sql: sql, values: values)
+        }
+        func query<T>(_ sql: String, values: [DatabaseValue] = [], map: (OpaquePointer) throws -> T) throws -> [T] {
+            guard active else { throw MsgATDatabaseError(operation: "Transaction", detail: "Transaction is no longer active") }
+            return try AppDatabase.query(handle: handle, sql: sql, values: values, map: map)
         }
     }
 
@@ -191,6 +220,9 @@ public final class AppDatabase: @unchecked Sendable {
             try Self.execute(handle: opened, sql: "PRAGMA cipher_memory_security = ON")
             try Self.execute(handle: opened, sql: "PRAGMA foreign_keys = ON")
             try Self.execute(handle: opened, sql: "PRAGMA journal_mode = WAL")
+            try Self.execute(handle: opened, sql: "PRAGMA synchronous = FULL")
+            try Self.execute(handle: opened, sql: "PRAGMA fullfsync = ON")
+            try Self.execute(handle: opened, sql: "PRAGMA checkpoint_fullfsync = ON")
             try Self.readOne(handle: opened, sql: "SELECT count(*) FROM sqlite_master")
             handle = opened
         } catch {
@@ -202,6 +234,8 @@ public final class AppDatabase: @unchecked Sendable {
     // Called during initialization or while reset holds the database queue.
     private func createSchema() throws {
         guard let handle else { throw Self.databaseError("Create schema", handle: nil) }
+        for sql in SignalProtocolStore.schema { try Self.execute(handle: handle, sql: sql) }
+        try Self.execute(handle: handle, sql: "CREATE TABLE IF NOT EXISTS contact_states (uuid TEXT PRIMARY KEY NOT NULL, outgoing INTEGER NOT NULL DEFAULT 0, incoming INTEGER NOT NULL DEFAULT 0, accepted INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL DEFAULT 0)")
         try Self.execute(handle: handle, sql: """
             CREATE TABLE IF NOT EXISTS conversations (
                 uuid TEXT PRIMARY KEY NOT NULL,

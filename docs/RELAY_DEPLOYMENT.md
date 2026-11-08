@@ -40,7 +40,7 @@ java -jar MsgAT-Console-1.1.jar
 
 服务端仅承担聊天和通话信令中继。语音媒体通过 WebRTC 连接，跨 NAT 或严格防火墙环境可能需要独立 TURN 服务及相应网络规则。
 
-正常关闭和重启保留离线消息。`MSGAT_ENABLE_KILL_SWITCH` 默认不启用；不要在普通部署中开启，该功能包含破坏性清理逻辑。安全边界见 [SECURITY.md](../SECURITY.md)。
+正常关闭和重启保留离线消息。V2 重构已移除根据调试器或 Java Agent 等环境信号自动销毁数据的 KillSwitch；程序不会用这种方式宣称检测到数据窃取。安全边界见 [SECURITY.md](../SECURITY.md)。
 
 
 ## 资源与吞吐复核（2026-10-04）

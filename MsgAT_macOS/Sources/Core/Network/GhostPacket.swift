@@ -52,4 +52,15 @@ public struct GhostPacket: Sendable {
     public static let typeCallEnd: UInt8 = 0x17
     public static let typeCallBusy: UInt8 = 0x18
     public static let typeCallSync: UInt8 = 0x19
+
+    public static let typeV2Submit: UInt8 = 0x40
+    public static let typeV2KeyPublish: UInt8 = 0x41
+    public static let typeV2KeyPublished: UInt8 = 0x42
+    public static let typeV2KeyClaim: UInt8 = 0x43
+    public static let typeV2KeyResponse: UInt8 = 0x44
+    public static let typeV2Stored: UInt8 = 0x45
+    public static let typeV2Delivery: UInt8 = 0x46
+    public static let typeV2Received: UInt8 = 0x47
+    public static let typeV2Sync: UInt8 = 0x48
+    public static let typeV2SyncEnd: UInt8 = 0x49
 }

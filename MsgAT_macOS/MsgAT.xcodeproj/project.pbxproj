@@ -7,6 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0DEC0DE000000000000000B /* SecureMessaging.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE000000000000000C /* SecureMessaging.swift */; };
+		C0DEC0DE0000000000000009 /* SecureEnclaveSeedEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE000000000000000A /* SecureEnclaveSeedEnvelope.swift */; };
+		C0DEC0DE0000000000000007 /* SignalProtocolStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE0000000000000008 /* SignalProtocolStore.swift */; };
+		C0DEC0DE0000000000000005 /* SecurityCore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE0000000000000006 /* SecurityCore.swift */; };
+		C0DEC0DE0000000000000001 /* RootKeyHierarchy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE0000000000000002 /* RootKeyHierarchy.swift */; };
+		C0DEC0DE0000000000000003 /* RuntimePaths.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0DEC0DE0000000000000004 /* RuntimePaths.swift */; };
 		A254704779AF4855A5924895 /* ThirdParty in Resources */ = {isa = PBXBuildFile; fileRef = 47589E80EDAA43D499119E06 /* ThirdParty */; };
 		C1B34FF45802486CAEFEEA84 /* MsgATNativeAudio.m in Sources */ = {isa = PBXBuildFile; fileRef = A5DCFE364D7C4FD0AF108027 /* MsgATNativeAudio.m */; };
 		AB83E91C44FD47649A45BF2B /* MacCallAudioDevice.swift in Sources */ = {isa = PBXBuildFile; fileRef = F3817371916E481C90E0282A /* MacCallAudioDevice.swift */; };
@@ -47,6 +53,12 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		C0DEC0DE000000000000000C /* SecureMessaging.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Network/SecureMessaging.swift"; sourceTree = "<group>"; };
+		C0DEC0DE000000000000000A /* SecureEnclaveSeedEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/SecureEnclaveSeedEnvelope.swift"; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000008 /* SignalProtocolStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/SignalProtocolStore.swift"; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000006 /* SecurityCore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/SecurityCore.swift"; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000002 /* RootKeyHierarchy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Crypto/RootKeyHierarchy.swift"; sourceTree = "<group>"; };
+		C0DEC0DE0000000000000004 /* RuntimePaths.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/RuntimePaths.swift"; sourceTree = "<group>"; };
 		47589E80EDAA43D499119E06 /* ThirdParty */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "App/ThirdParty"; sourceTree = "<group>"; };
 		A5DCFE364D7C4FD0AF108027 /* MsgATNativeAudio.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = "../NativeAudio/MsgATNativeAudio.m"; sourceTree = "<group>"; };
 		F3817371916E481C90E0282A /* MacCallAudioDevice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Core/Call/MacCallAudioDevice.swift"; sourceTree = "<group>"; };
@@ -121,6 +133,12 @@
 				4A7766AFA91748A6ABC085BE /* SessionListViewModel.swift */,
 				82FADCEB000A4BDC9CB604C4 /* SessionListView.swift */,
 				53928534645C4F55B25E0B2A /* KeychainManager.swift */,
+				C0DEC0DE0000000000000006 /* SecurityCore.swift */,
+				C0DEC0DE0000000000000008 /* SignalProtocolStore.swift */,
+				C0DEC0DE000000000000000A /* SecureEnclaveSeedEnvelope.swift */,
+				C0DEC0DE000000000000000C /* SecureMessaging.swift */,
+				C0DEC0DE0000000000000002 /* RootKeyHierarchy.swift */,
+				C0DEC0DE0000000000000004 /* RuntimePaths.swift */,
 				3C549986DF714F27997F1128 /* Blake2b.swift */,
 				060B9AA1D5524431A81E5C11 /* CryptoManager.swift */,
 				2E19C403857E43139F785AB0 /* GhostPacketCodec.swift */,
@@ -246,6 +264,12 @@
 				84F8124E44BA4B1D85558C28 /* SessionListViewModel.swift in Sources */,
 				9D7D33B3B73B494B9DA34391 /* SessionListView.swift in Sources */,
 				8E32D0D55B154043BD4AC793 /* KeychainManager.swift in Sources */,
+				C0DEC0DE0000000000000005 /* SecurityCore.swift in Sources */,
+				C0DEC0DE0000000000000007 /* SignalProtocolStore.swift in Sources */,
+				C0DEC0DE0000000000000009 /* SecureEnclaveSeedEnvelope.swift in Sources */,
+				C0DEC0DE000000000000000B /* SecureMessaging.swift in Sources */,
+				C0DEC0DE0000000000000001 /* RootKeyHierarchy.swift in Sources */,
+				C0DEC0DE0000000000000003 /* RuntimePaths.swift in Sources */,
 				A8BE7CE257C449C185EBAB80 /* Blake2b.swift in Sources */,
 				FF9DBA300E704930A4FDAD30 /* CryptoManager.swift in Sources */,
 				00F3C9A887AB46A3ABB92570 /* GhostPacketCodec.swift in Sources */,
@@ -377,13 +401,14 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.1;
-				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac;
+				PRODUCT_BUNDLE_IDENTIFIER = org.msgat.mac.development;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
-				SWIFT_OBJC_BRIDGING_HEADER = NativeAudio/include/MsgATNativeAudio.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/MsgAT-Bridging-Header.h";
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/NativeSecurity/lib/$(CONFIGURATION)");
+				OTHER_LDFLAGS = ("$(inherited)", "-lmsgat_security_core");
 				SWIFT_VERSION = 5.0;
 			};
 			name = Debug;
@@ -416,8 +441,9 @@
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "$(inherited) SQLITE_HAS_CODEC";
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_OBJC_BRIDGING_HEADER = Sources/CBlake2/include/blake2.h;
-				SWIFT_OBJC_BRIDGING_HEADER = NativeAudio/include/MsgATNativeAudio.h;
+				SWIFT_OBJC_BRIDGING_HEADER = "Sources/App/MsgAT-Bridging-Header.h";
+				LIBRARY_SEARCH_PATHS = ("$(inherited)", "$(PROJECT_DIR)/NativeSecurity/lib/$(CONFIGURATION)");
+				OTHER_LDFLAGS = ("$(inherited)", "-lmsgat_security_core");
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;

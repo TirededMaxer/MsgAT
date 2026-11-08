@@ -2,6 +2,8 @@
 
 支持 Android、Windows 和 macOS 的加密聊天应用，配套可自行部署的 Java 中继服务端。
 
+**当前分支为未完成的 V2 重构。** 下方下载和功能说明对应已发布的旧版；本分支源码尚不能替代完整正式版。V2 采用硬件保护的不可迁移身份、共享 libsignal 核心、事务式本地加密存储及密文中继。已完成范围、实际使用证据和剩余工作见 [执行记录](docs/REBUILD_STATUS.md)，协议见 [V2_PROTOCOL](docs/V2_PROTOCOL.md)。构建成功不代表安全目标或完整功能已验收。
+
 通过身份 UUID 添加好友，发送文字、图片、视频与文件，进行语音通话。客户端支持离线消息、送达与已读回执、引用回复、消息编辑和撤回，以及本地加密聊天记录。
 
 ## 版本与下载
@@ -78,4 +80,4 @@ java -jar MsgAT-Console-1.1.jar
 
 ## 许可证
 
-项目采用 [MIT License](LICENSE)。第三方依赖保留各自的许可证，详见 [第三方说明](THIRD_PARTY_NOTICES.md)。
+V2 重构中的 Android、Windows、macOS 客户端及共享安全核心采用 [AGPL-3.0-only](LICENSE-AGPL-3.0)，Java 服务端继续采用 [MIT License](LICENSE)。第三方依赖保留各自的许可证，详见 [第三方说明](THIRD_PARTY_NOTICES.md)。当前重构范围与尚未完成的验收见 [执行记录](docs/REBUILD_STATUS.md)；上方 Release 功能说明对应原有已发布版本。

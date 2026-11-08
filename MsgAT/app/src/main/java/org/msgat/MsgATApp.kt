@@ -13,7 +13,10 @@ class MsgATApp : Application() {
     lateinit var nettyClient: NettyClient
         private set
 
-    var isAppInForeground = false
+    @Volatile var isAppInForeground = false
+    var startupFailure: String? = null
+        private set
+    val isReady: Boolean get() = startupFailure == null && ::nettyClient.isInitialized
 
     // Initializes global application state and sets up activity lifecycle callbacks.
     override fun onCreate() {
@@ -21,9 +24,23 @@ class MsgATApp : Application() {
 
         instance = this
 
-        securePrefs = SecurePrefs(applicationContext)
-        db = AppDatabase.getInstance(applicationContext)
-        nettyClient = NettyClient(securePrefs, db.msgDao())
+        try {
+            securePrefs = SecurePrefs(applicationContext)
+            org.msgat.core.crypto.SecurityCore.requireAvailable()
+            db = AppDatabase.getInstance(applicationContext)
+            nettyClient = NettyClient(securePrefs, db) { sender ->
+                if (!isAppInForeground) NotificationHelper.showPrivateMessageNotification(applicationContext,sender)
+            }
+        } catch (error: org.msgat.core.crypto.securestorage.HardwareProtectionUnavailableException) {
+            startupFailure = error.message
+            return
+        } catch (error: LinkageError) {
+            startupFailure = "The native security component could not be loaded. Existing identity data was not replaced."
+            return
+        } catch (error: Exception) {
+            startupFailure = "The device identity vault could not be opened. Existing identity data was not replaced."
+            return
+        }
 
         androidx.lifecycle.ProcessLifecycleOwner.get().lifecycle.addObserver(object : androidx.lifecycle.DefaultLifecycleObserver {
             // Handles application transition to the foreground.

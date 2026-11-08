@@ -1,5 +1,8 @@
 // swift-tools-version: 5.9
 import PackageDescription
+import Foundation
+
+let nativeSecurityLibraries = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("NativeSecurity/lib").path
 
 let package = Package(
     name: "MsgAT",
@@ -18,6 +21,7 @@ let package = Package(
         .package(url: "https://github.com/stasel/WebRTC.git", from: "125.0.0")
     ],
     targets: [
+        .systemLibrary(name: "MsgATNativeSecurity", path: "NativeSecurity"),
         .target(
             name: "CBlake2",
             publicHeadersPath: "include"
@@ -34,6 +38,7 @@ let package = Package(
             dependencies: [
                 "CBlake2",
                 "MsgATNativeAudio",
+                "MsgATNativeSecurity",
                 .product(name: "SQLCipher", package: "SQLCipher.swift"),
                 .product(name: "WebRTC", package: "WebRTC")
             ],
@@ -42,11 +47,16 @@ let package = Package(
                 "CBlake2",
                 "App/Assets.xcassets",
                 "App/Info.plist",
+                "App/MsgAT-Bridging-Header.h",
                 "App/MsgAT.entitlements"
             ],
             resources: [.copy("App/ThirdParty")],
             cSettings: [.define("SQLITE_HAS_CODEC")],
-            swiftSettings: [.define("SQLITE_HAS_CODEC")]
+            swiftSettings: [.define("SQLITE_HAS_CODEC")],
+            linkerSettings: [
+                .unsafeFlags(["-L", nativeSecurityLibraries + "/Debug"], .when(configuration: .debug)),
+                .unsafeFlags(["-L", nativeSecurityLibraries + "/Release"], .when(configuration: .release))
+            ]
         ),
         .testTarget(
             name: "MsgATTests",

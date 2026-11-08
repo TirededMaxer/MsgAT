@@ -1,7 +1,6 @@
 package org.msgat.console;
 
 import org.msgat.console.core.GhostNettyServer;
-import org.msgat.console.guard.KillSwitchMonitor;
 import org.msgat.console.routing.BlindRoutingTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -10,7 +9,7 @@ public class Main {
 
     private static final Logger log = LoggerFactory.getLogger(Main.class);
 
-    // Entry point of the application; initializes database, routing, security monitors, and starts the server.
+    // Initializes persistent routing and starts the server.
     public static void main(String[] args) {
         try {
             if (args.length != 0) throw new IllegalArgumentException("Set port in server-config.json beside the JAR; no positional arguments are accepted.");
@@ -26,20 +25,27 @@ public class Main {
     private static void run(int port) throws Exception {
         org.msgat.console.core.CryptoUtils.validateConfiguration();
         org.msgat.console.db.DatabaseManager.init();
+        org.msgat.console.db.CiphertextMailboxStore.initialize();
 
         java.util.concurrent.ScheduledExecutorService scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
         scheduler.scheduleAtFixedRate(() -> {
-            org.msgat.console.db.DatabaseManager.cleanupOldOfflineMessages();
+            try {
+                org.msgat.console.db.DatabaseManager.cleanupOldOfflineMessages();
+            } catch (RuntimeException error) {
+                log.error("Offline cleanup failed; the next scheduled cleanup will retry", error);
+            }
         }, 0, 1, java.util.concurrent.TimeUnit.HOURS);
+        scheduler.scheduleAtFixedRate(() -> {
+            try { org.msgat.console.db.CiphertextMailboxStore.cleanupExpired(); }
+            catch (java.sql.SQLException error) { log.error("V2 ciphertext cleanup failed; the next tick will retry", error); }
+        }, 0, 1, java.util.concurrent.TimeUnit.MINUTES);
 
         BlindRoutingTable routingTable = new BlindRoutingTable();
-
-        KillSwitchMonitor killSwitch = new KillSwitchMonitor(routingTable);
-        if (Boolean.parseBoolean(System.getenv("MSGAT_ENABLE_KILL_SWITCH"))) killSwitch.startMonitoring();
 
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
             scheduler.shutdownNow();
             routingTable.closeConnections();
+            org.msgat.console.db.CiphertextMailboxStore.close();
         }));
 
         try {
@@ -49,6 +55,7 @@ public class Main {
         } finally {
             scheduler.shutdownNow();
             routingTable.closeConnections();
+            org.msgat.console.db.CiphertextMailboxStore.close();
         }
     }
 }

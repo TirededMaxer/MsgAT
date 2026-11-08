@@ -29,6 +29,10 @@ class MsgATService : Service() {
         startForeground(1, notification)
 
         val app = MsgATApp.instance
+        if (!app.isReady) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
         if (networkMonitor == null) {
             networkMonitor = NetworkMonitor(applicationContext, app.nettyClient)
             networkMonitor?.startMonitoring()
@@ -58,6 +62,6 @@ class MsgATService : Service() {
         connectionObserverJob?.cancel()
         connectionObserverJob = null
         serviceScope.cancel()
-        MsgATApp.instance.nettyClient.disconnect()
+        if (MsgATApp.instance.isReady) MsgATApp.instance.nettyClient.disconnect()
     }
 }

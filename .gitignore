@@ -64,9 +64,13 @@ MsgAT_Console/data/
 **/dependency-reduced-pom.xml
 **/*.hprof
 /release-artifacts/
+/.build-tools/
+/MsgAT_macOS/NativeSecurity/lib/
+/MsgAT/app/src/main/jniLibs/
 
 # Generated server settings (the example remains tracked).
 **/server-config.json
 
 # Android Studio signed-package export output
 /MsgAT/app/release/
+MsgAT_Windows/NativeSecurity/

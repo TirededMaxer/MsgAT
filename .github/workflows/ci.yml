@@ -24,8 +24,19 @@ jobs:
       - uses: ./.github/actions/native-security
         with:
           android: 'true'
+      - name: Restore separate development signing when available
+        env:
+          ANDROID_DEVELOPMENT_KEYSTORE_BASE64: ${{ secrets.ANDROID_DEVELOPMENT_KEYSTORE_BASE64 }}
+          ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}
+        run: python scripts/ci/packages.py restore-development-signing
       - working-directory: MsgAT
+        env:
+          ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}
         run: ./gradlew --no-build-cache --no-configuration-cache lintDebug assembleDebug
+      - run: python scripts/ci/packages.py development-android
+      - name: Remove temporary development signing material
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/msgat-development-signing"
       - uses: actions/upload-artifact@v4
         with:
           name: development-android
@@ -47,11 +58,11 @@ jobs:
         run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true
       - name: Build isolated development app for actual-use acceptance
         working-directory: MsgAT_Windows
-        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Debug --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true
+        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Debug --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$env:RUNNER_TEMP/msgat-windows-development"
       - uses: actions/upload-artifact@v4
         with:
           name: development-windows
-          path: MsgAT_Windows/src/MsgAT.Windows/bin/Debug/net10.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe
+          path: ${{ runner.temp }}/msgat-windows-development/MsgAT.exe
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
@@ -63,7 +74,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/native-security
       - working-directory: MsgAT_macOS
-        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release -destination 'platform=macOS' -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
+        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Release -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/msgat-derived" -clonedSourcePackagesDirPath "$RUNNER_TEMP/msgat-packages" -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
+      - name: Link the same native core into the isolated debug apps
+        run: |
+          mkdir -p MsgAT_macOS/NativeSecurity/lib/Debug
+          cp MsgAT_macOS/NativeSecurity/lib/Release/libmsgat_security_core.a MsgAT_macOS/NativeSecurity/lib/Debug/
+      - working-directory: MsgAT_macOS
+        run: xcodebuild -project MsgAT.xcodeproj -scheme MsgAT -configuration Debug -destination 'platform=macOS' -derivedDataPath "$RUNNER_TEMP/msgat-derived" -clonedSourcePackagesDirPath "$RUNNER_TEMP/msgat-packages" -onlyUsePackageVersionsFromResolvedFile CODE_SIGNING_ALLOWED=NO build
+      - run: python scripts/ci/packages.py development-macos
+      - uses: actions/upload-artifact@v4
+        with:
+          name: development-macos
+          path: ${{ runner.temp }}/msgat-macos-development/MsgAT-macOS-development.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   relay:
     runs-on: ubuntu-latest
@@ -75,3 +100,10 @@ jobs:
           java-version: "21"
       - working-directory: MsgAT_Console
         run: mvn --batch-mode package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: development-relay
+          path: MsgAT_Console/target/*-obfuscated.jar
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

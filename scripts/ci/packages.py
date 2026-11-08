@@ -72,6 +72,40 @@ def restore_signing():
     key.chmod(0o600)
 
 
+def restore_development_signing():
+    value = os.environ.get('ANDROID_DEVELOPMENT_KEYSTORE_BASE64')
+    if not value:
+        print('Development signing is unavailable; this build uses the ephemeral SDK debug certificate.')
+        return
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Development signing is restored only on hosted CI')
+    if not os.environ.get('ANDROID_DEVELOPMENT_STORE_PASSWORD'):
+        raise RuntimeError('Development signing password is missing')
+    directory = Path(os.environ['RUNNER_TEMP']) / 'msgat-development-signing'
+    directory.mkdir(mode=0o700, exist_ok=True)
+    key = directory / 'development.p12'
+    key.write_bytes(base64.b64decode(value, validate=True))
+    key.chmod(0o600)
+    with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as environment:
+        environment.write(f'ANDROID_DEVELOPMENT_KEYSTORE_PATH={key}\nMSGAT_FIXED_DEVELOPMENT_SIGNING=true\n')
+
+
+def development_android():
+    sdk = Path(os.environ['ANDROID_HOME'])
+    candidates = [p for p in (sdk / 'build-tools').iterdir() if re.fullmatch(r'\d+\.\d+\.\d+', p.name)]
+    tools = max(candidates, key=lambda p: tuple(map(int, p.name.split('.'))))
+    apk = ROOT / 'MsgAT/app/build/outputs/apk/debug/app-debug.apk'
+    output = run(tools / 'apksigner', 'verify', '--verbose', '--print-certs', apk, capture=True)
+    if os.environ.get('MSGAT_FIXED_DEVELOPMENT_SIGNING') == 'true':
+        expected = json.loads((ROOT / 'scripts/ci/development-signing.json').read_text())['certificateSha256']
+        if f'Signer #1 certificate SHA-256 digest: {expected}' not in output:
+            raise RuntimeError('Development APK does not retain its separate development certificate')
+    badging = run(tools / 'aapt', 'dump', 'badging', apk, capture=True)
+    if "package: name='org.msgat.development'" not in badging:
+        raise RuntimeError('Development APK must use its isolated application ID')
+    print('Development APK signature and isolated application ID verified.')
+
+
 def android():
     apk = ROOT / 'MsgAT/app/build/outputs/apk/release/app-release.apk'
     tools = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.1.0'
@@ -87,20 +121,44 @@ def android():
 
 
 def windows():
-    copy(ROOT / 'MsgAT_Windows/src/MsgAT.Windows/bin/Release/net10.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe', filename('windows'))
+    copy(Path(os.environ['RUNNER_TEMP']) / 'msgat-windows-release/MsgAT.exe', filename('windows'))
+
+
+def prepare_macos_app(source, app, identifier=None, name=None):
+    run('ditto', source, app)
+    if identifier:
+        metadata = app / 'Contents/Info.plist'
+        with metadata.open('rb') as stream:
+            info = plistlib.load(stream)
+        info.update(CFBundleIdentifier=identifier, CFBundleName=name, CFBundleDisplayName=name)
+        with metadata.open('wb') as stream:
+            plistlib.dump(info, stream)
+    resource = app / 'Contents/Resources'
+    for license_name in ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md'):
+        shutil.copy2(ROOT / license_name, resource / license_name)
+    run('lipo', app / 'Contents/MacOS/MsgAT', '-verify_arch', 'arm64')
+    run('codesign', '--force', '--deep', '--sign', '-', '--entitlements', ROOT / 'MsgAT_macOS/Sources/App/MsgAT.entitlements', app)
+    run('codesign', '--verify', '--deep', '--strict', app)
+
+
+def development_macos():
+    if os.environ.get('GITHUB_ACTIONS') != 'true':
+        raise RuntimeError('Development apps are packaged only on hosted CI')
+    output = Path(os.environ['RUNNER_TEMP']) / 'msgat-macos-development'
+    output.mkdir(exist_ok=True)
+    source = Path(os.environ['RUNNER_TEMP']) / 'msgat-derived/Build/Products/Debug/MsgAT.app'
+    with tempfile.TemporaryDirectory(prefix='msgat-development-') as temporary:
+        stage = Path(temporary)
+        for suffix, name in (('qaone', 'MsgAT QA One'), ('qatwo', 'MsgAT QA Two')):
+            prepare_macos_app(source, stage / (name + '.app'), 'org.msgat.mac.development.' + suffix, name)
+        run('ditto', '-c', '-k', '--sequesterRsrc', stage, output / 'MsgAT-macOS-development.zip')
 
 
 def macos():
     with tempfile.TemporaryDirectory(prefix='msgat-dmg-') as temporary:
         stage = Path(temporary)
         app = stage / 'MsgAT.app'
-        run('ditto', Path(os.environ['RUNNER_TEMP']) / 'msgat-derived/Build/Products/Release/MsgAT.app', app)
-        resource = app / 'Contents/Resources'
-        for name in ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md'):
-            shutil.copy2(ROOT / name, resource / name)
-        run('lipo', app / 'Contents/MacOS/MsgAT', '-verify_arch', 'arm64')
-        run('codesign', '--force', '--deep', '--sign', '-', '--entitlements', ROOT / 'MsgAT_macOS/Sources/App/MsgAT.entitlements', app)
-        run('codesign', '--verify', '--deep', '--strict', app)
+        prepare_macos_app(Path(os.environ['RUNNER_TEMP']) / 'msgat-derived/Build/Products/Release/MsgAT.app', app)
         (stage / 'Applications').symlink_to('/Applications')
         DIST.mkdir(exist_ok=True)
         dmg = DIST / filename('macos')
@@ -185,6 +243,8 @@ def publish():
 
 
 if __name__ == '__main__':
-    commands = {'preflight': preflight, 'restore-signing': restore_signing, 'android': android,
+    commands = {'preflight': preflight, 'restore-signing': restore_signing,
+                'restore-development-signing': restore_development_signing, 'development-android': development_android,
+                'development-macos': development_macos, 'android': android,
                 'windows': windows, 'macos': macos, 'relay': relay, 'bundle': bundle, 'publish': publish}
     commands[sys.argv[1]]()

@@ -29,11 +29,21 @@ android {
             keyPassword = requireNotNull(System.getenv("ANDROID_KEY_PASSWORD"))
         }
     }
+    val developmentSigning = System.getenv("ANDROID_DEVELOPMENT_KEYSTORE_PATH")?.takeIf { it.isNotBlank() }?.let { path ->
+        signingConfigs.create("cloudDevelopment") {
+            storeFile=file(path)
+            storeType="PKCS12"
+            storePassword=requireNotNull(System.getenv("ANDROID_DEVELOPMENT_STORE_PASSWORD"))
+            keyAlias="msgat-development"
+            keyPassword=storePassword
+        }
+    }
 
     buildTypes {
         debug {
             applicationIdSuffix = ".development"
             versionNameSuffix = "-development"
+            if (developmentSigning!=null) signingConfig=developmentSigning
         }
         release {
             signingConfig = cloudSigning

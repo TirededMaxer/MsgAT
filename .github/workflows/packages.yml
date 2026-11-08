@@ -97,7 +97,7 @@ jobs:
         run: dotnet restore MsgAT.Windows.slnx
       - name: Publish self-contained x64 EXE
         working-directory: MsgAT_Windows
-        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true
+        run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release --no-restore -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$env:RUNNER_TEMP/msgat-windows-release"
       - run: python scripts/ci/packages.py windows
       - uses: actions/upload-artifact@v4
         with:

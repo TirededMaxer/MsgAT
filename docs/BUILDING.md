@@ -12,6 +12,10 @@ V2 客户端先通过 `.github/actions/native-security` 构建共享加密核心
 
 V2 仍在重构中。云端编译和打包成功只证明构建链路；硬件身份保护、聊天及其他交互必须通过实际客户端验收，不可据此宣称重构已完成。
 
+V2 开发分支的 CI 提供 `development-android`、`development-windows`、`development-macos` 和 `development-relay` 附件，保留七天，供实际客户端验收。Android 使用 `org.msgat.development` 独立包名；Windows 使用 development 资料目录；Mac 附件包含独立的 QA One／QA Two 应用。它们不是正式 Release。Windows 发布目录显式指定到 runner 临时目录，避免 MSVC 环境变量改变默认输出路径后漏传 EXE。
+
+Android 开发包使用单独的 Actions Secrets `ANDROID_DEVELOPMENT_KEYSTORE_BASE64`、`ANDROID_DEVELOPMENT_STORE_PASSWORD`，用于跨构建覆盖更新并验证身份连续性。公开证书指纹与别名位于 `scripts/ci/development-signing.json`，私钥不进入源码、日志或附件。当前开发证书 SHA-256 为 `b90eb5dc5b74b8f77d6cefc5896ce82013574c59cd03cc8234ce8102e4695cc1`。Fork／外部 PR 未获得该签名时使用临时 SDK debug 证书，不能作为原开发包的覆盖更新。正式包继续使用下述原发布证书。
+
 ## 生成安装包
 
 进入 [Cloud packages](https://github.com/TirededMaxer/MsgAT/actions/workflows/packages.yml)，点击 **Run workflow**，选择 `main`：

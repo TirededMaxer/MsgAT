@@ -37,7 +37,7 @@ def main():
     if os.name == 'nt' and (args.target is None or args.target == 'x86_64-pc-windows-msvc'):
         # Git Bash supplies an unrelated Unix link.exe ahead of Visual Studio.
         # Select the actual MSVC tools explicitly, including for build scripts.
-        visual_cpp = environment.get('VCToolsInstallDir')
+        visual_cpp = os.environ.get('VCToolsInstallDir')
         if not visual_cpp:
             parser.error('Activate the x64 MSVC developer environment before building the Windows native core')
         compiler_bin = Path(visual_cpp) / 'bin/Hostx64/x64'

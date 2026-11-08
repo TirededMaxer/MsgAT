@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net9.0</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <AssemblyName>MsgAT.Windows.Core</AssemblyName>
     <RootNamespace>MsgAT.Windows.Core</RootNamespace>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

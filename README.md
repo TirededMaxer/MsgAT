@@ -65,7 +65,7 @@ java -jar MsgAT-Console-1.1.jar
 | 路径 | 内容 |
 | --- | --- |
 | `MsgAT/` | Android：Kotlin、Jetpack Compose、Room、SQLCipher |
-| `MsgAT_Windows/` | Windows：C#、.NET 9、WPF、WebView2 |
+| `MsgAT_Windows/` | Windows：C#、.NET 10 LTS、WPF、WebView2 |
 | `MsgAT_macOS/` | macOS：Swift、SwiftUI、原生 WebRTC |
 | `MsgAT_Console/` | 中继：Java 21、Netty、SQLite |
 | `docs/` | 构建、部署和协议说明 |

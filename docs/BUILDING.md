@@ -24,7 +24,7 @@ V2 仍在重构中。云端编译和打包成功只证明构建链路；硬件�
 | 平台 | 云端环境 | 构建结果 |
 | --- | --- | --- |
 | Android | Ubuntu、Java 21、SDK 36 | 使用原发布密钥签名的 APK，校验证书指纹和版本 |
-| Windows | Windows 2025、.NET 9 | x64 自包含单文件 EXE |
+| Windows | Windows 2025、.NET 10 LTS | x64 自包含单文件 EXE |
 | macOS | macOS 26 arm64、Xcode | arm64 App、ad-hoc 签名 DMG，验证签名与磁盘映像 |
 | 服务端 | Ubuntu、Java 21、Maven | 混淆 JAR、server-config.json、启动说明 |
 

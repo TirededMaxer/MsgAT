@@ -87,7 +87,7 @@ def android():
 
 
 def windows():
-    copy(ROOT / 'MsgAT_Windows/src/MsgAT.Windows/bin/Release/net9.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe', filename('windows'))
+    copy(ROOT / 'MsgAT_Windows/src/MsgAT.Windows/bin/Release/net10.0-windows10.0.17763.0/win-x64/publish/MsgAT.exe', filename('windows'))
 
 
 def macos():

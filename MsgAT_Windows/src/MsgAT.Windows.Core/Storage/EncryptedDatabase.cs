@@ -41,6 +41,22 @@ public sealed class EncryptedDatabase : IDisposable
 
     public event EventHandler? Changed;
 
+    // Signal state and application effects must share this exact connection and
+    // transaction. A separate protocol connection could acknowledge half a commit.
+    internal T ProtocolTransaction<T>(Func<VaultTransaction, T> operation, bool notify = false)
+    {
+        T result;
+        lock (_gate)
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            using var transaction = _connection.BeginTransaction();
+            result = operation(new VaultTransaction(_connection, transaction));
+            transaction.Commit();
+        }
+        if (notify) OnChanged();
+        return result;
+    }
+
     public IReadOnlyList<ConversationWithUnread> GetConversations()
     {
         lock (_gate)

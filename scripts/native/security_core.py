@@ -34,6 +34,19 @@ def main():
         parser.error('Invalid Rust target triple')
     environment = dict(os.environ)
     environment['PROTOC'] = str(Path(protoc).resolve())
+    if os.name == 'nt' and (args.target is None or args.target == 'x86_64-pc-windows-msvc'):
+        # Git Bash supplies an unrelated Unix link.exe ahead of Visual Studio.
+        # Select the actual MSVC tools explicitly, including for build scripts.
+        visual_cpp = environment.get('VCToolsInstallDir')
+        if not visual_cpp:
+            parser.error('Activate the x64 MSVC developer environment before building the Windows native core')
+        compiler_bin = Path(visual_cpp) / 'bin/Hostx64/x64'
+        if not all((compiler_bin / name).is_file() for name in ('link.exe', 'cl.exe', 'lib.exe')):
+            parser.error('The activated MSVC environment is missing its x64 build tools')
+        environment['PATH'] = str(compiler_bin) + os.pathsep + environment.get('PATH', '')
+        environment['CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER'] = str(compiler_bin / 'link.exe')
+        environment['CC_x86_64_pc_windows_msvc'] = str(compiler_bin / 'cl.exe')
+        environment['AR_x86_64_pc_windows_msvc'] = str(compiler_bin / 'lib.exe')
     android_targets = {
         'aarch64-linux-android': ('arm64-v8a', 'aarch64-linux-android'),
         'armv7-linux-androideabi': ('armeabi-v7a', 'armv7a-linux-androideabi'),

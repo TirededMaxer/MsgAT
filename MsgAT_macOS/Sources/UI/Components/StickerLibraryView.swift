@@ -285,8 +285,18 @@ struct StickerLibraryView: View {
     }
 
     var body: some View {
+        lifecyclePanel
+            .alert(interfaceText("sticker_rename"), isPresented: $rename) { renameActions }
+            .alert(interfaceText("sticker_delete_group_confirm"), isPresented: $deletePack) { deletePackActions }
+                message: { Text(interfaceText("sticker_other_groups_kept")) }
+            .alert(removalTitle, isPresented: removalPresented, presenting: removal) { item in
+                removalActions(item)
+            } message: { _ in EmptyView() }
+    }
+
+    private var panel: some View {
         let colors = MsgATTheme.messagingColors(for: colorScheme)
-        VStack(spacing: 0) {
+        return VStack(spacing: 0) {
             header
             Rectangle().fill(colors.divider).frame(height: 1).accessibilityHidden(true)
             if model.busy && (!model.sending || preparations.isEmpty) {
@@ -306,6 +316,10 @@ struct StickerLibraryView: View {
         .frame(minWidth: compact ? 0 : 520, idealWidth: compact ? 360 : 590,
                maxWidth: compact ? .infinity : 700, minHeight: compact ? 0 : 380,
                idealHeight: compact ? 388 : 490, maxHeight: compact ? .infinity : 660)
+    }
+
+    private var lifecyclePanel: some View {
+        panel
         .task {
             model.load()
             if compact {
@@ -335,39 +349,47 @@ struct StickerLibraryView: View {
             else if searchOpen { searchOpen = false; model.search = "" }
             else { close() }
         }
-        .alert(interfaceText("sticker_rename"), isPresented: $rename) {
-            TextField(interfaceText("sticker_group_name"), text: $model.name)
-            Button(interfaceText("save")) {
-                guard let id = model.filter.pack, model.validName else {
-                    model.error = interfaceText("sticker_group_name_limit")
-                    return
-                }
-                model.mutate { StickerLibraryStore.shared.renamePack(id, name: model.name, completion: $0) }
+    }
+
+    @ViewBuilder private var renameActions: some View {
+        TextField(interfaceText("sticker_group_name"), text: $model.name)
+        Button(interfaceText("save")) {
+            guard let id = model.filter.pack, model.validName else {
+                model.error = interfaceText("sticker_group_name_limit")
+                return
             }
-            Button(interfaceText("cancel"), role: .cancel) {}
+            model.mutate { StickerLibraryStore.shared.renamePack(id, name: model.name, completion: $0) }
         }
-        .alert(interfaceText("sticker_delete_group_confirm"), isPresented: $deletePack) {
-            Button(interfaceText("sticker_delete"), role: .destructive) {
-                if let id = model.filter.pack {
-                    model.mutate { complete in
-                        StickerLibraryStore.shared.deletePack(id, completion: complete)
-                    }
-                    model.filter = StickerFilter()
-                }
+        Button(interfaceText("cancel"), role: .cancel) {}
+    }
+
+    @ViewBuilder private var deletePackActions: some View {
+        Button(interfaceText("sticker_delete"), role: .destructive) {
+            if let id = model.filter.pack {
+                model.mutate { complete in StickerLibraryStore.shared.deletePack(id, completion: complete) }
+                model.filter = StickerFilter()
             }
-            Button(interfaceText("cancel"), role: .cancel) {}
-        } message: { Text(interfaceText("sticker_other_groups_kept")) }
-        .alert(interfaceText(model.filter.pack == nil ? "sticker_delete_item_confirm" : "sticker_remove_from_pack_confirm"),
-               isPresented: Binding(get: { removal != nil }, set: { if !$0 { removal = nil } }), presenting: removal) { item in
-            Button(interfaceText("sticker_remove"), role: .destructive) {
-                model.mutate { complete in
-                    if let id = model.filter.pack { StickerLibraryStore.shared.removeFromPack(id, id: item.id, completion: complete) }
-                    else { StickerLibraryStore.shared.delete(item.id, completion: complete) }
-                }
-                preview = nil
-            }
-            Button(interfaceText("cancel"), role: .cancel) {}
         }
+        Button(interfaceText("cancel"), role: .cancel) {}
+    }
+
+    private var removalTitle: String {
+        interfaceText(model.filter.pack == nil ? "sticker_delete_item_confirm" : "sticker_remove_from_pack_confirm")
+    }
+
+    private var removalPresented: Binding<Bool> {
+        Binding(get: { removal != nil }, set: { if !$0 { removal = nil } })
+    }
+
+    @ViewBuilder private func removalActions(_ item: StickerItem) -> some View {
+        Button(interfaceText("sticker_remove"), role: .destructive) {
+            model.mutate { complete in
+                if let id = model.filter.pack { StickerLibraryStore.shared.removeFromPack(id, id: item.id, completion: complete) }
+                else { StickerLibraryStore.shared.delete(item.id, completion: complete) }
+            }
+            preview = nil
+        }
+        Button(interfaceText("cancel"), role: .cancel) {}
     }
 
     private var header: some View {

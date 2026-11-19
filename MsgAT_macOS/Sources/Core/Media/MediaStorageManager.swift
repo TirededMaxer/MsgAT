@@ -250,7 +250,7 @@ enum PhotoCompression {
         let storage = UnsafeMutableRawPointer.allocate(byteCount: output.length, alignment: MemoryLayout<UInt64>.alignment)
         storage.copyMemory(from: output.bytes, byteCount: output.length)
         return Data(bytesNoCopy: storage, count: output.length, deallocator: .custom { address, count in
-            explicit_bzero(address, count)
+            msgat_zero_bytes(address, count)
             address.deallocate()
         })
     }

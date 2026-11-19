@@ -9,5 +9,6 @@ MsgatPreviewCancel *msgat_preview_cancel_create(void);
 void msgat_preview_cancel(MsgatPreviewCancel *token);
 void msgat_preview_cancel_free(MsgatPreviewCancel *token);
 int msgat_preview_http_fetch(const char *url,const char *resolution,size_t maximum,long timeout_ms,MsgatPreviewCancel *token,MsgatPreviewHTTPResult *output);
+const char *msgat_preview_http_location(const MsgatPreviewHTTPResult *output);
 void msgat_preview_http_free(MsgatPreviewHTTPResult *output);
 #endif

@@ -100,7 +100,10 @@ enum WebPreviewFetcher {
             defer {msgat_preview_http_free(&raw)}
             guard status==0 else {throw URLError(.cannotLoadFromNetwork)}
             let type=withUnsafePointer(to:&raw.content_type){$0.withMemoryRebound(to:CChar.self,capacity:128){String(cString:$0)}}.split(separator:";").first.map(String.init)?.trimmingCharacters(in:.whitespacesAndNewlines).lowercased() ?? ""
-            let location=withUnsafePointer(to:&raw.location){$0.withMemoryRebound(to:CChar.self,capacity:4097){String(cString:$0)}}
+            let location = withUnsafePointer(to: &raw) { result in
+                guard let value = msgat_preview_http_location(result) else { return "" }
+                return String(cString: value)
+            }
             if [301,302,303,307,308].contains(Int(raw.status)) {
                 guard hop<3,!location.isEmpty,let next=URL(string:location,relativeTo:url)?.absoluteURL,url.scheme?.lowercased() != "https" || next.scheme?.lowercased()=="https" else {throw URLError(.redirectToNonExistentLocation)}
                 url=next;continue

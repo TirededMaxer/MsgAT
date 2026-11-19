@@ -24,6 +24,7 @@ static size_t receive_header(char *bytes,size_t size,size_t count,void *context)
     (void)bytes;Transfer *t=context;if(size && count>SIZE_MAX/size)return 0;size_t n=size*count;
     if(n>32768-t->header_bytes)return 0;t->header_bytes+=n;return n;
 }
+const char *msgat_preview_http_location(const MsgatPreviewHTTPResult *out) { return out ? out->location : ""; }
 void msgat_preview_http_free(MsgatPreviewHTTPResult *out){if(!out)return;if(out->body){volatile uint8_t *bytes=out->body;for(size_t i=0;i<out->length;i++)bytes[i]=0;free(out->body);}memset(out,0,sizeof(*out));}
 int msgat_preview_http_fetch(const char *url,const char *resolution,size_t maximum,long timeout_ms,MsgatPreviewCancel *token,MsgatPreviewHTTPResult *out){
     if(!url || !resolution || !out || !token || maximum==0 || maximum>2*1024*1024 || timeout_ms<1 || timeout_ms>12000)return -1;

@@ -10,7 +10,9 @@ private final class RecordingModel:ObservableObject {
     @Published var phase=RecordingPhase.idle
     @Published var microphones=[RecordingDevice]()
     @Published var microphone=""
-    @Published var ready=false,busy=false,closing=false
+    @Published var ready = false
+    @Published var busy = false
+    @Published var closing = false
     @Published var seconds=0.0
     @Published private(set) var levels: [Float] = []
     @Published var error:String?
@@ -74,7 +76,7 @@ private final class RecordingModel:ObservableObject {
         guard ready,!busy,!closing,CallManager.shared.callState == .idle || CallManager.shared.callState == .ended else{return}
         busy=true;starting=true
         do{try await worker.start();if !closing {phase = .recording;ready=false}}
-        catch{error="Recording could not start.";try? await worker.close();phase = .closed}
+        catch{self.error="Recording could not start.";try? await worker.close();phase = .closed}
         starting=false;busy=false
         if finishAfterOperation { await finish() }
     }
@@ -126,7 +128,7 @@ private final class RecordingModel:ObservableObject {
             ready = false
             error = nil
         } catch {
-            error = "Recording resources have not finished closing"
+            self.error = "Recording resources have not finished closing"
         }
         busy = false
         if phase == .idle { await prepare() }

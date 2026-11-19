@@ -2042,7 +2042,7 @@ public struct ChatView: View {
         let title = interfaceText(titleKey)
         let focused = attachmentActionFocus == index
         let highlighted = focused || hoveredAttachmentAction == index
-        Button { if showAttachmentMenu { action() } } label: {
+        return Button { if showAttachmentMenu { action() } } label: {
             HStack(spacing: 10) {
                 Image(systemName: icon).font(.system(size: 16)).foregroundStyle(.secondary).frame(width: 20)
                 Text(title).font(.body).lineLimit(1).frame(maxWidth: .infinity, alignment: .leading)

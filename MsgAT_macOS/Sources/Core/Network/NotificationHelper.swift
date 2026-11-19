@@ -47,7 +47,7 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
             content.sound = silent || !notice.playSound ? nil : .default
             content.userInfo = ["target": notice.token]
             if let replaced = notice.replacedToken { dismissMessageNotifications(tokens: [replaced]) }
-            center.add(UNNotificationRequest(identifier: "msg_\(notice.token)", content: content, trigger: nil))
+            try? await center.add(UNNotificationRequest(identifier: "msg_\(notice.token)", content: content, trigger: nil))
         }
     }
 

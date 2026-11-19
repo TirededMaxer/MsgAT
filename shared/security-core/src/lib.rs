@@ -224,3 +224,12 @@ pub unsafe extern "C" fn msgat_buffer_free(buffer: *mut MsgatBuffer) {
     let mut bytes = unsafe { Box::from_raw(ptr::slice_from_raw_parts_mut(value.data, value.length)) };
     bytes.zeroize();
 }
+
+/// # Safety
+/// data must point to length writable bytes with exclusive access.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn msgat_zero_bytes(data: *mut std::ffi::c_void, length: usize) {
+    if data.is_null() || length == 0 { return; }
+    let bytes = unsafe { std::slice::from_raw_parts_mut(data.cast::<u8>(), length) };
+    bytes.zeroize();
+}

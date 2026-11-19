@@ -135,7 +135,7 @@ private final class CallFrameRenderer: NSObject, RTCVideoRenderer, @unchecked Se
         return Self.imageContext.createCGImage(image, from: image.extent)
     }
 
-    private func makePixelBuffer(_ frame: RTCI420Buffer, width: Int, height: Int) -> CVPixelBuffer? {
+    private func makePixelBuffer(_ frame: any RTCI420BufferProtocol, width: Int, height: Int) -> CVPixelBuffer? {
         let evenWidth = (width + 1) & ~1, evenHeight = (height + 1) & ~1
         var buffer: CVPixelBuffer?
         guard CVPixelBufferCreate(kCFAllocatorDefault, evenWidth, evenHeight, kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,

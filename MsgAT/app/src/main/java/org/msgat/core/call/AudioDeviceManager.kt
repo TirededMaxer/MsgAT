@@ -274,7 +274,7 @@ class AudioDeviceManager private constructor(context: Context) {
         type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES || type == AudioDeviceInfo.TYPE_USB_HEADSET
 
     companion object {
-        private val instance by lazy { AudioDeviceManager(MsgATApp.instance.applicationContext) }
-        fun getInstance() = instance
+        private val singleton by lazy { AudioDeviceManager(MsgATApp.instance.applicationContext) }
+        fun getInstance() = singleton
     }
 }

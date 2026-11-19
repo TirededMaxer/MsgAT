@@ -30,7 +30,6 @@ public partial class CallOverlay : UserControl, IDisposable
         video.Width = video.Height = double.NaN;
         video.HorizontalAlignment = HorizontalAlignment.Stretch;
         video.VerticalAlignment = VerticalAlignment.Stretch;
-        video.Opacity = 1;
         VideoHost.Children.Add(video);
         _calls.PropertyChanged += Calls_PropertyChanged;
         Loaded += (_, _) => FocusCallControls();

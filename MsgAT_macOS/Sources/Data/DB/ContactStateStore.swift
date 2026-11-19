@@ -8,7 +8,11 @@ enum ContactStateStore {
         if let text=try db.query("SELECT state_json FROM contact_links WHERE uuid=?",values:[.text(peer)],map:{String(cString:sqlite3_column_text($0,0))}).first {
             guard let decoded=try JSONSerialization.jsonObject(with:Data(text.utf8)) as? [String:Any] else {throw SecurityCore.Failure.invalidResponse};state=decoded
         }
-        if let flags=try db.query("SELECT outgoing,incoming,accepted,blocked FROM contact_states WHERE uuid=?",values:[.text(peer)],map:{r in (0..<4).map{sqlite3_column_int(r,Int32($0)) != 0}}).first {
+        let rows: [[Bool]] = try db.query("SELECT outgoing,incoming,accepted,blocked FROM contact_states WHERE uuid=?",
+                                         values: [.text(peer)]) { row in
+            (0..<4).map { sqlite3_column_int(row, Int32($0)) != 0 }
+        }
+        if let flags = rows.first {
             if state["accepted"] as? Bool == true,!flags[2] {state["accepted_ids"]=[String]()}
             for (index,key) in ["outgoing","incoming","accepted","blocked"].enumerated(){state[key]=flags[index]}
         }

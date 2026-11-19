@@ -20,6 +20,7 @@ typedef struct {
 uint32_t msgat_security_abi_version(void);
 int32_t msgat_security_call(const uint8_t *request, size_t length, MsgatBuffer *response);
 void msgat_buffer_free(MsgatBuffer *buffer);
+void msgat_zero_bytes(void *data, size_t length);
 
 #ifdef __cplusplus
 }

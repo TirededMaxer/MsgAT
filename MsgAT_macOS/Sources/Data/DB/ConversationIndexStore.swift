@@ -125,7 +125,10 @@ enum ConversationIndexStore {
         guard let id=UUID(uuidString:folder.id)?.uuidString.lowercased() else{throw MsgATDatabaseError(operation:"Conversations",detail:"The conversation or folder is unavailable or invalid.")}
         let name=folder.name.trimmingCharacters(in:.whitespacesAndNewlines);guard !name.isEmpty,!name.contains("\0"),name.utf8.count<=128,peers.count<=10000 else{throw MsgATDatabaseError(operation:"Conversations",detail:"The conversation or folder is unavailable or invalid.")}
         let exists=try !db.query("SELECT 1 FROM conversation_folders WHERE id=?",values:[.text(id)],map:{_ in true}).isEmpty
-        guard exists || (try db.query("SELECT COUNT(*) FROM conversation_folders",map:{sqlite3_column_int64($0,0)}).first ?? 0)<20 else{throw MsgATDatabaseError(operation:"Conversations",detail:"The conversation or folder is unavailable or invalid.")}
+        if !exists {
+            let count = try db.query("SELECT COUNT(*) FROM conversation_folders", map: { sqlite3_column_int64($0, 0) }).first ?? 0
+            guard count < 20 else { throw MsgATDatabaseError(operation:"Conversations",detail:"The conversation or folder is unavailable or invalid.") }
+        }
         try db.execute("INSERT INTO conversation_folders(id,name,sort_order,include_all,unread_only,exclude_muted,include_archived) VALUES(?,?,(SELECT COALESCE(MAX(sort_order),0)+1 FROM conversation_folders),?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,include_all=excluded.include_all,unread_only=excluded.unread_only,exclude_muted=excluded.exclude_muted,include_archived=excluded.include_archived",values:[.text(id),.text(name),.integer(folder.includeAll ? 1:0),.integer(folder.unreadOnly ? 1:0),.integer(folder.excludeMuted ? 1:0),.integer(folder.includeArchived ? 1:0)])
         try db.execute("DELETE FROM conversation_folder_members WHERE folder_id=?",values:[.text(id)])
         for peer in Set(peers){try db.execute("INSERT INTO conversation_folder_members(folder_id,peer) VALUES(?,?)",values:[.text(id),.text(peer)])}

@@ -1801,9 +1801,10 @@
                 </StackPanel>
             </Border>
         </Grid>
-            <wv2:WebView2CompositionControl x:Name="WebRtcView" Width="1" Height="1" Opacity="0"
-                          HorizontalAlignment="Left" VerticalAlignment="Top"
-                          IsHitTestVisible="False" Focusable="False" />
+        <Grid Width="1" Height="1" Opacity="0" HorizontalAlignment="Left" VerticalAlignment="Top"
+              IsHitTestVisible="False">
+            <wv2:WebView2CompositionControl x:Name="WebRtcView" IsHitTestVisible="False" Focusable="False" />
+        </Grid>
         <ContentControl x:Name="MediaOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
         <ContentControl x:Name="CallOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
     </Grid>

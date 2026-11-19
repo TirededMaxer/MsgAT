@@ -76,7 +76,7 @@ private final class CurrentPositionLookup: NSObject, ObservableObject, CLLocatio
     private func authorize(_ active: CLLocationManager) {
         guard active === manager else { return }
         switch active.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse:
+        case .authorizedAlways:
             guard !requested else { return }
             requested = true
             active.requestLocation()

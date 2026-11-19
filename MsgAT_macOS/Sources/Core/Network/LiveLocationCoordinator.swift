@@ -91,7 +91,7 @@ final class LiveLocationCoordinator: NSObject, ObservableObject, CLLocationManag
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         guard manager === self.manager else { return }
         switch manager.authorizationStatus {
-        case .authorizedAlways, .authorizedWhenInUse: break
+        case .authorizedAlways: break
         case .notDetermined: break
         default: locationAccessEnded()
         }
@@ -150,7 +150,7 @@ final class LiveLocationCoordinator: NSObject, ObservableObject, CLLocationManag
         }
         guard manager == nil else { return }
         let source = CLLocationManager()
-        guard source.authorizationStatus == .authorizedAlways || source.authorizationStatus == .authorizedWhenInUse else {
+        guard source.authorizationStatus == .authorizedAlways else {
             locationAccessEnded()
             return
         }

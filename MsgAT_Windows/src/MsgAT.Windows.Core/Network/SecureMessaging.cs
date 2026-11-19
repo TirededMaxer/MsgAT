@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+#pragma warning disable CA1068 // Preserve existing positional cancellation arguments across appended send options.
 using MsgAT.Windows.Core.Calls;
 using System.Security.Cryptography;
 using System.Text;
@@ -329,7 +330,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
         using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(token, preparation?.Cancellation ?? CancellationToken.None);
         var progress = preparation is null ? null : new EncoderProgress(preparation, preparation.SetStep(PreparationStep.EncodingVideo));
         var encoded = await encoder(_objects.Captures, path, trim, compress, progress, lifetime.Token).ConfigureAwait(false);
-        JsonObject? manifest = null;
+        JsonObject manifest;
         try
         {
             lifetime.Token.ThrowIfCancellationRequested();
@@ -338,20 +339,22 @@ internal sealed class SecureMessaging : IAsyncDisposable
             manifest = encoded is null
                 ? await _objects.ImportAsync(path, mime, lifetime.Token, preparation).ConfigureAwait(false)
                 : await _objects.ImportRecordingAsync(encoded, lifetime.Token, preparation, asFile).ConfigureAwait(false);
-            return manifest;
         }
-        finally
+        catch
         {
             if (encoded is not null)
             {
                 try { await encoded.DisposeAsync().ConfigureAwait(false); }
-                catch
-                {
-                    if (manifest is not null) _objects.DiscardCopy(manifest);
-                    throw;
-                }
+                catch (Exception error) { System.Diagnostics.Trace.TraceWarning("Video preparation cleanup failed ({0}).", error.GetType().Name); }
             }
+            throw;
         }
+        if (encoded is not null)
+        {
+            try { await encoded.DisposeAsync().ConfigureAwait(false); }
+            catch { _objects.DiscardCopy(manifest); throw; }
+        }
+        return manifest;
     }
 
     private sealed class EncoderProgress(ObjectPreparation preparation, long version) : IProgress<double>
@@ -1170,7 +1173,7 @@ internal sealed class SecureMessaging : IAsyncDisposable
         finally {if(!committed && avatar is not null)_objects.DiscardCopy(avatar);}
     }
 
-    private Task<bool> UserAsync(Action operation,CancellationToken token) => Submit(async _ =>
+    private Task<bool> UserAsync(Action operation,CancellationToken token=default) => Submit(async _ =>
     {
         operation();NotifySendQueueChanged(); // A thrown business/crypto error rolls its transaction back.
         try { await FlushAsync(_lifetime.Token).ConfigureAwait(false); }

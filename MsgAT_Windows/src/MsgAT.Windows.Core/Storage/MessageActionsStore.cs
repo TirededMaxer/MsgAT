@@ -4,6 +4,7 @@ using System.Text.Json.Nodes;
 using MsgAT.Windows.Core.Crypto;
 using MsgAT.Windows.Core.Network;
 
+#pragma warning disable CA1068 // Keep the existing cancellation parameter positions for the saved-message API.
 namespace MsgAT.Windows.Core.Storage;
 
 public sealed record SavedMessageItem(string Id,string SourcePeer,string SourceId,string Kind,string Text,string? Reference,long SavedAt,string Author,long OriginalAt,string? ContactAccount=null);
@@ -305,7 +306,7 @@ public sealed class MessageActionsStore(EncryptedDatabase database,SecureSetting
         return Task.FromResult<IReadOnlyList<SavedMessageItem>>(matches);
     }, token);
 
-    private IReadOnlyList<(SavedMessageItem Item, string? Filename)> SavedPage(MessageSearchCursor? before, string? peer, int limit)
+    private List<(SavedMessageItem Item, string? Filename)> SavedPage(MessageSearchCursor? before, string? peer, int limit)
     {
         var args = new List<object?>();
         var predicates = new List<string>();
@@ -358,9 +359,9 @@ public sealed class MessageActionsStore(EncryptedDatabase database,SecureSetting
         return Owned(ct=>{ct.ThrowIfCancellationRequested();DeleteCore(snapshot);return Task.FromResult(true);},token);
     }
 
-    private void DeleteCore(IReadOnlyList<string> ids)
+    private void DeleteCore(string[] ids)
     {
-        if(ids.Count is <1 or >100)throw new ArgumentException("Select between 1 and 100 saved messages.",nameof(ids));
+        if(ids.Length is <1 or >100)throw new ArgumentException("Select between 1 and 100 saved messages.",nameof(ids));
         database.ProtocolTransaction(db=>
         {
             foreach(var id in ids)db.Execute("DELETE FROM saved_messages WHERE id=$p0",id);

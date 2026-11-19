@@ -26,6 +26,7 @@ public sealed class AttachmentCacheChangedEventArgs(string? messageId = null) : 
 
 public sealed class EncryptedDatabase : IDisposable
 {
+    private static readonly string[] RecoveryFileSuffixes = ["-wal", "-shm", "-journal"];
     private readonly object _gate = new();
     private readonly string _databasePath;
     private readonly string _password;
@@ -58,7 +59,7 @@ public sealed class EncryptedDatabase : IDisposable
         SqliteConnection? opened=null;
         try
         {
-            if (!File.Exists(databasePath) && new[] {"-wal","-shm","-journal"}.Any(suffix=>File.Exists(databasePath+suffix)))
+            if (!File.Exists(databasePath) && RecoveryFileSuffixes.Any(suffix=>File.Exists(databasePath+suffix)))
                 throw new InvalidDataException("The encrypted vault file is missing. Recovery files were preserved.");
             if(IsPlaintextSqlite(databasePath))throw new InvalidDataException("Refusing an unauthenticated plaintext database in the encrypted V2 vault location.");
             opened=OpenEncrypted(databasePath,_password);_connection=opened;

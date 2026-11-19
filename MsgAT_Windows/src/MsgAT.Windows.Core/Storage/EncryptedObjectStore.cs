@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using MsgAT.Windows.Core.Crypto;
 
+#pragma warning disable CA1068 // Preserve the existing positional cancellation arguments in object imports.
 namespace MsgAT.Windows.Core.Storage;
 
 public sealed record AlbumPosition(string Id, int Index, int Count);

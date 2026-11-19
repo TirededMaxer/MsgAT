@@ -5,6 +5,7 @@ using MsgAT.Windows.Core.Models;
 using MsgAT.Windows.Core.Protocol;
 using MsgAT.Windows.Core.Storage;
 
+#pragma warning disable CA1068 // Preserve existing positional cancellation arguments across appended send options.
 namespace MsgAT.Windows.Core.Network;
 
 public sealed class MessagingService : IAsyncDisposable

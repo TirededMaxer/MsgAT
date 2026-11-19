@@ -23,6 +23,9 @@ internal sealed class SignalProtocolStore
     private static readonly JsonWriterOptions JsonOptions = new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
     private static readonly (string Field, string Kind)[] KeyKinds =
         [("prekeys", "ec"), ("signed_prekeys", "signed"), ("pq_prekeys", "pq")];
+    private static readonly string[] PreviewToggleColumns = ["above_text", "compact_image"];
+    private static readonly string[] EnabledNotificationColumns = ["message_alerts_enabled", "message_alert_sound"];
+    private static readonly string[] DisabledPrivacyColumns = ["share_online", "share_typing", "app_lock_enabled"];
 
     private static readonly string[] Schema =
     [
@@ -186,14 +189,14 @@ internal sealed class SignalProtocolStore
             if (!db.Query("PRAGMA table_info(conversation_drafts)", row => row.GetString(1)).Contains("reply_quote", StringComparer.Ordinal))
                 db.Execute("ALTER TABLE conversation_drafts ADD COLUMN reply_quote TEXT");
             var previewColumns = db.Query("PRAGMA table_info(message_previews)", row => row.GetString(1)).ToHashSet(StringComparer.Ordinal);
-            foreach (var column in new[] { "above_text", "compact_image" })
+            foreach (var column in PreviewToggleColumns)
                 if (!previewColumns.Contains(column))
                     db.Execute($"ALTER TABLE message_previews ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column} IN (0,1))");
             db.Execute("UPDATE protocol_pending_events SET held=1 WHERE held=0 AND EXISTS(SELECT 1 FROM scheduled_sends s WHERE s.event_id=protocol_pending_events.event_id)");
             var privacyColumns=db.Query("PRAGMA table_info(privacy_preferences)",r=>r.GetString(1)).ToHashSet(StringComparer.Ordinal);
-            foreach (var column in new[] { "message_alerts_enabled", "message_alert_sound" })
+            foreach (var column in EnabledNotificationColumns)
                 if (!privacyColumns.Contains(column)) db.Execute($"ALTER TABLE privacy_preferences ADD COLUMN {column} INTEGER NOT NULL DEFAULT 1 CHECK({column} IN (0,1))");
-            foreach(var column in new[]{"share_online","share_typing","app_lock_enabled"})if(!privacyColumns.Contains(column))db.Execute($"ALTER TABLE privacy_preferences ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column} IN (0,1))");
+            foreach(var column in DisabledPrivacyColumns)if(!privacyColumns.Contains(column))db.Execute($"ALTER TABLE privacy_preferences ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0 CHECK({column} IN (0,1))");
             if (!privacyColumns.Contains("auto_download_attachments"))
                 db.Execute("ALTER TABLE privacy_preferences ADD COLUMN auto_download_attachments INTEGER NOT NULL DEFAULT 1 CHECK(auto_download_attachments IN (0,1))");
             if (!privacyColumns.Contains("auto_download_limit_bytes"))

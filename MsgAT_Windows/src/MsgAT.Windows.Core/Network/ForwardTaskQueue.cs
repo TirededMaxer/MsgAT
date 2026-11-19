@@ -14,7 +14,9 @@ public sealed record ForwardTaskInfo(string Id,long CreatedAt,string State,int M
 internal sealed record ForwardQueueRequest(string? SourcePeer,string[] Ids,string[] Recipients,bool HideSender,bool HideCaption,string[] Fingerprints,int Version,long? SendAt=null,bool Silent=false,bool OmitPreview=false);
 
 /// <summary>One durable batch is atomically replaced by its ordinary message/outbox records.</summary>
+#pragma warning disable CA1711 // This type owns and drains the durable forwarding queue.
 public sealed class ForwardTaskQueue : IAsyncDisposable
+#pragma warning restore CA1711
 {
     private sealed record Job(string Id,string Payload,long CreatedAt);
     private static readonly JsonSerializerOptions EncodingOptions=new() {PropertyNamingPolicy=JsonNamingPolicy.SnakeCaseLower};
@@ -116,8 +118,9 @@ public sealed class ForwardTaskQueue : IAsyncDisposable
                 r.IsDBNull(4) ? null : r.GetString(4), pending?.Count ?? 0, request?.SourcePeer,
                 pending?.FirstMessageId, new SendOptions(request?.SendAt, request?.Silent == true));
         })),token);
-    public Task<bool> CancelAsync(string id,CancellationToken token=default)=>Owned(_=>
+    public Task<bool> CancelAsync(string id,CancellationToken token=default)=>Owned(operationToken=>
     {
+        operationToken.ThrowIfCancellationRequested();
         var removed=_store.Transaction(db=>db.Execute("DELETE FROM forward_jobs WHERE id=$p0",id)>0,notify:true);
         if (removed) _pendingMediaMessages.TryRemove(id, out _);
         if(removed)lock(_gate){if(_activeId==id)_activeStop?.Cancel();}
@@ -271,7 +274,7 @@ public sealed class ForwardTaskQueue : IAsyncDisposable
     {
         try
         {
-            await foreach(var _ in _wake.Reader.ReadAllAsync(_lifetime.Token).ConfigureAwait(false))
+            await foreach(var signal in _wake.Reader.ReadAllAsync(_lifetime.Token).ConfigureAwait(false))
             {
                 try
                 {

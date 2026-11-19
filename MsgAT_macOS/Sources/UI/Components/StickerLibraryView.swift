@@ -353,14 +353,17 @@ struct StickerLibraryView: View {
 
     @ViewBuilder private var renameActions: some View {
         TextField(interfaceText("sticker_group_name"), text: $model.name)
-        Button(interfaceText("save")) {
-            guard let id = model.filter.pack, model.validName else {
-                model.error = interfaceText("sticker_group_name_limit")
-                return
-            }
-            model.mutate { StickerLibraryStore.shared.renamePack(id, name: model.name, completion: $0) }
-        }
+        Button(action: savePackName) { Text(interfaceText("save")) }
         Button(interfaceText("cancel"), role: .cancel) {}
+    }
+
+    private func savePackName() {
+        guard let id = model.filter.pack, model.validName else {
+            model.error = interfaceText("sticker_group_name_limit")
+            return
+        }
+        let name = model.name
+        model.mutate { completion in StickerLibraryStore.shared.renamePack(id, name: name, completion: completion) }
     }
 
     @ViewBuilder private var deletePackActions: some View {

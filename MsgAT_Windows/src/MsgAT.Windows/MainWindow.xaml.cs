@@ -4108,8 +4108,8 @@ public partial class MainWindow : Window
         if (ChatPane.ActualHeight <= 0) return;
         const double timelineReserve = 160;
         const double editorVerticalMargin = 18;
-        var header = ChatPane.RowDefinitions[0].ActualHeight + ChatPane.RowDefinitions[1].ActualHeight;
-        var accessories = ComposerLayout.RowDefinitions[0].ActualHeight + ComposerLayout.RowDefinitions[2].ActualHeight;
+        var header = ChatHeaderRow.ActualHeight + PinnedBannerRow.ActualHeight;
+        var accessories = ComposerAccessoriesRow.ActualHeight;
         var limit = Math.Clamp(ChatPane.ActualHeight - header - accessories - timelineReserve - editorVerticalMargin, 36, 224);
         if (Math.Abs(Composer.MaxHeight - limit) < 0.5) return;
         Composer.MaxHeight = limit;

@@ -637,8 +637,8 @@
                 </Style>
             </Grid.Style>
             <Grid.RowDefinitions>
-                <RowDefinition Height="48" />
-                <RowDefinition Height="Auto" />
+                <RowDefinition x:Name="ChatHeaderRow" Height="48" />
+                <RowDefinition x:Name="PinnedBannerRow" Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
@@ -1385,7 +1385,7 @@
                     BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,1,0,0" Padding="0">
                 <Grid x:Name="ComposerLayout">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
+                        <RowDefinition x:Name="ComposerAccessoriesRow" Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
                     <Grid.ColumnDefinitions>

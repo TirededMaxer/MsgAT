@@ -29,7 +29,7 @@ public sealed class ConversationIndexStore(EncryptedDatabase database):IAsyncDis
     private Task<T> Owned<T>(Func<VaultTransaction,T> action,bool notify=true){lock(_gate){ObjectDisposedException.ThrowIf(_closed,this);var task=Task.Run(()=>database.ProtocolTransaction(db=>{_lifetime.Token.ThrowIfCancellationRequested();return action(db);},notify:notify));_tasks.Add(task);return Observe(task);}}
     private async Task<T> Observe<T>(Task<T> task){try{return await task.ConfigureAwait(false);}finally{lock(_gate)_tasks.Remove(task);}}
     public async ValueTask DisposeAsync(){Task[] jobs;lock(_gate){if(_closed)return;_closed=true;jobs=_tasks.ToArray();}_lifetime.Cancel();try{await Task.WhenAll(jobs).ConfigureAwait(false);}catch{/* Original callers observe operation errors; teardown still drains every owner. */}finally{_lifetime.Dispose();}}
-    public static bool IsMuted(VaultTransaction db,string peer,long now)=>db.Exists("SELECT 1 FROM conversation_preferences WHERE peer=$p0 AND mute_until>$p1",peer,now);
+    internal static bool IsMuted(VaultTransaction db,string peer,long now)=>db.Exists("SELECT 1 FROM conversation_preferences WHERE peer=$p0 AND mute_until>$p1",peer,now);
     public Task<bool> SetArchivedAsync(string peer, bool expected, bool archived) => Owned(db =>
     {
         db.Execute("INSERT OR IGNORE INTO conversation_preferences(peer) SELECT uuid FROM conversations WHERE uuid=$p0", peer);

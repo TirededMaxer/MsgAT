@@ -34,7 +34,7 @@ class ConversationIndexStore(
     private val gate=Any();private var closed=false
     private val scope=CoroutineScope(SupervisorJob()+Dispatchers.IO)
     private suspend fun <T> owned(block:(SupportSQLiteDatabase)->T):T {
-        val job=synchronized(gate){check(!closed){"Conversation settings are closed"};scope.async{database.withTransaction{block(database.openHelper.writableDatabase)}.also{database.invalidationTracker.refreshAsync()}}}
+        val job=synchronized(gate){check(!closed){"Conversation settings are closed"};scope.async{database.withTransaction{block(database.openHelper.writableDatabase)}.also{database.invalidationTracker.refreshVersionsAsync()}}}
         return withContext(NonCancellable){job.await()}
     }
     suspend fun close(){synchronized(gate){closed=true};scope.coroutineContext[Job]?.cancelAndJoin()}

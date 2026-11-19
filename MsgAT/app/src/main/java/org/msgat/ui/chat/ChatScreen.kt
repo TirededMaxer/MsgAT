@@ -45,6 +45,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Call
@@ -1587,6 +1588,17 @@ internal fun ChatScreen(
             editingMsg = target
         }
     }
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    var isResumed by remember(lifecycleOwner) {
+        mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED))
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, _ ->
+            isResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     val sendPendingNow by rememberUpdatedState(textSendPending)
     val historyAccessNow by rememberUpdatedState(isChatVisible && !attachmentCovering && !stickersCovering &&
         timelineDatePicker == null && !showSendMenu && quoteTarget == null)
@@ -1722,15 +1734,6 @@ internal fun ChatScreen(
         val observer=android.view.ViewTreeObserver.OnWindowFocusChangeListener{hasWindowFocus=it}
         hostView.viewTreeObserver.addOnWindowFocusChangeListener(observer)
         onDispose {if(hostView.viewTreeObserver.isAlive)hostView.viewTreeObserver.removeOnWindowFocusChangeListener(observer)}
-    }
-    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
-    var isResumed by remember { mutableStateOf(lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)) }
-    DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, _ ->
-            isResumed = lifecycleOwner.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.RESUMED)
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
     val chatActivity by rememberUpdatedState(onChatActivity)
     var previousActivityText by remember(peerUuid){mutableStateOf(inputText)}

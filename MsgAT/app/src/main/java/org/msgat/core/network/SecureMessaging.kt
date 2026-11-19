@@ -25,6 +25,7 @@ import org.msgat.data.db.ConversationDraftStore
 import org.msgat.data.db.DraftSendCommit
 import org.msgat.data.db.LiveLocationSnapshot
 import org.msgat.data.db.LiveLocationStore
+import org.msgat.data.db.MessageActionsStore
 import org.msgat.data.db.MessageExpirationStore
 import org.msgat.data.db.MessageRetentionSettings
 import org.msgat.data.db.WebPreviewStore
@@ -1672,7 +1673,7 @@ class SecureMessaging internal constructor(
             else -> error("Invalid receipt state")
         }
         acknowledgeActivity(db, peer, id)
-        val target = arrayOf(id, peer)
+        val target = arrayOf<Any?>(id, peer)
         if (!exists(db, "SELECT 1 FROM messages WHERE messageId=? AND conversationUuid=? AND isMine=1", target))
             return false
         db.execSQL("UPDATE protocol_outbox SET delivered=1 WHERE event_id=? AND recipient=? AND delivered>=0", target)

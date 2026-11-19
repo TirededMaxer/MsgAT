@@ -535,7 +535,7 @@ class SignalProtocolStore(private val database: AppDatabase, private val prefs: 
     }
     suspend fun finishKeyRequest(recipient: String, id: String) = transaction { db -> db.execSQL("DELETE FROM protocol_key_requests WHERE recipient=? AND request_id=?",arrayOf(recipient,id)) }
 
-    suspend fun <T> transaction(block: (SupportSQLiteDatabase) -> T): T = database.withTransaction { block(database.openHelper.writableDatabase) }.also{database.invalidationTracker.refreshAsync()}
+    suspend fun <T> transaction(block: (SupportSQLiteDatabase) -> T): T = database.withTransaction { block(database.openHelper.writableDatabase) }.also{database.invalidationTracker.refreshVersionsAsync()}
     private fun local(db: SupportSQLiteDatabase): Pair<JSONObject,JSONObject>? = db.query("SELECT identity_json,bundle_json FROM protocol_local WHERE id=1").use { if (it.moveToFirst()) JSONObject(it.getString(0)) to JSONObject(it.getString(1)) else null }
     private fun requiredLocal(db: SupportSQLiteDatabase): JSONObject = local(db)?.first?.also { check(it.getString("uuid")==prefs.myUuid) { "Vault identity mismatch" } } ?: error("Protocol identity is not initialized")
     private fun peer(db: SupportSQLiteDatabase, uuid: String): JSONObject? = db.query(SimpleSQLiteQuery("SELECT state_json FROM protocol_peers WHERE uuid=?",arrayOf(uuid))).use { if (it.moveToFirst()) JSONObject(it.getString(0)) else null }

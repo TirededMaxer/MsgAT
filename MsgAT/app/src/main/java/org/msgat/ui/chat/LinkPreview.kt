@@ -269,7 +269,7 @@ private fun LinkPreviewCard(id: String, row: WebPreviewSnapshot, canOpen: Boolea
         }
         val replacingCache = coverReadFailed && media?.available == true
         if (canOpen && downloadPeer != null && reference != null &&
-            (replacingCache || media?.available == false && media.hasPendingDownload)) {
+            (replacingCache || media?.let { !it.available && it.hasPendingDownload } == true)) {
             val paused = media?.downloadIntent == AttachmentDownloadIntent.PAUSED
             val needsRetry = !paused && (replacingCache || media?.remoteUnavailable == true || transfer?.phase == AttachmentPhase.RETRY)
             val isQueued = !paused && !needsRetry && media?.downloadIntent == AttachmentDownloadIntent.REQUESTED

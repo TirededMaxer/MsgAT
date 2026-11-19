@@ -209,14 +209,13 @@ internal fun VideoTrimDialog(
                     }
                     FlowRow(
                         Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        FilterChip(selected = muteAudio, onClick = {
+                        FilterChip(modifier = Modifier.align(Alignment.CenterVertically), selected = muteAudio, onClick = {
                             muteAudio = !muteAudio
                             player.volume = if (muteAudio) 0f else 1f
                         }, label = { Text(uiString(R.string.ui_remove_audio)) })
-                        TextButton(onClick = {
+                        TextButton(modifier = Modifier.align(Alignment.CenterVertically), onClick = {
                             if (playing) player.pause()
                             else if (clippedPreview && player.playbackState != Player.STATE_ENDED && player.playerError == null) {
                                 player.play()

@@ -94,7 +94,7 @@ internal fun ZoomablePhoto(
     onZoomChanged: (Boolean) -> Unit,
     presentation: MediaPhotoPresentation? = null,
     onTap: (() -> Unit)? = null,
-    image: @Composable (Modifier, (IntSize) -> Unit, ((Bitmap) -> Unit)?) -> Unit
+    image: @Composable (Modifier, (IntSize) -> Unit, ((Bitmap?) -> Unit)?) -> Unit
 ) {
     var transform by remember(identity) { mutableStateOf(ImageTransform()) }
     var imageSize by remember(identity) { mutableStateOf(IntSize.Zero) }

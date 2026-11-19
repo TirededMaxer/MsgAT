@@ -51,5 +51,4 @@ struct ContactCodeImage:View {
             }
         }
     }
-    }
 }

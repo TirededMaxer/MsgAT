@@ -572,12 +572,13 @@ class MainActivity : ComponentActivity() {
                     return true
                 }
 
+                val sessionListViewModel: SessionListViewModel = viewModel(factory = viewModelFactory)
                 Box(modifier = androidx.compose.ui.Modifier.fillMaxSize()) {
                     NavHost(navController = navController, startDestination = "session_list") {
 
                         composable("session_list") { entry ->
 
-                            val viewModel: SessionListViewModel = viewModel(factory = viewModelFactory)
+                            val viewModel = sessionListViewModel
 
                             val syncState = viewModel.connectionState.collectAsState().value
                             val friendRequests = viewModel.friendRequests.collectAsState().value
@@ -764,7 +765,7 @@ class MainActivity : ComponentActivity() {
                                 myUuid = securePrefs.myUuid,
                                 peerUuid = targetUuid,
                                 muteUntil = remember(targetUuid) { db.msgDao().observeConversationMuteUntil(targetUuid) }.collectAsState(0L).value,
-                                onChangeConversationMute = { action, until -> viewModel.conversationAction(targetUuid, action, until) },
+                                onChangeConversationMute = { action, until -> sessionListViewModel.conversationAction(targetUuid, action, until) },
                                 initialMessageId = initialMessageId,
                                 searchRevealRevision = searchRoute?.revealRevision,
                                 incomingShare = incomingShares.routed?.takeIf { it.first == backStackEntry.id }?.second,

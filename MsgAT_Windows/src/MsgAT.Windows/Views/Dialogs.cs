@@ -937,20 +937,20 @@ public sealed class SettingsDialog : DialogWindow
         var icon = new TextBlock
         {
             Text = glyph, FontFamily = new FontFamily("Segoe MDL2 Assets"),
-            Width = 26, Foreground = (Brush)FindResource("AccentBrush")
+            Width = 26, Foreground = (Brush)FindResource("AccentTextBrush"),
+            VerticalAlignment = VerticalAlignment.Center
         };
         DockPanel.SetDock(icon, Dock.Left);
         content.Children.Add(icon);
-        var arrow = new TextBlock { Text = "›", Foreground = (Brush)FindResource("MutedBrush") };
+        var arrow = new TextBlock { Text = "›", Foreground = (Brush)FindResource("MutedBrush"), VerticalAlignment = VerticalAlignment.Center };
         DockPanel.SetDock(arrow, Dock.Right);
         content.Children.Add(arrow);
-        var title = new TextBlock();
+        var title = new TextBlock { VerticalAlignment = VerticalAlignment.Center };
         title.SetResourceReference(TextBlock.TextProperty, titleResource);
         content.Children.Add(title);
         var button = new Button
         {
-            Content = content, Style = ResourceStyle("ButtonStyle"), HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Margin = new Thickness(0, 0, 0, 4), Padding = new Thickness(10, 5, 10, 5)
+            Content = content, Style = ResourceStyle("SettingsNavigationButtonStyle")
         };
         button.SetResourceReference(System.Windows.Automation.AutomationProperties.NameProperty, titleResource);
         return button;

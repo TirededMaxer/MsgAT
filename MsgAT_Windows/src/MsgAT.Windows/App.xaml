@@ -206,6 +206,18 @@
             </Setter>
         </Style>
         <Style TargetType="Button" BasedOn="{StaticResource ButtonStyle}" />
+        <Style x:Key="SettingsNavigationButtonStyle" TargetType="Button" BasedOn="{StaticResource ButtonStyle}">
+            <Setter Property="Background" Value="{StaticResource MessagingTimelineBrush}" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+            <Setter Property="Padding" Value="10,5" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource MessagingSelectionBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="PrimaryButtonStyle" TargetType="Button" BasedOn="{StaticResource ButtonStyle}">
             <Setter Property="Background" Value="{StaticResource AccentBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />

@@ -153,10 +153,14 @@ private final class StickerLibraryModel: ObservableObject {
         else if selected.count < 200 { selected[entry.id] = StickerSelection(entry: entry, expectedSha256: sha) }
     }
 
-    var validDestination: Bool {
-        if let importPack { return packs.contains { $0.id == importPack } }
+    var validName: Bool {
         let cleaned = name.trimmingCharacters(in: .whitespacesAndNewlines)
         return !cleaned.isEmpty && cleaned.utf8.count <= 128
+    }
+
+    var validDestination: Bool {
+        if let importPack { return packs.contains { $0.id == importPack } }
+        return validName
     }
 
     func importSelected() {

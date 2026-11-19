@@ -127,9 +127,21 @@ def development_android():
     apk = ROOT / 'MsgAT/app/build/outputs/apk/debug/app-debug.apk'
     output = run(tools / 'apksigner', 'verify', '--verbose', '--print-certs', apk, capture=True)
     if os.environ.get('MSGAT_FIXED_DEVELOPMENT_SIGNING') == 'true':
-        expected = json.loads((ROOT / 'scripts/ci/development-signing.json').read_text())['certificateSha256']
-        if f'Signer #1 certificate SHA-256 digest: {expected}' not in output:
-            raise RuntimeError('Development APK does not retain its separate development certificate')
+        configuration = json.loads((ROOT / 'scripts/ci/development-signing.json').read_text())
+        expected = configuration['certificateSha256']
+        signers = re.findall(r'^Signer #\d+ certificate SHA-256 digest:\s*([A-Fa-f0-9:]+)\s*$', output, re.MULTILINE)
+        fingerprints = [fingerprint.replace(':', '').lower() for fingerprint in signers]
+        if fingerprints != [expected]:
+            certificate = subprocess.check_output([
+                'keytool', '-exportcert', '-storetype', 'PKCS12', '-keystore',
+                os.environ['ANDROID_DEVELOPMENT_KEYSTORE_PATH'], '-alias', configuration['keyAlias'],
+                '-storepass:env', 'ANDROID_DEVELOPMENT_STORE_PASSWORD',
+            ])
+            configured = hashlib.sha256(certificate).hexdigest()
+            raise RuntimeError(
+                f'Development signing mismatch. Expected: {expected}. '
+                f'Configured certificate: {configured}. APK signers: {fingerprints}.'
+            )
     badging = run(tools / 'aapt', 'dump', 'badging', apk, capture=True)
     if "package: name='org.msgat.development'" not in badging:
         raise RuntimeError('Development APK must use its isolated application ID')

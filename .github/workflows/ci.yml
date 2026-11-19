@@ -30,10 +30,13 @@ jobs:
           ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}
         run: python scripts/ci/packages.py restore-development-signing
       - working-directory: MsgAT
+        id: android_build
         env:
           ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}
         run: ./gradlew --no-build-cache --no-configuration-cache assembleDebug
       - run: python scripts/ci/packages.py development-android
+        env:
+          ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}
       - uses: actions/upload-artifact@v4
         with:
           name: development-android
@@ -43,6 +46,7 @@ jobs:
           compression-level: 0
       - name: Lint Android development sources
         id: android_lint
+        if: ${{ !cancelled() && steps.android_build.outcome == 'success' }}
         working-directory: MsgAT
         env:
           ANDROID_DEVELOPMENT_STORE_PASSWORD: ${{ secrets.ANDROID_DEVELOPMENT_STORE_PASSWORD }}

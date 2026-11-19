@@ -141,15 +141,15 @@ internal static class VideoThumbnail
                 if (!await copied.Task.WaitAsync(token).ConfigureAwait(false)) return null;
                 player.Pause();
                 using var bitmap = await SoftwareBitmap.CreateCopyFromSurfaceAsync(surface, BitmapAlphaMode.Ignore)
-                    .AsTask().ConfigureAwait(false);
+                    .AsTask(token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
                 using var output = new InMemoryRandomAccessStream();
-                var encoder = await NativeBitmapEncoder.CreateAsync(NativeBitmapEncoder.PngEncoderId, output).AsTask().ConfigureAwait(false);
+                var encoder = await NativeBitmapEncoder.CreateAsync(NativeBitmapEncoder.PngEncoderId, output).AsTask(token).ConfigureAwait(false);
                 encoder.SetSoftwareBitmap(bitmap);
                 var scale = Math.Min(1d, (double)MaximumEdge / Math.Max(bitmap.PixelWidth, bitmap.PixelHeight));
                 encoder.BitmapTransform.ScaledWidth = Math.Max(1u, (uint)Math.Round(bitmap.PixelWidth * scale));
                 encoder.BitmapTransform.ScaledHeight = Math.Max(1u, (uint)Math.Round(bitmap.PixelHeight * scale));
-                await encoder.FlushAsync().AsTask().ConfigureAwait(false);
+                await encoder.FlushAsync().AsTask(token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
                 output.Seek(0);
                 using var pixels = output.AsStreamForRead();

@@ -33,7 +33,11 @@
 	<true/>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>MsgAT needs local network access to establish peer-to-peer WebRTC connections.</string>
+	<key>NSLocationUsageDescription</key>
+	<string>MsgAT uses your location when you choose Use current location in a chat.</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>MsgAT requires microphone access for end-to-end encrypted voice calls.</string>
+	<string>MsgAT uses the microphone for encrypted calls and voice messages.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>MsgAT uses the camera when you turn it on in a video call.</string>
 </dict>
 </plist>

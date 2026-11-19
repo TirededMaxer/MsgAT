@@ -11,6 +11,7 @@ name = "msgat_security_core"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
+aes-gcm-siv = { version = "=0.12.1", features = ["zeroize"] }
 async-trait = "0.1.79"
 base64 = "0.22.1"
 ed25519-dalek = "2.2.0"
@@ -23,6 +24,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10.9"
 zeroize = "1.8"
+
+[target.'cfg(unix)'.dependencies]
+libc = "=0.2.191"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "=0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem"] }
 
 [profile.release]
 lto = "thin"

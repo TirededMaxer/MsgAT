@@ -14,12 +14,22 @@ import java.util.concurrent.ThreadLocalRandom;
 
 public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
     private static final Logger log = LoggerFactory.getLogger(GhostPacketCodec.class);
-    private static final int MIN_FRAME_SIZE = 105;
-    private static final int MAX_FRAME_SIZE = 256 * 1024;
+    private static final int PAYLOAD_LENGTH_OFFSET = Integer.BYTES + 1 + 64 + 16;
+    private static final int HEADER_SIZE = PAYLOAD_LENGTH_OFFSET + Integer.BYTES;
+    private static final int MIN_FRAME_SIZE = HEADER_SIZE + 16;
+    static final int MIN_INBOUND_LIMIT = 128 * 1024;
+    static final int MAX_FRAME_SIZE = 256 * 1024;
+    private final int maxInboundFrameBytes;
+    private boolean rejected;
 
-    // Determines the appropriate padded boundary size for packet obfuscation.
-    private int getBoundarySize(int actualSize) {
-        return Math.max(4096, actualSize);
+    public GhostPacketCodec() {
+        this(MAX_FRAME_SIZE);
+    }
+
+    GhostPacketCodec(int maxInboundFrameBytes) {
+        if (maxInboundFrameBytes < MIN_INBOUND_LIMIT || maxInboundFrameBytes > MAX_FRAME_SIZE)
+            throw new IllegalArgumentException("Invalid inbound frame limit");
+        this.maxInboundFrameBytes = maxInboundFrameBytes;
     }
 
     // Encodes a GhostPacket into a ByteBuf, applying random padding for fixed-size transmission.
@@ -31,12 +41,12 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
             throw new EncoderException("Nonce/IV and authentication tag must be exactly 16 bytes");
         }
         int payloadLen = msg.getPayloadLen();
-        int actualSize = 4 + 1 + 64 + 16 + 4 + payloadLen + 16;
-        int paddedSize = getBoundarySize(actualSize);
-        if (paddedSize < MIN_FRAME_SIZE || paddedSize > MAX_FRAME_SIZE) {
+        if (payloadLen < 0 || payloadLen > MAX_FRAME_SIZE - MIN_FRAME_SIZE) {
             ctx.close();
-            throw new EncoderException("Encoded packet exceeds protocol limits: " + paddedSize);
+            throw new EncoderException("Encoded packet exceeds protocol limits");
         }
+        int actualSize = MIN_FRAME_SIZE + payloadLen;
+        int paddedSize = Math.max(4096, actualSize);
 
         out.writeInt(paddedSize);
 
@@ -73,21 +83,27 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
     // Decodes incoming bytes from a ByteBuf into a GhostPacket object and skips trailing random padding.
     @Override
     protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) {
-        in.markReaderIndex();
-        if (in.readableBytes() < 4) {
+        if (rejected) {
+            in.skipBytes(in.readableBytes());
             return;
         }
-        int totalLen = in.readInt();
-        if (totalLen < MIN_FRAME_SIZE || totalLen > MAX_FRAME_SIZE) {
-            log.warn("Rejected invalid frame length: {}", totalLen);
-            ctx.close();
+        int readable = in.readableBytes();
+        if (readable < Integer.BYTES) return;
+        int start = in.readerIndex();
+        int totalLen = in.getInt(start);
+        if (totalLen < MIN_FRAME_SIZE || totalLen > maxInboundFrameBytes) {
+            reject(ctx, in);
             return;
         }
-        if (in.readableBytes() < totalLen - 4) {
-            in.resetReaderIndex();
+        if (readable < HEADER_SIZE) return;
+        int payloadLen = in.getInt(start + PAYLOAD_LENGTH_OFFSET);
+        if (payloadLen < 0 || payloadLen > totalLen - MIN_FRAME_SIZE) {
+            reject(ctx, in);
             return;
         }
+        if (readable < totalLen) return;
 
+        in.skipBytes(Integer.BYTES);
         byte type = in.readByte();
 
         byte[] mailboxBytes = new byte[64];
@@ -97,12 +113,7 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
         byte[] nonceOrIv = new byte[16];
         in.readBytes(nonceOrIv);
 
-        int payloadLen = in.readInt();
-
-        if (payloadLen > totalLen - 105 || payloadLen < 0) {
-            ctx.close();
-            return;
-        }
+        in.skipBytes(Integer.BYTES);
 
         byte[] encryptedData = new byte[payloadLen];
         in.readBytes(encryptedData);
@@ -110,11 +121,16 @@ public class GhostPacketCodec extends ByteToMessageCodec<GhostPacket> {
         byte[] authTag = new byte[16];
         in.readBytes(authTag);
 
-        int actualSize = 4 + 1 + 64 + 16 + 4 + payloadLen + 16;
-        int paddingSize = totalLen - actualSize;
-        in.skipBytes(paddingSize);
+        in.skipBytes(totalLen - MIN_FRAME_SIZE - payloadLen);
 
         GhostPacket packet = new GhostPacket(type, targetMailboxId, nonceOrIv, encryptedData, authTag);
         out.add(packet);
+    }
+
+    private void reject(ChannelHandlerContext ctx, ByteBuf in) {
+        rejected = true;
+        in.skipBytes(in.readableBytes());
+        log.debug("Rejected invalid inbound frame");
+        ctx.close();
     }
 }

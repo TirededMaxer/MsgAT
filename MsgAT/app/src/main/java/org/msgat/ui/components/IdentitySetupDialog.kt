@@ -1,138 +1,168 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 package org.msgat.ui.components
 
-import android.app.Activity
-import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.rememberAsyncImagePainter
-import com.yalantis.ucrop.UCrop
-import java.io.File
-import java.util.UUID
+import androidx.compose.ui.window.SecureFlagPolicy
+import org.msgat.R
+import org.msgat.ui.theme.LocalMessagingColors
+import org.msgat.ui.theme.uiString
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-// Displays a dialog allowing the user to configure their initial nickname and avatar.
 fun IdentitySetupDialog(
     onDismiss: () -> Unit,
-    onConfirm: (nickname: String, avatarUri: Uri?) -> Unit
+    initialNickname: String = "",
+    initialAvatar: String? = null,
+    editing: Boolean = false,
+    onConfirm: (nickname: String, avatarBytes: ByteArray?, removeAvatar: Boolean, completion: (Boolean) -> Unit) -> Unit
 ) {
-    var nickname by remember { mutableStateOf("") }
-    var avatarUri by remember { mutableStateOf<Uri?>(null) }
-
-    val context = LocalContext.current
-
-    val uCropLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        if (result.resultCode == Activity.RESULT_OK && result.data != null) {
-            val resultUri = UCrop.getOutput(result.data!!)
-            if (resultUri != null) {
-                avatarUri = resultUri
-            }
+    var nickname by remember { mutableStateOf(initialNickname) }
+    var removeAvatar by remember { mutableStateOf(false) }
+    var avatarBytes by remember { mutableStateOf<ByteArray?>(null) }
+    var cropSource by remember { mutableStateOf<Uri?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    var failed by remember { mutableStateOf(false) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) {
+        if (it != null) cropSource = it
+    }
+    val preview = remember(avatarBytes) {
+        avatarBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
+    }
+    DisposableEffect(avatarBytes, preview) {
+        val bytes = avatarBytes
+        onDispose {
+            bytes?.fill(0)
+            preview?.recycle()
         }
     }
 
-    val imagePickerLauncher = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
-        if (uri != null) {
-            val destinationUri = Uri.fromFile(File(context.cacheDir, "avatar_${UUID.randomUUID()}.jpg"))
-            val uCropIntent = UCrop.of(uri, destinationUri)
-                .withAspectRatio(1f, 1f)
-                .withMaxResultSize(512, 512)
-                .getIntent(context)
-            uCropLauncher.launch(uCropIntent)
+    val activeAvatar = initialAvatar.takeUnless { removeAvatar }
+    val hasPhoto = preview != null || !activeAvatar.isNullOrBlank()
+    val cleanNickname = nickname.trim()
+    val nicknameTooLong = cleanNickname.toByteArray(Charsets.UTF_8).size > 256
+    val canSave = cleanNickname.isNotEmpty() && !nicknameTooLong
+    val colors = LocalMessagingColors.current
+    fun save() {
+        if (!canSave || saving) return
+        saving = true
+        failed = false
+        onConfirm(cleanNickname, avatarBytes, removeAvatar) { saved ->
+            saving = false
+            failed = !saved
         }
     }
+    val choosePhoto = uiString(if (hasPhoto) R.string.ui_profile_change_avatar else R.string.ui_profile_choose_avatar)
 
     Dialog(
-        onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        onDismissRequest = { if (editing && !saving) onDismiss() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn,
+            dismissOnBackPress = editing && !saving, dismissOnClickOutside = editing && !saving)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .background(Color(0xFF1E1E1E), RoundedCornerShape(24.dp))
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+        Surface(
+            Modifier.safeDrawingPadding().imePadding().widthIn(max = 430.dp).fillMaxWidth(0.94f),
+            shape = MaterialTheme.shapes.large,
+            color = colors.chrome
         ) {
-            Text(
-                text = "Setup Identity",
-                color = Color.White,
-                modifier = Modifier.padding(bottom = 20.dp)
-            )
-
-            Box(
-                modifier = Modifier
-                    .size(100.dp)
-                    .clip(RoundedCornerShape(16.dp)) 
-                    .background(Color.DarkGray)
-                    .clickable {
-                        imagePickerLauncher.launch("image/*")
-                    },
-                contentAlignment = Alignment.Center
-            ) {
-                if (avatarUri != null) {
-                    Image(
-                        painter = rememberAsyncImagePainter(avatarUri),
-                        contentDescription = "Avatar",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    Text("Tap to Pick Avatar", color = Color.White, fontSize = androidx.compose.ui.unit.TextUnit(12f, androidx.compose.ui.unit.TextUnitType.Sp), textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            OutlinedTextField(
-                value = nickname,
-                onValueChange = { nickname = it },
-                label = { Text("Nickname", color = Color.Gray) },
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White,
-                    focusedBorderColor = MaterialTheme.colorScheme.primary, unfocusedBorderColor = Color.Gray
-                ),
-                modifier = Modifier.fillMaxWidth()
-            )
-
-            Spacer(modifier = Modifier.height(24.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End
-            ) {
-                TextButton(onClick = onDismiss) {
-                    Text("Cancel", color = Color.Gray)
-                }
-
-                TextButton(
-                    onClick = {
-                        if (nickname.isNotBlank() && avatarUri != null) {
-                            onConfirm(nickname, avatarUri)
-                        }
-                    },
-                    enabled = nickname.isNotBlank() && avatarUri != null
+            Column {
+                Text(uiString(if (editing) R.string.ui_edit_profile else R.string.ui_profile_setup_title),
+                    Modifier.padding(18.dp), style = MaterialTheme.typography.titleLarge)
+                HorizontalDivider(color = colors.divider)
+                Column(
+                    Modifier.weight(1f, fill = false).fillMaxWidth().verticalScroll(rememberScrollState()).padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    val color = if (nickname.isNotBlank() && avatarUri != null) Color(0xFF00FF00) else Color.DarkGray
-                    Text("Confirm", color = color)
+                    Surface(
+                        Modifier.size(96.dp).clip(CircleShape)
+                            .semantics { contentDescription = choosePhoto }
+                            .clickable(enabled = !saving, role = Role.Button) { picker.launch("image/*") },
+                        shape = CircleShape,
+                        color = MaterialTheme.colorScheme.secondaryContainer
+                    ) {
+                        when {
+                            preview != null -> Image(preview.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            !activeAvatar.isNullOrBlank() -> Image(rememberAvatarPainter(activeAvatar), null,
+                                Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+                            else -> Box(contentAlignment = Alignment.Center) {
+                                Icon(Icons.Default.PhotoCamera, null, Modifier.size(28.dp))
+                            }
+                        }
+                    }
+                    FlowRow(horizontalArrangement = Arrangement.Center) {
+                        TextButton(onClick = { picker.launch("image/*") }, enabled = !saving) { Text(choosePhoto) }
+                        if (hasPhoto) TextButton(onClick = {
+                            avatarBytes = null
+                            removeAvatar = true
+                            failed = false
+                        }, enabled = !saving) {
+                            Text(uiString(R.string.ui_profile_remove_avatar), color = MaterialTheme.colorScheme.error)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = nickname,
+                        onValueChange = { nickname = it.take(256); failed = false },
+                        label = { Text(uiString(R.string.ui_profile_nickname)) },
+                        singleLine = true,
+                        enabled = !saving,
+                        isError = nicknameTooLong,
+                        supportingText = if (nicknameTooLong) {
+                            { Text(uiString(R.string.ui_profile_nickname_too_long),
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }) }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words, imeAction = ImeAction.Done),
+                        keyboardActions = KeyboardActions(onDone = { save() }),
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    if (failed) Text(uiString(R.string.ui_profile_save_failed), color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.align(Alignment.Start).semantics { liveRegion = LiveRegionMode.Polite })
+                }
+                HorizontalDivider(color = colors.divider)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.End) {
+                    if (editing) TextButton(onClick = onDismiss, enabled = !saving) { Text(uiString(R.string.ui_cancel)) }
+                    Button(onClick = ::save, enabled = canSave && !saving) {
+                        Text(uiString(if (saving) R.string.ui_saving else R.string.ui_save))
+                    }
                 }
             }
         }
+    }
+    cropSource?.let { source ->
+        AvatarCropDialog(source, onDismiss = { cropSource = null }, onConfirm = { bytes ->
+            avatarBytes = bytes
+            removeAvatar = false
+            failed = false
+            cropSource = null
+        })
     }
 }

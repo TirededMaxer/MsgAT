@@ -42,6 +42,19 @@ public sealed record GhostPacket(
     public const byte V2Received = 0x47;
     public const byte V2Sync = 0x48;
     public const byte V2SyncEnd = 0x49;
+    public const byte V2Revoke = 0x4A;
+    public const byte V2Revoked = 0x4B;
+    public const byte V2Rejected = 0x4C;
+    public const byte V2Deferred = 0x4F;
+    public const byte ObjectBegin = 0x50;
+    public const byte ObjectStatus = 0x51;
+    public const byte ObjectPut = 0x52;
+    public const byte ObjectFinish = 0x53;
+    public const byte ObjectGet = 0x54;
+    public const byte ObjectData = 0x55;
+    public const byte ObjectDelete = 0x56;
+    public const byte ObjectDeleted = 0x57;
+    public const byte ObjectError = 0x58;
 
     public static GhostPacket Empty(byte type, string? mailboxId = null) =>
         new(type, mailboxId, new byte[16], [], new byte[16]);

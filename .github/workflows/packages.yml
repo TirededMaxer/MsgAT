@@ -5,11 +5,19 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish verified packages as the only GitHub Release
+        description: Publish the previously accepted Cloud packages artifact
         type: boolean
         default: false
       tag:
         description: New release tag (required only when publishing, e.g. release-2026-10-17)
+        type: string
+        default: ''
+      accepted_run_id:
+        description: Cloud packages run ID that produced the accepted packages
+        type: string
+        default: ''
+      accepted_manifest_sha256:
+        description: SHA-256 of release-manifest.json from the accepted artifact
         type: string
         default: ''
 
@@ -25,13 +33,12 @@ env:
 
 jobs:
   preflight:
+    if: ${{ !inputs.publish }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check release inputs and signing configuration
+      - name: Check signing configuration
         env:
-          PUBLISH: ${{ inputs.publish }}
-          RELEASE_TAG: ${{ inputs.tag }}
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -176,18 +183,30 @@ jobs:
 
   publish:
     if: inputs.publish
-    needs: bundle
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag }}
+      ACCEPTED_RUN_ID: ${{ inputs.accepted_run_id }}
+      ACCEPTED_MANIFEST_SHA256: ${{ inputs.accepted_manifest_sha256 }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify the accepted build run and release target
+        id: accepted
+        run: python scripts/ci/packages.py preflight-publish
       - uses: actions/download-artifact@v4
         with:
           name: MsgAT-release
           path: dist
+          github-token: ${{ github.token }}
+          repository: ${{ github.repository }}
+          run-id: ${{ inputs.accepted_run_id }}
       - name: Publish complete Release and remove older Releases
         env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          ACCEPTED_COMMIT: ${{ steps.accepted.outputs.commit }}
         run: python scripts/ci/packages.py publish

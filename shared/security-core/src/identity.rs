@@ -34,6 +34,8 @@ pub struct SignedBundle {
 #[serde(deny_unknown_fields)]
 pub struct PublicBundle {
     pub version: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub directory_epoch: Option<String>,
     pub expires_at: u64,
     pub registration_id: u32,
     pub certificate: Certificate,
@@ -54,18 +56,28 @@ fn epoch_seconds() -> Result<u64, String> {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|t| t.as_secs()).map_err(|_| "Invalid system clock".into())
 }
 
-pub fn provision(seed: &[u8], count: u32) -> Result<Value, String> {
-    generate(seed, count, None, 1, 1, 1)
+pub fn provision(seed: &[u8], count: u32, directory_epoch: Option<String>) -> Result<Value, String> {
+    generate(seed, count, None, 1, 1, 1, directory_epoch)
 }
 
 pub fn refresh(seed: &[u8], local: &crate::session::LocalIdentity, count: u32,
-    first_prekey_id: u32, signed_prekey_id: u32, pq_prekey_id: u32) -> Result<Value, String> {
-    generate(seed, count, Some(local), first_prekey_id, signed_prekey_id, pq_prekey_id)
+    first_prekey_id: u32, signed_prekey_id: u32, pq_prekey_id: u32, directory_epoch: Option<String>) -> Result<Value, String> {
+    generate(seed, count, Some(local), first_prekey_id, signed_prekey_id, pq_prekey_id, directory_epoch)
+}
+
+fn validate_directory_epoch(epoch: Option<&str>) -> Result<(), String> {
+    let Some(epoch) = epoch else { return Ok(()) };
+    if epoch.len() == 24 && let Ok(bytes) = STANDARD.decode(epoch)
+        && bytes.len() == 16 && bytes.iter().any(|&byte| byte != 0) && STANDARD.encode(bytes) == epoch {
+        return Ok(());
+    }
+    Err("Invalid directory epoch".into())
 }
 
 fn generate(seed: &[u8], count: u32, local: Option<&crate::session::LocalIdentity>,
-    first_prekey_id: u32, signed_prekey_id: u32, pq_prekey_id: u32) -> Result<Value, String> {
+    first_prekey_id: u32, signed_prekey_id: u32, pq_prekey_id: u32, directory_epoch: Option<String>) -> Result<Value, String> {
     let seed: &[u8;32] = seed.try_into().map_err(|_| "Invalid root seed")?;
+    validate_directory_epoch(directory_epoch.as_deref())?;
     if !(1..=100).contains(&count) { return Err("Prekey count must be between 1 and 100".into()); }
     if first_prekey_id==0 || signed_prekey_id==0 || pq_prekey_id==0 { return Err("Prekey identifiers must be positive".into()); }
     let last_prekey_id=first_prekey_id.checked_add(count-1).ok_or("Prekey identifier space is exhausted")?;
@@ -110,7 +122,7 @@ fn generate(seed: &[u8], count: u32, local: Option<&crate::session::LocalIdentit
         records.push(json!({"id":id,"record":STANDARD.encode(PreKeyRecord::new(id.into(),&pair).serialize().map_err(|e|e.to_string())?)}));
     }
     let body = PublicBundle {
-        version:2, expires_at:now+7*24*3600, registration_id,
+        version:2, directory_epoch, expires_at:now+7*24*3600, registration_id,
         certificate:certificate.clone(),
         signed_prekey_id, signed_prekey:STANDARD.encode(signed_pair.public_key.serialize()),
         signed_prekey_signature:STANDARD.encode(signed_signature),
@@ -148,6 +160,7 @@ pub fn verify_bundle(bundle: &SignedBundle, expected_uuid: &str) -> Result<Publi
     signed_bytes.extend_from_slice(&body);
     root.verify_strict(&signed_bytes,&signature).map_err(|_| "Invalid bundle signature")?;
     let body: PublicBundle = serde_json::from_slice(&body).map_err(|_| "Invalid bundle body")?;
+    validate_directory_epoch(body.directory_epoch.as_deref())?;
     let now=epoch_seconds()?;
     if body.version!=2 || body.expires_at<=now || body.expires_at>now+8*24*3600 || body.prekeys.len()>100
         || !(1..=16380).contains(&body.registration_id) || body.signed_prekey_id==0 || body.pq_prekey_id==0 {
@@ -189,4 +202,27 @@ pub fn verify_certificate(certificate: &Certificate, expected_uuid: &str) -> Res
 
 pub fn hex_uuid(public: &[u8]) -> String {
     Sha256::digest(public).iter().map(|b|format!("{b:02x}")).collect()
+}
+
+/// A permanent, purpose-bound cancellation authorization. It contains no private material.
+/// No wall-clock expiry: an offline reset must remain deliverable after the seed is erased.
+pub fn create_revocation(seed: &[u8]) -> Result<Value, String> {
+    let seed: &[u8;32] = seed.try_into().map_err(|_| "Invalid root seed")?;
+    let root=SigningKey::from_bytes(seed);
+    let mut proof=Vec::with_capacity(113);
+    proof.push(2); proof.extend_from_slice(root.verifying_key().as_bytes());
+    let token: [u8;16]=rand::rng().random(); proof.extend_from_slice(&token);
+    let mut transcript=b"MsgAT/v2/revoke-identity\0".to_vec(); transcript.extend_from_slice(&proof);
+    proof.extend_from_slice(&root.sign(&transcript).to_bytes());
+    Ok(json!({"proof":STANDARD.encode(&proof),"uuid":hex_uuid(root.verifying_key().as_bytes())}))
+}
+
+pub fn verify_revocation(encoded: &str) -> Result<Value, String> {
+    let proof=STANDARD.decode(encoded).map_err(|_| "Invalid revocation proof")?;
+    if proof.len()!=113 || proof[0]!=2 { return Err("Invalid revocation proof".into()); }
+    let root: [u8;32]=proof[1..33].try_into().map_err(|_| "Invalid revocation root")?;
+    let signature=Signature::from_slice(&proof[49..]).map_err(|_| "Invalid revocation signature")?;
+    let mut transcript=b"MsgAT/v2/revoke-identity\0".to_vec(); transcript.extend_from_slice(&proof[..49]);
+    VerifyingKey::from_bytes(&root).map_err(|_| "Invalid revocation root")?.verify_strict(&transcript,&signature).map_err(|_| "Invalid revocation signature")?;
+    Ok(json!({"uuid":hex_uuid(&root),"proof_hash":hex_uuid(&proof)}))
 }

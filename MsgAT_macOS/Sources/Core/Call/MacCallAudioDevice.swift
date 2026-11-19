@@ -6,14 +6,21 @@ import MsgATNativeAudio
 
 /// WebRTC's public PCM device interface, with output routing owned by AVAudioEngine.
 final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
+    struct Selection: Sendable, Equatable {
+        var input: AudioDeviceID? = nil
+        var output: AudioDeviceID? = nil
+    }
+
     private let inputEngine = AVAudioEngine()
     private let outputEngine = AVAudioEngine()
     private let delegateLock = NSLock()
     private var audioDelegate: RTCAudioDeviceDelegate?
     private var failureHandler: (@Sendable () -> Void)?
-    private var routeChangeHandler: (@Sendable () -> Void)?
+    private var routeChangeHandler: (@Sendable (Selection) -> Void)?
+    private var routes = Selection()
+    private var routeRefreshRevision: UInt64 = 0
     private let routeQueue = DispatchQueue(label: "org.msgat.call.output-route")
-    private var routeListener: AudioObjectPropertyListenerBlock?
+    private var routeListeners: [AudioObjectPropertySelector: AudioObjectPropertyListenerBlock] = [:]
     private var sourceNode: AVAudioSourceNode?
     private var sinkNode: AVAudioSinkNode?
     private var inputObserver: NSObjectProtocol?
@@ -40,27 +47,24 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         delegateLock.lock(); failureHandler = handler; delegateLock.unlock()
     }
 
-    func setRouteChangeHandler(_ handler: @escaping @Sendable () -> Void) {
+    func setRouteChangeHandler(_ handler: @escaping @Sendable (Selection) -> Void) {
         delegateLock.lock(); routeChangeHandler = handler; delegateLock.unlock()
     }
 
     func initialize(with delegate: RTCAudioDeviceDelegate) -> Bool {
         delegateLock.lock(); audioDelegate = delegate; delegateLock.unlock()
         isInitialized = true
-        inputObserver = observe(inputEngine, input: true)
-        outputObserver = observe(outputEngine, input: false)
-        var address = outputAddress()
+        inputObserver = observe(inputEngine)
+        outputObserver = observe(outputEngine)
         let listener: AudioObjectPropertyListenerBlock = { [weak self] _, _ in
-            self?.refreshOutputRoute { [weak self] success in
-                guard let self else { return }
-                if !success { self.reportDeviceFailure(AudioError.noOutput); return }
-                self.delegateLock.lock(); let handler = self.routeChangeHandler; self.delegateLock.unlock()
-                handler?()
-            }
+            self?.systemRouteChanged()
         }
-        let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, routeQueue, listener)
-        if status == noErr { routeListener = listener }
-        else { log(AudioError.routeListener(status)) }
+        for selector in [kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice, kAudioHardwarePropertyDevices] {
+            var address = propertyAddress(selector)
+            let status = AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, routeQueue, listener)
+            if status == noErr { routeListeners[selector] = listener }
+            else { log(AudioError.routeListener(status)) }
+        }
         return true
     }
 
@@ -71,13 +75,16 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         if let inputObserver { NotificationCenter.default.removeObserver(inputObserver) }
         if let outputObserver { NotificationCenter.default.removeObserver(outputObserver) }
         inputObserver = nil; outputObserver = nil
-        if let routeListener {
-            var address = outputAddress()
-            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, routeQueue, routeListener)
-            self.routeListener = nil
+        for (selector, listener) in routeListeners {
+            var address = propertyAddress(selector)
+            AudioObjectRemovePropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &address, routeQueue, listener)
         }
+        routeListeners.removeAll()
         isInitialized = false; isRecordingInitialized = false; isPlayoutInitialized = false
-        delegateLock.lock(); audioDelegate = nil; delegateLock.unlock()
+        delegateLock.withLock {
+            audioDelegate = nil
+            routeRefreshRevision &+= 1
+        }
         return true
     }
 
@@ -117,35 +124,125 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         return true
     }
 
-    /// Runs device changes on the thread that owns WebRTC's ADM, without blocking the UI.
-    func refreshOutputRoute(completion: @escaping @Sendable (Bool) -> Void) {
-        guard let delegate = delegateSnapshot() else { completion(true); return }
+    func resetRoutes() {
+        delegateLock.withLock { routes = Selection() }
+    }
+
+    /// The I/O units are reconfigured on WebRTC's ADM thread.
+    func selectRoute(_ device: AudioDeviceID?, input: Bool, completion: @escaping @Sendable (Bool) -> Void) {
+        guard let delegate = delegateSnapshot() else { completion(false); return }
         delegate.dispatchAsync { [weak self, weak delegate] in
             guard let self, let delegate, self.delegateSnapshot() === delegate, self.isInitialized else {
                 completion(false); return
             }
-            guard self.isPlayoutInitialized else { completion(true); return }
+            guard (input ? self.isRecordingInitialized : self.isPlayoutInitialized) else { completion(false); return }
+            let previous = self.preferredRoute(input: input)
+            if previous == device { completion(true); return }
+            self.setPreferredRoute(device, input: input)
             do {
-                let resume = self.isPlaying
-                self.outputEngine.stop()
-                delegate.notifyAudioOutputInterrupted()
-                try self.configureOutput()
-                delegate.notifyAudioOutputParametersChange()
-                if resume { try self.outputEngine.start() }
-                completion(true)
-            } catch { self.log(error); completion(false) }
+                try self.rebuildRoute(input: input, delegate: delegate)
+                self.publishRoutes()
+                completion(self.preferredRoute(input: input) == device)
+            } catch {
+                self.log(error)
+                self.setPreferredRoute(previous, input: input)
+                do { try self.rebuildRoute(input: input, delegate: delegate) }
+                catch {
+                    self.setPreferredRoute(nil, input: input)
+                    do { try self.rebuildRoute(input: input, delegate: delegate) }
+                    catch { self.reportDeviceFailure(error) }
+                }
+                self.publishRoutes()
+                completion(false)
+            }
         }
+    }
+
+    private func rebuildRoute(input: Bool, delegate: RTCAudioDeviceDelegate) throws {
+        if input {
+            inputEngine.stop()
+            delegate.notifyAudioInputInterrupted()
+            try configureInput()
+            delegate.notifyAudioInputParametersChange()
+            if isRecording { try inputEngine.start() }
+        } else {
+            outputEngine.stop()
+            delegate.notifyAudioOutputInterrupted()
+            try configureOutput()
+            delegate.notifyAudioOutputParametersChange()
+            if isPlaying { try outputEngine.start() }
+        }
+    }
+
+    private func systemRouteChanged() {
+        let revision = delegateLock.withLock {
+            routeRefreshRevision &+= 1
+            return routeRefreshRevision
+        }
+        routeQueue.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+            self?.refreshSystemRoute(revision: revision, mayRetry: true)
+        }
+    }
+
+    private func refreshSystemRoute(revision: UInt64, mayRetry: Bool) {
+        guard delegateLock.withLock({ routeRefreshRevision == revision }) else { return }
+        guard let delegate = delegateSnapshot() else { return }
+        delegate.dispatchAsync { [weak self, weak delegate] in
+            guard let self, let delegate, self.delegateSnapshot() === delegate, self.isInitialized,
+                  self.delegateLock.withLock({ self.routeRefreshRevision == revision }) else { return }
+            do {
+                if self.isRecording {
+                    let desired = try self.resolvedDevice(input: true)
+                    if !self.inputEngine.isRunning || self.inputEngine.inputNode.auAudioUnit.deviceID != desired {
+                        try self.rebuildRoute(input: true, delegate: delegate)
+                    }
+                }
+                if self.isPlaying {
+                    let desired = try self.resolvedDevice(input: false)
+                    if !self.outputEngine.isRunning || self.outputEngine.outputNode.auAudioUnit.deviceID != desired {
+                        try self.rebuildRoute(input: false, delegate: delegate)
+                    }
+                }
+                self.publishRoutes()
+            } catch {
+                guard self.delegateLock.withLock({ self.routeRefreshRevision == revision }) else { return }
+                if mayRetry {
+                    self.routeQueue.asyncAfter(deadline: .now() + .milliseconds(400)) { [weak self] in
+                        self?.refreshSystemRoute(revision: revision, mayRetry: false)
+                    }
+                } else {
+                    self.reportDeviceFailure(error)
+                }
+            }
+        }
+    }
+
+    private func preferredRoute(input: Bool) -> AudioDeviceID? {
+        delegateLock.withLock { input ? routes.input : routes.output }
+    }
+
+    private func setPreferredRoute(_ device: AudioDeviceID?, input: Bool) {
+        delegateLock.withLock {
+            if input { routes.input = device } else { routes.output = device }
+        }
+    }
+
+    private func publishRoutes() {
+        let (handler, selection) = delegateLock.withLock { (routeChangeHandler, routes) }
+        handler?(selection)
     }
 
     private func configureInput() throws {
         guard let delegate = delegateSnapshot() else { throw AudioError.uninitialized }
         let node = inputEngine.inputNode
+        if let sinkNode { inputEngine.detach(sinkNode); self.sinkNode = nil }
+        let device = try resolvedDevice(input: true)
+        if node.auAudioUnit.deviceID != device { try node.auAudioUnit.setDeviceID(device) }
         let format = node.outputFormat(forBus: 0)
         guard format.sampleRate > 0, format.channelCount > 0, format.commonFormat == .pcmFormatFloat32,
               let pcm = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: format.sampleRate, channels: 1, interleaved: true),
               let storage = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: capacity) else { throw AudioError.invalidFormat }
         inputRate = format.sampleRate
-        if let sinkNode { inputEngine.detach(sinkNode); self.sinkNode = nil }
         let deliver = delegate.deliverRecordedData
         let sink = AVAudioSinkNode { timestamp, frames, data in
             guard frames <= storage.frameCapacity, let samples = storage.int16ChannelData?[0] else { return noErr }
@@ -177,8 +274,10 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
 
     private func configureOutput() throws {
         guard let delegate = delegateSnapshot() else { throw AudioError.uninitialized }
-        try outputEngine.outputNode.auAudioUnit.setDeviceID(defaultOutputID())
         if let sourceNode { outputEngine.detach(sourceNode); self.sourceNode = nil }
+        let output = outputEngine.outputNode.auAudioUnit
+        let device = try resolvedDevice(input: false)
+        if output.deviceID != device { try output.setDeviceID(device) }
         guard let pcm = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: outputRate, channels: 1, interleaved: true),
               let storage = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: capacity),
               let renderFormat = AVAudioFormat(standardFormatWithSampleRate: outputRate, channels: 1) else { throw AudioError.invalidFormat }
@@ -211,27 +310,9 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         outputEngine.prepare()
     }
 
-    private func observe(_ engine: AVAudioEngine, input: Bool) -> NSObjectProtocol {
+    private func observe(_ engine: AVAudioEngine) -> NSObjectProtocol {
         NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: nil) { [weak self] _ in
-            guard let self, let delegate = self.delegateSnapshot() else { return }
-            delegate.dispatchAsync { [weak self, weak delegate] in
-                guard let self, let delegate, self.delegateSnapshot() === delegate, self.isInitialized else { return }
-                if input {
-                    guard self.isRecording, !self.inputEngine.isRunning else { return }
-                    do {
-                        self.inputEngine.stop(); delegate.notifyAudioInputInterrupted()
-                        try self.configureInput(); delegate.notifyAudioInputParametersChange()
-                        try self.inputEngine.start()
-                    } catch { self.reportDeviceFailure(error) }
-                } else {
-                    guard self.isPlaying else { return }
-                    if self.outputEngine.isRunning,
-                       (try? self.defaultOutputID()) == self.outputEngine.outputNode.auAudioUnit.deviceID { return }
-                    self.refreshOutputRoute { [weak self] success in
-                        if !success { self?.reportDeviceFailure(AudioError.noOutput) }
-                    }
-                }
-            }
+            self?.systemRouteChanged()
         }
     }
 
@@ -239,17 +320,26 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         delegateLock.lock(); defer { delegateLock.unlock() }; return audioDelegate
     }
 
-    private func defaultOutputID() throws -> AudioDeviceID {
-        var address = outputAddress()
+    private func resolvedDevice(input: Bool) throws -> AudioDeviceID {
+        if let preferred = preferredRoute(input: input) {
+            var alive: UInt32 = 0
+            var size = UInt32(MemoryLayout.size(ofValue: alive))
+            var address = propertyAddress(kAudioDevicePropertyDeviceIsAlive)
+            if AudioObjectGetPropertyData(preferred, &address, 0, nil, &size, &alive) == noErr, alive == 1 {
+                return preferred
+            }
+            setPreferredRoute(nil, input: input)
+        }
+        var address = propertyAddress(input ? kAudioHardwarePropertyDefaultInputDevice : kAudioHardwarePropertyDefaultOutputDevice)
         var value: AudioDeviceID = 0
         var size = UInt32(MemoryLayout.size(ofValue: value))
         let status = AudioObjectGetPropertyData(AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &value)
-        guard status == noErr, value != kAudioObjectUnknown else { throw AudioError.noOutput }
+        guard status == noErr, value != kAudioObjectUnknown else { throw AudioError.noDevice }
         return value
     }
 
-    private func outputAddress() -> AudioObjectPropertyAddress {
-        AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultOutputDevice,
+    private func propertyAddress(_ selector: AudioObjectPropertySelector) -> AudioObjectPropertyAddress {
+        AudioObjectPropertyAddress(mSelector: selector,
                                    mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
     }
 
@@ -274,5 +364,5 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         delegateLock.lock(); let handler = failureHandler; delegateLock.unlock()
         handler?()
     }
-    private enum AudioError: Error { case uninitialized, invalidFormat, noOutput, routeListener(OSStatus) }
+    private enum AudioError: Error { case uninitialized, invalidFormat, noDevice, routeListener(OSStatus) }
 }

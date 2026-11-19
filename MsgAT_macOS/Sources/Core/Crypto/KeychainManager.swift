@@ -6,13 +6,21 @@ public final class KeychainManager: ObservableObject {
     public static let shared = KeychainManager()
 
     /// Evaluated before creating the main window or starting any network services.
-    static let startupFailure: String? = {
+    static var startupFailure: String? { startup.failure }
+    static var canResetUnreadableIdentity: Bool { startup.canReset }
+    static var startupFailureIsIdentity: Bool { startup.isIdentity }
+    private static let startup: (failure: String?, canReset: Bool, isIdentity: Bool) = {
+        do {
+            try AppDatabase.requireProfileLease()
+            try IdentityLifecycle.resume()
+        }
+        catch { return (error.localizedDescription, false, false) }
         do {
             var seed = try shared.unlockOrCreateSeed()
             seed.resetBytes(in: seed.startIndex..<seed.endIndex)
-            return nil
+            return (nil, false, false)
         } catch {
-            return "MsgAT requires Secure Enclave hardware protection to create or unlock an identity. No software fallback is allowed. Existing identity data has not been replaced.\n\n\(error.localizedDescription)"
+            return (error.localizedDescription, IdentityLifecycle.canDiscardUnreadableIdentity, true)
         }
     }()
 
@@ -38,6 +46,12 @@ public final class KeychainManager: ObservableObject {
     public func getOrCreateSeed() -> Data {
         do { return try unlockOrCreateSeed() }
         catch { preconditionFailure("Unable to unlock this device's MsgAT identity: \(error.localizedDescription)") }
+    }
+
+    func withRootSeed<T>(_ operation: (Data) throws -> T) throws -> T {
+        var seed = try unlockOrCreateSeed()
+        defer { seed.resetBytes(in: seed.startIndex..<seed.endIndex) }
+        return try operation(seed)
     }
 
     private func unlockOrCreateSeed() throws -> Data {
@@ -72,8 +86,13 @@ public final class KeychainManager: ObservableObject {
         guard !defaults.bool(forKey: "identity_initialized_v2"), !existingVault else {
             throw identityFailure("The identity seed is missing. Refusing to silently replace the identity.")
         }
-        let seedData = randomData(count: 32)
-        try writeKeychainData(data: sealIdentitySeed(seedData), account: seedAccount)
+        var seedData = try randomData(count: 32)
+        do {
+            try writeKeychainData(data: sealIdentitySeed(seedData), account: seedAccount)
+        } catch {
+            seedData.resetBytes(in: seedData.startIndex..<seedData.endIndex)
+            throw error
+        }
         defaults.set(true, forKey: "identity_hardware_wrapped_v2")
         defaults.set(true, forKey: "identity_initialized_v2")
         return seedData
@@ -104,24 +123,26 @@ public final class KeychainManager: ObservableObject {
 
     // MARK: - Database Passphrase
 
-    public func getOrCreateDatabasePassphrase() -> Data {
+    func getOrCreateDatabasePassphrase() throws -> Data {
         identityLock.lock()
         defer { identityLock.unlock() }
-        do {
-            let seed = getOrCreateSeed()
-            if let existing = loadKeychainData(account: dbPassphraseAccount) {
+        return try withRootSeed { seed in
+            if let existing = try readKeychainData(account: dbPassphraseAccount) {
                 return try RootKeyHierarchy.unwrap(seed: seed, purpose: "database", envelope: existing)
             }
             let existingDatabase = RuntimePaths.applicationSupport.appendingPathComponent("msgat_v2_vault.sqlite")
             if FileManager.default.fileExists(atPath: existingDatabase.path) {
-                preconditionFailure("Database key is missing; refusing to replace the existing vault key.")
+                throw identityFailure("The database key for the existing vault is missing.")
             }
-            let keyData = randomData(count: 32)
-            let envelope = try RootKeyHierarchy.wrap(seed: seed, purpose: "database", secret: keyData)
-            saveKeychainData(data: envelope, account: dbPassphraseAccount)
-            return keyData
-        } catch {
-            preconditionFailure("Unable to unlock the root-owned MsgAT database key.")
+            var keyData = try randomData(count: 32)
+            do {
+                let envelope = try RootKeyHierarchy.wrap(seed: seed, purpose: "database", secret: keyData)
+                try writeKeychainData(data: envelope, account: dbPassphraseAccount)
+                return keyData
+            } catch {
+                keyData.resetBytes(in: keyData.startIndex..<keyData.endIndex)
+                throw error
+            }
         }
     }
 
@@ -147,12 +168,18 @@ public final class KeychainManager: ObservableObject {
         set { defaults.set(newValue, forKey: "allow_development_certificate") }
     }
 
+    private let profileLock=NSLock()
+    private var localProfile: UserProfileSnapshot?
+    var legacyNickname: String? {defaults.string(forKey:"my_nickname")}
+    var legacyAvatarPath: String? {defaults.string(forKey:"my_avatar_path")}
+    func installProfile(_ profile: UserProfileSnapshot?) {
+        profileLock.lock();localProfile=profile;profileLock.unlock()
+        if profile != nil {defaults.removeObject(forKey:"my_nickname");defaults.removeObject(forKey:"my_avatar_path")}
+    }
     public var myNickname: String? {
-        get { defaults.string(forKey: "my_nickname") }
-        set { defaults.set(newValue, forKey: "my_nickname") }
+        profileLock.lock();defer {profileLock.unlock()};return localProfile?.nickname
     }
 
-    // Optional TURN relay configuration (empty = pure P2P, ICE always prefers direct)
     public var turnServer: String? {
         get { defaults.string(forKey: "turn_server") }
         set { defaults.set(newValue, forKey: "turn_server") }
@@ -200,8 +227,7 @@ public final class KeychainManager: ObservableObject {
     }
 
     public var myAvatarPath: String? {
-        get { defaults.string(forKey: "my_avatar_path") }
-        set { defaults.set(newValue, forKey: "my_avatar_path") }
+        profileLock.lock();defer {profileLock.unlock()};return localProfile?.avatarReference
     }
 
     public var isConfigured: Bool {
@@ -210,25 +236,17 @@ public final class KeychainManager: ObservableObject {
 
     // MARK: - Burn Identity
 
-    public func burnIdentityAndGenerateNew() {
-        identityLock.lock()
-        defer { identityLock.unlock() }
-        let newSeed = randomData(count: 32)
-        do { try SecureEnclaveSeedEnvelope.destroyDeviceKey() }
-        catch { preconditionFailure("Unable to destroy the old device protection key: \(error.localizedDescription)") }
-        if loadKeychainData(account: seedAccount)?.starts(with: seedEnvelopePrefix) == true {
-            let query: [String: Any] = [kSecClass as String: kSecClassKey, kSecAttrApplicationTag as String: wrappingKeyTag]
-            let status = SecItemDelete(query as CFDictionary)
-            guard status == errSecSuccess || status == errSecItemNotFound else {
-                keychainFailure(operation: "destroy the legacy identity wrapping key", status: status)
-            }
+    func destroyIdentityProtection() throws {
+        identityLock.lock(); defer { identityLock.unlock() }
+        try SecureEnclaveSeedEnvelope.destroyDeviceKey()
+        let keyQuery: [String: Any] = [kSecClass as String:kSecClassKey,kSecAttrApplicationTag as String:wrappingKeyTag]
+        let keyStatus=SecItemDelete(keyQuery as CFDictionary)
+        guard keyStatus==errSecSuccess || keyStatus==errSecItemNotFound else { throw NSError(domain:NSOSStatusErrorDomain,code:Int(keyStatus)) }
+        for account in [seedAccount,dbPassphraseAccount,"MSGAT_DB_PASSPHRASE",turnPasswordAccount] {
+            let query: [String: Any]=[kSecClass as String:kSecClassGenericPassword,kSecAttrService as String:serviceName,kSecAttrAccount as String:account]
+            let status=SecItemDelete(query as CFDictionary)
+            guard status==errSecSuccess || status==errSecItemNotFound else { throw NSError(domain:NSOSStatusErrorDomain,code:Int(status)) }
         }
-        do { saveKeychainData(data: try sealIdentitySeed(newSeed), account: seedAccount) }
-        catch { preconditionFailure("Unable to protect the replacement identity: \(error.localizedDescription)") }
-        deleteKeychainData(account: dbPassphraseAccount)
-        deleteKeychainData(account: "MSGAT_DB_PASSPHRASE")
-        myNickname = nil
-        myAvatarPath = nil
     }
 
     // MARK: - Keychain Helper
@@ -330,11 +348,11 @@ public final class KeychainManager: ObservableObject {
         }
     }
 
-    private func randomData(count: Int) -> Data {
+    private func randomData(count: Int) throws -> Data {
         var bytes = [UInt8](repeating: 0, count: count)
         let status = SecRandomCopyBytes(kSecRandomDefault, count, &bytes)
         guard status == errSecSuccess else {
-            keychainFailure(operation: "generate secure random data", status: status)
+            throw NSError(domain: NSOSStatusErrorDomain, code: Int(status))
         }
         return Data(bytes)
     }

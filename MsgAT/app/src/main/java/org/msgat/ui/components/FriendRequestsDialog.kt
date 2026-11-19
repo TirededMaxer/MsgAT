@@ -1,106 +1,110 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 package org.msgat.ui.components
 
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.filled.Clear
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import coil.compose.rememberAsyncImagePainter
+import androidx.compose.ui.window.SecureFlagPolicy
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
+import org.msgat.R
 import org.msgat.data.db.FriendRequest
+import org.msgat.ui.theme.uiString
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-// Displays a list of pending incoming friend requests.
 fun FriendRequestsDialog(
     requests: List<FriendRequest>,
     onDismiss: () -> Unit,
-    onAccept: (String, String, String) -> Unit,
-    onDecline: (String) -> Unit
+    onAccept: suspend (String) -> Boolean,
+    onDecline: suspend (String) -> Boolean
 ) {
+    val scope = rememberCoroutineScope()
+    val pending = remember { mutableStateMapOf<String, Unit>() }
+    var failed by remember { mutableStateOf(false) }
+
+    fun decide(peer: String, accept: Boolean) {
+        if (pending.containsKey(peer)) return
+        pending[peer] = Unit
+        failed = false
+        scope.launch {
+            try {
+                if (!(if (accept) onAccept(peer) else onDecline(peer))) failed = true
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                failed = true
+            } finally {
+                pending.remove(peer)
+            }
+        }
+    }
+
     Dialog(
         onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)
+        properties = DialogProperties(usePlatformDefaultWidth = false, securePolicy = SecureFlagPolicy.SecureOn,
+            decorFitsSystemWindows = false,
+            dismissOnClickOutside = false)
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .fillMaxHeight(0.7f)
-                .background(color = Color(0xFF1E1E1E), shape = RoundedCornerShape(24.dp))
-                .padding(24.dp)
-        ) {
-            Text(
-                text = "Friend Requests",
-                color = Color.White,
-                fontSize = 20.sp,
-                fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
-
-            if (requests.isEmpty()) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("No pending requests.", color = Color.Gray)
-                }
-            } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
-                    items(requests) { req ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 8.dp)
-                                .background(Color(0xFF2C2C2C), RoundedCornerShape(12.dp))
-                                .padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (req.avatarPath.isNotEmpty()) {
-                                androidx.compose.foundation.Image(
-                                    painter = rememberAsyncImagePainter(req.avatarPath),
-                                    contentDescription = null,
-                                    contentScale = ContentScale.Crop,
-                                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(12.dp))
-                                )
-                            } else {
-                                Box(
-                                    modifier = Modifier.size(48.dp).background(Color.Gray, RoundedCornerShape(12.dp)),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(req.nickname.take(1).uppercase(), color = Color.White, fontSize = 20.sp)
+        Surface(Modifier.fillMaxSize()) {
+            Column(Modifier.safeDrawingPadding()) {
+                TopAppBar(
+                    title = { Text(uiString(R.string.ui_friend_requests)) },
+                    navigationIcon = {
+                        IconButton(onClick = onDismiss) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowBack, uiString(R.string.ui_close))
+                        }
+                    },
+                    windowInsets = WindowInsets(0, 0, 0, 0)
+                )
+                if (failed) Text(uiString(R.string.ui_contact_action_failed), color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp))
+                HorizontalDivider()
+                if (requests.isEmpty()) {
+                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Text(uiString(R.string.ui_contact_no_requests), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else {
+                    LazyColumn(Modifier.fillMaxSize()) {
+                        items(requests, key = { it.senderUuid }) { request ->
+                            val busy = pending.containsKey(request.senderUuid)
+                            ListItem(
+                                headlineContent = { Text(request.nickname, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                supportingContent = { Text(request.senderUuid, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                leadingContent = { ContactAvatar(request.avatarPath, request.nickname, 46) },
+                                trailingContent = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        if (busy) {
+                                            Box(Modifier.size(width = 96.dp, height = 48.dp), contentAlignment = Alignment.Center) {
+                                                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                                            }
+                                        } else {
+                                            IconButton(onClick = { decide(request.senderUuid, true) }) {
+                                                Icon(Icons.Default.Check, uiString(R.string.ui_contact_accept), tint = MaterialTheme.colorScheme.primary)
+                                            }
+                                            IconButton(onClick = { decide(request.senderUuid, false) }) {
+                                                Icon(Icons.Default.Close, uiString(R.string.ui_contact_decline), tint = MaterialTheme.colorScheme.error)
+                                            }
+                                        }
+                                    }
                                 }
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(req.nickname, color = Color.White, fontSize = 16.sp, fontWeight = androidx.compose.ui.text.font.FontWeight.Medium)
-                                Text("UUID: ${req.senderUuid.take(8)}...", color = Color.Gray, fontSize = 12.sp)
-                            }
-
-                            IconButton(onClick = { onAccept(req.senderUuid, req.nickname, req.avatarPath) }) {
-                                Icon(Icons.Default.Check, contentDescription = "Accept", tint = Color(0xFF00FF00))
-                            }
-                            IconButton(onClick = { onDecline(req.senderUuid) }) {
-                                Icon(Icons.Default.Clear, contentDescription = "Decline", tint = Color.Red)
-                            }
+                            )
+                            HorizontalDivider(Modifier.padding(start = 76.dp))
                         }
                     }
                 }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                TextButton(onClick = onDismiss) { Text("Close", color = Color.Gray) }
             }
         }
     }

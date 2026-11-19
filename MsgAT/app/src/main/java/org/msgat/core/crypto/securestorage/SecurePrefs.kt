@@ -11,37 +11,13 @@ import java.security.MessageDigest
 import org.msgat.core.crypto.RootKeyHierarchy
 import kotlin.collections.take
 
+internal data class AttachmentExportLocation(val uri: String, val name: String)
+
 class SecurePrefs(private val context: Context) {
     companion object {
         private val identityLock = Any()
         private const val preferencesName = "MSGAT_SECURE_PREFS"
-        private const val resetMarkerName = "identity.reset.pending"
-
-        /** Only an explicit Reset Identity writes this marker. Resume its erasure
-         * after a crash before allowing any new identity to be created. */
-        @SuppressLint("ApplySharedPref")
-        private fun finishPendingReset(context: Context) {
-            val pending = java.io.File(context.noBackupFilesDir, resetMarkerName)
-            if (!pending.exists()) return
-            org.msgat.data.db.AppDatabase.closeForIdentityReset()
-            for (name in listOf("msgat_vault.db", org.msgat.data.db.AppDatabase.DATABASE_NAME)) {
-                context.deleteDatabase(name)
-                check(!context.getDatabasePath(name).exists()) { "Cannot remove the old identity database" }
-            }
-            // Clear encrypted values AND the old encrypted Tink keysets. Deleting
-            // the nonexportable Keystore key makes copied old vault files unusable.
-            check(context.getSharedPreferences(preferencesName, Context.MODE_PRIVATE).edit().clear().commit()) {
-                "Cannot clear the old identity vault"
-            }
-            val store = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-            store.deleteEntry(MasterKey.DEFAULT_MASTER_KEY_ALIAS)
-            val initialized = java.io.File(context.noBackupFilesDir, "identity.initialized")
-            check(!initialized.exists() || initialized.delete()) { "Cannot clear the old identity marker" }
-            check(pending.delete()) { "Cannot complete the identity reset" }
-        }
     }
-
-    init { synchronized(identityLock) { finishPendingReset(context) } }
 
     private val privateKey = "PRIVATE_KEY"
 
@@ -110,15 +86,38 @@ class SecurePrefs(private val context: Context) {
         get() = sharedPreferences.getString("server_certificate_sha256", null)
         set(value) = sharedPreferences.edit { putString("server_certificate_sha256", value) }
 
+    internal var attachmentExportFolder: AttachmentExportLocation?
+        get() = sharedPreferences.getString("attachment_export_folder", null)?.let { uri ->
+            AttachmentExportLocation(uri, sharedPreferences.getString("attachment_export_folder_name", "").orEmpty())
+        }
+        set(value) = sharedPreferences.edit {
+            putString("attachment_export_folder", value?.uri)
+            putString("attachment_export_folder_name", value?.name)
+        }
+
     var allowDevelopmentCertificate: Boolean
         get() = sharedPreferences.getBoolean("allow_development_certificate", false)
         set(value) = sharedPreferences.edit { putBoolean("allow_development_certificate", value) }
 
-    var myNickname: String?
-        get() = sharedPreferences.getString("my_nickname", null)
-        set(value) = sharedPreferences.edit { putString("my_nickname", value) }
+    internal fun readPushSubscription(): String? = sharedPreferences.getString("android_push_v2", null)
 
-    // Optional TURN relay configuration (empty = pure P2P, ICE always prefers direct)
+    internal var persistentReceptionEnabled: Boolean
+        get() = sharedPreferences.getBoolean("persistent_reception_enabled", true)
+        set(value) = sharedPreferences.edit { putBoolean("persistent_reception_enabled", value) }
+
+    internal fun writePushSubscription(value: String?) {
+        check(sharedPreferences.edit().putString("android_push_v2", value).commit()) { "Cannot save push registration" }
+    }
+
+    @Volatile private var localProfile: org.msgat.data.db.UserProfileSnapshot?=null
+    internal val legacyNickname: String? get()=sharedPreferences.getString("my_nickname",null)
+    internal val legacyAvatarPath: String? get()=sharedPreferences.getString("my_avatar_path",null)
+    internal fun installProfile(profile: org.msgat.data.db.UserProfileSnapshot?) {
+        localProfile=profile
+        if(profile!=null)sharedPreferences.edit {remove("my_nickname");remove("my_avatar_path")}
+    }
+    val myNickname: String? get()=localProfile?.nickname
+
     var turnServer: String?
         get() = sharedPreferences.getString("turn_server", null)
         set(value) = sharedPreferences.edit { putString("turn_server", value) }
@@ -139,31 +138,7 @@ class SecurePrefs(private val context: Context) {
         get() = sharedPreferences.getBoolean("turn_use_tls", false)
         set(value) = sharedPreferences.edit { putBoolean("turn_use_tls", value) }
 
-    var myAvatarPath: String?
-        get() = sharedPreferences.getString("my_avatar_path", null)
-        set(value) = sharedPreferences.edit { putString("my_avatar_path", value) }
-
-    fun profilePayload(): ByteArray {
-        val json = org.json.JSONObject().apply {
-            put("uuid", myUuid)
-            put("nickname", myNickname ?: "Unknown")
-            put("avatarPath", "")
-            put("avatarData", "")
-        }
-        try {
-        myAvatarPath?.takeIf { it.isNotEmpty() }?.let { path ->
-            val uri = if (path.startsWith("/")) android.net.Uri.fromFile(java.io.File(path)) else android.net.Uri.parse(path)
-            context.contentResolver.openInputStream(uri)?.use { stream ->
-                val bytes = stream.readBytes()
-                require(bytes.size <= 180000) { "Avatar exceeds the profile packet limit" }
-                json.put("avatarData", Base64.encodeToString(bytes, Base64.NO_WRAP))
-            }
-        }
-        } catch (error: Exception) {
-            android.util.Log.w("MsgAT", "Avatar unavailable; publishing remaining profile", error)
-        }
-        return json.toString().toByteArray(Charsets.UTF_8)
-    }
+    val myAvatarPath: String? get()=localProfile?.avatarReference
 
     // Checks if the required server settings and local identity have been established.
     fun isConfigured(): Boolean = myUuid.isNotEmpty() && !serverIp.isNullOrEmpty() && serverPort in 1..65535
@@ -212,31 +187,7 @@ class SecurePrefs(private val context: Context) {
         return try { operation(seed) } finally { seed.fill(0) }
     }
 
-    // Irreversibly deletes the current identity and generates a fresh cryptographic keypair.
-    @SuppressLint("ApplySharedPref")
-    fun burnIdentityAndGenerateNew() = synchronized(identityLock) {
-        val retained = sharedPreferences.all.filterKeys { it in setOf(
-            "server_ip", "server_port", "server_certificate_sha256", "allow_development_certificate",
-            "turn_server", "turn_port", "turn_username", "turn_password", "turn_use_tls"
-        ) }
-        val marker = android.util.AtomicFile(java.io.File(context.noBackupFilesDir, resetMarkerName))
-        val output = marker.startWrite()
-        try { output.write(byteArrayOf(1)); marker.finishWrite(output) }
-        catch (error: Exception) { marker.failWrite(output); throw error }
-        finishPendingReset(context)
 
-        val replacement = SecurePrefs(context)
-        val editor = replacement.sharedPreferences.edit()
-        for ((name, value) in retained) {
-            when (value) {
-                is String -> editor.putString(name, value)
-                is Int -> editor.putInt(name, value)
-                is Boolean -> editor.putBoolean(name, value)
-            }
-        }
-        check(editor.commit()) { "Cannot persist new identity settings" }
-        replacement.getSeed().fill(0)
-    }
 
     @Synchronized
     fun getDatabasePassphrase(): ByteArray {

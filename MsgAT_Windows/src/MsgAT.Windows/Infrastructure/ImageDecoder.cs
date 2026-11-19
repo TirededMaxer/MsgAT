@@ -10,6 +10,12 @@ public static class ImageDecoder
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(maximumDimension, 1);
         using var input = File.OpenRead(path);
+        return Load(input,maximumDimension);
+    }
+
+    public static BitmapSource Load(Stream input,int maximumDimension=4096)
+    {
+        ArgumentOutOfRangeException.ThrowIfLessThan(maximumDimension,1);
         Span<byte> header = stackalloc byte[12];
         var headerSize = input.Read(header);
         input.Position = 0;
@@ -17,12 +23,18 @@ public static class ImageDecoder
         if (!isWebP)
         {
             var metadata = BitmapDecoder.Create(input, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None).Frames[0];
+            if(metadata.PixelWidth<1 || metadata.PixelHeight<1 || (long)metadata.PixelWidth*metadata.PixelHeight>64L*1024*1024)
+                throw new InvalidDataException("Image dimensions exceed the decoding limit.");
             var ratio = Math.Min(1d, (double)maximumDimension / Math.Max(metadata.PixelWidth, metadata.PixelHeight));
             input.Position = 0;
             var image = new BitmapImage();
             image.BeginInit();
             image.CacheOption = BitmapCacheOption.OnLoad;
-            if (ratio < 1) image.DecodePixelWidth = Math.Max(1, (int)(metadata.PixelWidth * ratio));
+            if(ratio<1)
+            {
+                if(metadata.PixelWidth>=metadata.PixelHeight)image.DecodePixelWidth=Math.Max(1,(int)(metadata.PixelWidth*ratio));
+                else image.DecodePixelHeight=Math.Max(1,(int)(metadata.PixelHeight*ratio));
+            }
             image.StreamSource = input;
             image.EndInit();
             image.Freeze();
@@ -31,7 +43,7 @@ public static class ImageDecoder
 
         using var codec = SKCodec.Create(input) ?? throw new InvalidDataException("Image could not be decoded.");
         var longestSide = Math.Max(codec.Info.Width, codec.Info.Height);
-        if (longestSide < 1) throw new InvalidDataException("Image has invalid dimensions.");
+        if (longestSide < 1 || (long)codec.Info.Width*codec.Info.Height>64L*1024*1024) throw new InvalidDataException("Image dimensions exceed the decoding limit.");
         var dimensions = codec.GetScaledDimensions(Math.Min(1f, (float)maximumDimension / longestSide));
         var info = new SKImageInfo(dimensions.Width, dimensions.Height, SKColorType.Bgra8888, SKAlphaType.Premul);
         using var decoded = SKBitmap.Decode(codec, info) ?? throw new InvalidDataException("Image could not be decoded.");

@@ -11,6 +11,11 @@ namespace MsgAT.Windows.Core.Crypto;
 [SupportedOSPlatform("windows")]
 public static partial class SecurityCore
 {
+    public static string MessageSummary(string text,int limit=240)
+    {
+        try{return Call(new{operation="summarize_message_text",text=text,limit=limit}).GetProperty("text").GetString()??"Message";}
+        catch(Exception error) when(error is InvalidOperationException or JsonException or KeyNotFoundException){return "Message";}
+    }
     private const string LibraryName = "msgat_security_core";
 
     [StructLayout(LayoutKind.Sequential)]

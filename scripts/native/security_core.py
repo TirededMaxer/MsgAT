@@ -107,6 +107,13 @@ def main():
         destination = root / 'MsgAT_Windows/NativeSecurity/win-x64'
         destination.mkdir(parents=True, exist_ok=True)
         shutil.copy2(output / 'msgat_security_core.dll', destination / 'msgat_security_core.dll')
+    if args.target == 'x86_64-pc-windows-gnu':
+        # The local reconstruction may cross-build the same C ABI from macOS.
+        # Hosted Windows packages continue to use the MSVC target above.
+        output = core / 'target' / args.target / ('release' if args.release else 'debug')
+        destination = root / 'MsgAT_Windows/NativeSecurity/win-x64'
+        destination.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(output / 'msgat_security_core.dll', destination / 'msgat_security_core.dll')
     return 0
 
 

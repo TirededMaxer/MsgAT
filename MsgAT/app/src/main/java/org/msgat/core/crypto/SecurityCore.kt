@@ -11,6 +11,9 @@ object SecurityCore {
     }
 
     fun requireAvailable() { check(abiVersion() == 2) { "The native security component has an incompatible version" } }
+    fun messageSummary(text:String,limit:Int=240):String=try {
+        call(JSONObject().put("operation","summarize_message_text").put("text",text).put("limit",limit)).getString("text")
+    }catch(_:Exception){"Message"}
 
     fun call(request: JSONObject): JSONObject {
         requireAvailable()

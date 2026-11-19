@@ -17,14 +17,22 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     @Published public var connectionState: SyncState = .disconnected
 
     private var connection: NWConnection?
+    private var generation: UInt64 = 0
+    private var endpoint: RelayEndpoint?
     private var isManualDisconnect = false
+    private var stopping = false
     private var retryAttempt = 0
     private var receiveBuffer = Data()
+    private var authentication: RelayAuthentication?
+    private var authenticationDeadline: DispatchWorkItem?
+    private static let initialSyncTimeout: UInt64 = 40_000_000_000
+    private var initialSyncProgressAt: UInt64?
 
     private var heartbeatTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
+    private var pathMonitor: NWPathMonitor?
 
-    public var onPacketReceived: ((GhostPacket) -> Void)?
+    public var onPacketReceived: ((GhostPacket, UInt64) -> Void)?
 
     private let queue = DispatchQueue(label: "org.msgat.nwclient", qos: .userInitiated)
 
@@ -50,51 +58,41 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     public func connect() { onQueue { connectOnQueue() } }
 
     private func connectOnQueue() {
-        guard KeychainManager.shared.isConfigured else { return }
+        guard !stopping, KeychainManager.shared.isConfigured else { return }
         guard connection == nil else { return }
 
         isManualDisconnect = false
-        let ip = KeychainManager.shared.serverIp!
-        guard let port = UInt16(exactly: KeychainManager.shared.serverPort), port > 0 else { return }
-
-        let tlsOptions = NWProtocolTLS.Options()
-        let pin = (KeychainManager.shared.serverCertificateSha256 ?? "")
-            .replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "").lowercased()
-        if !pin.isEmpty {
-            guard pin.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return }
-            sec_protocol_options_set_verify_block(tlsOptions.securityProtocolOptions, { (_, trust, completion) in
-                let secTrust = sec_trust_copy_ref(trust).takeRetainedValue()
-                guard let chain = SecTrustCopyCertificateChain(secTrust) as? [SecCertificate], let certificate = chain.first else { completion(false); return }
-                let actual = SHA256.hash(data: SecCertificateCopyData(certificate) as Data)
-                    .map { String(format: "%02x", $0) }.joined()
-                completion(actual == pin)
-            }, queue)
-        } else if KeychainManager.shared.allowDevelopmentCertificate {
-            sec_protocol_options_set_verify_block(tlsOptions.securityProtocolOptions,
-                { (_, _, completion) in completion(true) }, queue)
-        }
-
-        let tcpOptions = NWProtocolTCP.Options()
-        tcpOptions.enableKeepalive = true
-        tcpOptions.keepaliveIdle = 60
-
-        let params = NWParameters(tls: tlsOptions, tcp: tcpOptions)
-        params.allowFastOpen = true
-
-        let host = NWEndpoint.Host(ip)
-        let portEndpoint = NWEndpoint.Port(rawValue: port)!
-
-        let conn = NWConnection(host: host, port: portEndpoint, using: params)
+        guard let endpoint = RelayEndpoint.configured() else { return }
+        monitorNetworkPath()
+        generation &+= 1
+        self.endpoint = endpoint
+        guard let parameters = endpoint.parameters(queue: queue) else { return }
+        let conn = NWConnection(host: NWEndpoint.Host(endpoint.host), port: NWEndpoint.Port(rawValue: endpoint.port)!, using: parameters)
         self.connection = conn
 
-        conn.stateUpdateHandler = { [weak self] state in
-            guard let self = self, self.connection === conn else { return }
+        conn.viabilityUpdateHandler = { [weak self, weak conn] viable in
+            guard !viable, let self, let conn, self.connection === conn, conn.state == .ready else { return }
+            self.handleDisconnection()
+        }
+        conn.stateUpdateHandler = { [weak self, weak conn] state in
+            guard let self, let conn, self.connection === conn else { return }
             switch state {
             case .ready:
+                guard let metadata = conn.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata,
+                      let authentication = RelayAuthentication(mailbox: KeychainManager.shared.myMailboxId,
+                          metadata: metadata.securityProtocolMetadata) else {
+                    self.handleDisconnection(); return
+                }
+                self.authentication = authentication
+                let deadline = DispatchWorkItem { [weak self, weak conn] in
+                    guard let self, let conn, self.connection === conn,
+                          self.authentication?.authenticated != true else { return }
+                    self.handleDisconnection()
+                }
+                self.authenticationDeadline = deadline
+                self.queue.asyncAfter(deadline: .now() + 30, execute: deadline)
                 DispatchQueue.main.async { self.connectionState = .syncing }
-                self.resetBackoff()
                 self.startReceiving()
-                self.startHeartbeat()
                 self.sendAuthRequest()
             case .failed(let error):
                 print("[NWClient] Connection failed: \(error)")
@@ -114,19 +112,52 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
         conn.start(queue: queue)
     }
 
-    public func disconnect() { onQueue { disconnectOnQueue() } }
+    private func monitorNetworkPath() {
+        guard pathMonitor == nil else { return }
+        let monitor = NWPathMonitor()
+        pathMonitor = monitor
+        monitor.pathUpdateHandler = { [weak self, weak monitor] path in
+            guard let self, let monitor, self.pathMonitor === monitor, path.status == .satisfied,
+                  !self.isManualDisconnect, self.connection == nil, let retry = self.reconnectTask else { return }
+            retry.cancel()
+            self.reconnectTask = nil
+            self.retryAttempt = 0
+            self.connectOnQueue()
+        }
+        monitor.start(queue: queue)
+    }
+
+    public func disconnect() { onQueue { if !stopping { disconnectOnQueue() } } }
+
+    func stopForTermination() {
+        onQueue {
+            guard !stopping else { return }
+            stopping = true
+            disconnectOnQueue()
+            onPacketReceived = nil
+        }
+    }
 
     private func disconnectOnQueue() {
-        SecureMessaging.shared.disconnected()
+        generation &+= 1
+        endpoint = nil
+        SecureMessaging.shared.disconnected(epoch: generation)
         isManualDisconnect = true
         heartbeatTask?.cancel()
         heartbeatTask = nil
         reconnectTask?.cancel()
         reconnectTask = nil
+        pathMonitor?.cancel()
+        pathMonitor = nil
+        authenticationDeadline?.cancel()
+        authenticationDeadline = nil
+        authentication = nil
+        initialSyncProgressAt = nil
 
         let previous = connection
         connection = nil
         previous?.stateUpdateHandler = nil
+        previous?.viabilityUpdateHandler = nil
         previous?.cancel()
         receiveBuffer.removeAll()
 
@@ -136,13 +167,20 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     }
 
     private func handleDisconnection() {
-        SecureMessaging.shared.disconnected()
+        generation &+= 1
+        endpoint = nil
+        SecureMessaging.shared.disconnected(epoch: generation)
+        authenticationDeadline?.cancel()
+        authenticationDeadline = nil
+        authentication = nil
+        initialSyncProgressAt = nil
         heartbeatTask?.cancel()
         heartbeatTask = nil
 
         let previous = connection
         connection = nil
         previous?.stateUpdateHandler = nil
+        previous?.viabilityUpdateHandler = nil
         previous?.cancel()
         receiveBuffer.removeAll()
 
@@ -161,44 +199,53 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
             try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
             guard !Task.isCancelled else { return }
             self.onQueue {
-                if !self.isManualDisconnect && self.connection == nil { self.connectOnQueue() }
-            }
-        }
-    }
-
-    private var deletionReply: (nonce: Data, completion: (Bool) -> Void)?
-
-    public func deleteAccount() async -> Bool {
-        await withCheckedContinuation { continuation in
-            queue.async {
-                guard self.deletionReply == nil else { continuation.resume(returning: false); return }
-                var bytes = [UInt8](repeating: 0, count: 16)
-                guard SecRandomCopyBytes(kSecRandomDefault, 16, &bytes) == errSecSuccess else {
-                    continuation.resume(returning: false); return
-                }
-                let nonce = Data(bytes)
-                self.deletionReply = (nonce, { continuation.resume(returning: $0) })
-                let packet = GhostPacket(type: GhostPacket.typeDeleteAccount,
-                    targetMailboxId: KeychainManager.shared.myMailboxId, nonceOrIv: nonce,
-                    encryptedData: Data(), authTag: Data(count: 16))
-                if !self.sendPacket(packet) { self.finishDeletion(false); return }
-                self.queue.asyncAfter(deadline: .now() + 10) {
-                    if self.deletionReply?.nonce == nonce { self.finishDeletion(false) }
+                if !self.isManualDisconnect && self.connection == nil {
+                    self.reconnectTask = nil
+                    self.connectOnQueue()
                 }
             }
         }
     }
 
-    private func finishDeletion(_ result: Bool) {
-        let pending = deletionReply
-        deletionReply = nil
-        pending?.completion(result)
-    }
-
-    // MARK: - Sending
-
-    @discardableResult
     public func sendPacket(_ packet: GhostPacket) -> Bool { onQueue { sendOnQueue(packet) } }
+
+    func sendPacket(_ packet: GhostPacket, epoch: UInt64) -> Bool {
+        onQueue { generation == epoch && authentication?.authenticated == true && sendOnQueue(packet) }
+    }
+    var connectionSnapshot: (epoch: UInt64, endpoint: RelayEndpoint?) {
+        onQueue { (generation, authentication?.authenticated == true ? endpoint : nil) }
+    }
+    func isCurrent(_ epoch: UInt64) -> Bool { onQueue { generation == epoch } }
+
+    func reportInitialSyncProgress(epoch: UInt64) {
+        onQueue {
+            guard generation == epoch, initialSyncProgressAt != nil else { return }
+            initialSyncProgressAt = DispatchTime.now().uptimeNanoseconds
+        }
+    }
+
+    func completeInitialSync(epoch: UInt64) {
+        onQueue {
+            guard generation == epoch, initialSyncProgressAt != nil else { return }
+            initialSyncProgressAt = nil
+            resetBackoff()
+            DispatchQueue.main.async {
+                if self.isCurrent(epoch) { self.connectionState = .synced }
+            }
+        }
+    }
+
+    private func watchInitialSync(epoch: UInt64, remaining: UInt64) {
+        queue.asyncAfter(deadline: .now() + .nanoseconds(Int(remaining))) { [weak self] in
+            guard let self, self.generation == epoch, let progress = self.initialSyncProgressAt else { return }
+            let elapsed = DispatchTime.now().uptimeNanoseconds - progress
+            if elapsed >= Self.initialSyncTimeout {
+                self.handleDisconnection()
+            } else {
+                self.watchInitialSync(epoch: epoch, remaining: Self.initialSyncTimeout - elapsed)
+            }
+        }
+    }
 
     private func sendOnQueue(_ packet: GhostPacket) -> Bool {
         guard let conn = connection, conn.state == .ready else {
@@ -233,9 +280,31 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
                 while !self.receiveBuffer.isEmpty {
                     let previousCount = self.receiveBuffer.count
                     if let packet = GhostPacketCodec.decode(from: &self.receiveBuffer) {
-                        if packet.type == GhostPacket.typeDeleteAccount, packet.nonceOrIv == self.deletionReply?.nonce {
-                            self.finishDeletion(true)
-                        } else { self.onPacketReceived?(packet) }
+                        guard let authentication = self.authentication else { self.handleDisconnection(); return }
+                        if packet.type == GhostPacket.typeAuthChal {
+                            guard let transcript = authentication.transcript(packet),
+                                  let (publicKey, signature) = try? CryptoManager.signChallenge(
+                                    privateKey: KeychainManager.shared.ed25519PrivateKey, nonce: transcript) else {
+                                self.handleDisconnection(); return
+                            }
+                            guard self.sendOnQueue(GhostPacket(type: GhostPacket.typeAuthResp,
+                                targetMailboxId: KeychainManager.shared.myMailboxId, nonceOrIv: packet.nonceOrIv,
+                                encryptedData: publicKey + signature, authTag: Data(count: 16))) else {
+                                self.handleDisconnection(); return
+                            }
+                            continue
+                        }
+                        if packet.type == GhostPacket.typeOfflineEnd {
+                            guard authentication.complete(packet), let nonce = packet.nonceOrIv,
+                                  nonce.count == 16, nonce.contains(where: { $0 != 0 }) else { self.handleDisconnection(); return }
+                            self.authenticationDeadline?.cancel()
+                            self.authenticationDeadline = nil
+                            self.initialSyncProgressAt = DispatchTime.now().uptimeNanoseconds
+                            self.watchInitialSync(epoch: self.generation, remaining: Self.initialSyncTimeout)
+                            self.startHeartbeat()
+                        }
+                        guard authentication.authenticated else { self.handleDisconnection(); return }
+                        self.onPacketReceived?(packet, self.generation)
                     } else {
                         if self.receiveBuffer.count != previousCount { self.handleDisconnection(); return }
                         break
@@ -257,15 +326,9 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
     // MARK: - Auth & Heartbeat
 
     private func sendAuthRequest() {
-        let mailboxId = KeychainManager.shared.myMailboxId
-        let packet = GhostPacket(
-            type: GhostPacket.typeAuthReq,
-            targetMailboxId: mailboxId,
-            nonceOrIv: Data(count: 16),
-            encryptedData: Data(),
-            authTag: Data(count: 16)
-        )
-        sendPacket(packet)
+        guard let authentication, sendOnQueue(authentication.request()) else {
+            handleDisconnection(); return
+        }
     }
 
     private func startHeartbeat() {
@@ -281,8 +344,109 @@ public final class NWClient: ObservableObject, @unchecked Sendable {
                     encryptedData: Data(),
                     authTag: Data(count: 16)
                 )
-                self.sendPacket(heartbeatPacket)
+                _ = self.sendPacket(heartbeatPacket)
             }
         }
+    }
+}
+
+/// Queue-confined and scoped to a single established TLS connection.
+final class RelayAuthentication {
+    private let mailbox: String
+    private let mailboxBytes: Data
+    private let clientNonce: Data
+    private let endpoint: Data
+    private let transfer: Bool
+    private var challenged = false
+    private(set) var authenticated = false
+
+    init?(mailbox: String, metadata: sec_protocol_metadata_t, transfer: Bool = false) {
+        guard mailbox.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
+        var leaf: Data?
+        let available = sec_protocol_metadata_access_peer_certificate_chain(metadata) { certificate in
+            if leaf == nil {
+                let value = sec_certificate_copy_ref(certificate).takeRetainedValue()
+                leaf = Data(SHA256.hash(data: SecCertificateCopyData(value) as Data))
+            }
+        }
+        guard available, let leaf else { return nil }
+        var random = [UInt8](repeating: 0, count: 16)
+        guard SecRandomCopyBytes(kSecRandomDefault, random.count, &random) == errSecSuccess else { return nil }
+        self.mailbox = mailbox
+        self.mailboxBytes = Data(stride(from: 0, to: 64, by: 2).map { offset in
+            let start = mailbox.index(mailbox.startIndex, offsetBy: offset)
+            return UInt8(mailbox[start..<mailbox.index(start, offsetBy: 2)], radix: 16)!
+        })
+        self.clientNonce = Data(random)
+        self.endpoint = leaf
+        self.transfer = transfer
+    }
+
+    func request() -> GhostPacket {
+        GhostPacket(type: GhostPacket.typeAuthReq, targetMailboxId: mailbox, nonceOrIv: clientNonce,
+            encryptedData: Data((transfer ? "MTB2" : "MTA2").utf8), authTag: Data(count: 16))
+    }
+
+    func transcript(_ packet: GhostPacket) -> Data? {
+        guard !challenged, !authenticated, packet.targetMailboxId == mailbox,
+              let nonce = packet.nonceOrIv, nonce.count == 16,
+              let body = packet.encryptedData, body.count == 50, body.first == 2, body[1] == (transfer ? 1 : 0),
+              body.subdata(in: 2..<18) == clientNonce, body.subdata(in: 18..<50) == endpoint else { return nil }
+        challenged = true
+        var result = Data("MsgAT/v2/relay-auth\0".utf8)
+        result.append(2)
+        result.append(transfer ? 1 : 0)
+        result.append(mailboxBytes)
+        result.append(clientNonce)
+        result.append(nonce)
+        result.append(endpoint)
+        return result
+    }
+
+    func complete(_ packet: GhostPacket) -> Bool {
+        guard challenged, !authenticated, packet.type == GhostPacket.typeOfflineEnd,
+              packet.targetMailboxId == mailbox else { return false }
+        authenticated = true
+        return true
+    }
+}
+
+
+/// Immutable snapshot shared by control and bulk sockets. A settings edit cannot
+/// silently route an existing object lease to a different server.
+struct RelayEndpoint: Sendable {
+    let host: String
+    let port: UInt16
+    let certificatePin: String
+    let allowDevelopmentCertificate: Bool
+
+    static func configured() -> RelayEndpoint? {
+        guard let host = KeychainManager.shared.serverIp, !host.isEmpty,
+              let port = UInt16(exactly: KeychainManager.shared.serverPort), port > 0 else { return nil }
+        let pin = (KeychainManager.shared.serverCertificateSha256 ?? "")
+            .replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "").lowercased()
+        guard pin.isEmpty || pin.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return nil }
+        return RelayEndpoint(host: host, port: port, certificatePin: pin,
+            allowDevelopmentCertificate: KeychainManager.shared.allowDevelopmentCertificate)
+    }
+
+    func parameters(queue: DispatchQueue) -> NWParameters? {
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_min_tls_protocol_version(tls.securityProtocolOptions, .TLSv12)
+        sec_protocol_options_set_max_tls_protocol_version(tls.securityProtocolOptions, .TLSv13)
+        if !certificatePin.isEmpty {
+            let pin = certificatePin
+            sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { (_, trust, completion) in
+                let value = sec_trust_copy_ref(trust).takeRetainedValue()
+                guard let chain = SecTrustCopyCertificateChain(value) as? [SecCertificate], let leaf = chain.first else { completion(false); return }
+                let actual = SHA256.hash(data: SecCertificateCopyData(leaf) as Data).map { String(format: "%02x", $0) }.joined()
+                completion(actual == pin)
+            }, queue)
+        } else if allowDevelopmentCertificate {
+            sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { (_, _, completion) in completion(true) }, queue)
+        }
+        let tcp = NWProtocolTCP.Options()
+        tcp.enableKeepalive = true; tcp.keepaliveIdle = 60
+        return NWParameters(tls: tls, tcp: tcp)
     }
 }

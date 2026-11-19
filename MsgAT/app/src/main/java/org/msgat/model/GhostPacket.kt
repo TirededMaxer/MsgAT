@@ -48,5 +48,20 @@ class GhostPacket(
         const val TYPE_V2_RECEIVED: Byte = 0x47
         const val TYPE_V2_SYNC: Byte = 0x48
         const val TYPE_V2_SYNC_END: Byte = 0x49
+        const val TYPE_V2_REVOKE: Byte = 0x4A
+        const val TYPE_V2_REVOKED: Byte = 0x4B
+        const val TYPE_V2_REJECTED: Byte = 0x4C
+        const val TYPE_V2_PUSH_UPDATE: Byte = 0x4D
+        const val TYPE_V2_PUSH_RESULT: Byte = 0x4E
+        const val TYPE_V2_DEFERRED: Byte = 0x4F
+        const val TYPE_OBJECT_BEGIN: Byte = 0x50
+        const val TYPE_OBJECT_STATUS: Byte = 0x51
+        const val TYPE_OBJECT_PUT: Byte = 0x52
+        const val TYPE_OBJECT_FINISH: Byte = 0x53
+        const val TYPE_OBJECT_GET: Byte = 0x54
+        const val TYPE_OBJECT_DATA: Byte = 0x55
+        const val TYPE_OBJECT_DELETE: Byte = 0x56
+        const val TYPE_OBJECT_DELETED: Byte = 0x57
+        const val TYPE_OBJECT_ERROR: Byte = 0x58
     }
 }

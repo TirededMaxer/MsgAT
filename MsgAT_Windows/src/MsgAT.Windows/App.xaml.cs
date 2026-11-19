@@ -3,6 +3,7 @@ using System.Diagnostics.CodeAnalysis;
 using System.Drawing;
 using System.Threading;
 using System.Windows;
+using MsgAT.Windows.Core.Network;
 using Forms = System.Windows.Forms;
 
 namespace MsgAT.Windows;
@@ -11,7 +12,8 @@ namespace MsgAT.Windows;
 public partial class App : System.Windows.Application
 {
     private Mutex? _singleInstance;
-    private Forms.NotifyIcon? _trayIcon;
+    private bool _ownsSingleInstance;
+    private Infrastructure.NativeTrayIcon? _trayIcon;
     private MainWindow? _mainWindow;
     private bool _exiting;
     private string? _restartExecutable;
@@ -21,6 +23,7 @@ public partial class App : System.Windows.Application
         System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         base.OnStartup(e);
         _singleInstance = new Mutex(initiallyOwned: true, MsgAT.Windows.Core.Storage.RuntimePaths.SingleInstanceName, out var createdNew);
+        _ownsSingleInstance = createdNew;
         if (!createdNew)
         {
             MessageBox.Show("MsgAT is already running.", "MsgAT", MessageBoxButton.OK, MessageBoxImage.Information);
@@ -30,6 +33,8 @@ public partial class App : System.Windows.Application
 
         try
         {
+            Infrastructure.AppStrings.SetLanguage(Infrastructure.AppLanguage.System);
+            Infrastructure.WindowAppearance.StartObserving();
             _mainWindow = new MainWindow();
             MainWindow = _mainWindow;
             ConfigureTray();
@@ -45,9 +50,11 @@ public partial class App : System.Windows.Application
 
     protected override void OnExit(ExitEventArgs e)
     {
+        Infrastructure.WindowAppearance.StopObserving();
         _trayIcon?.Dispose();
-        _singleInstance?.Dispose();
         base.OnExit(e);
+        if (_ownsSingleInstance) _singleInstance?.ReleaseMutex();
+        _singleInstance?.Dispose();
         if (_restartExecutable is { } executable)
         {
             try { Process.Start(new ProcessStartInfo(executable) { UseShellExecute = true }); }
@@ -55,11 +62,40 @@ public partial class App : System.Windows.Application
         }
     }
 
-    public void ShowNotification(string title, string message)
+    internal void ShowMessageNotification(NotificationRequest notification, Func<MessageAlertSettings> getSettings,
+        Func<bool> canPresent)
     {
-        if (_mainWindow?.IsActive == true) { return; }
-        _trayIcon?.ShowBalloonTip(4000, title, message, Forms.ToolTipIcon.Info);
+        var settings = getSettings();
+        bool CanNotify() => !_exiting && _mainWindow is { } window &&
+            (!window.IsActive || window.IsAppLocked) && getSettings().Enabled;
+        if (!CanNotify()) return;
+        _trayIcon?.ShowNotification(Infrastructure.AppStrings.Get(notification.Pinned ? "UiMessagePinned" : "UiNewMessage"),
+            notification.Silent || !settings.PlaySound,
+            () => CanNotify() && canPresent(),
+            () => Dispatcher.BeginInvoke(() =>
+            {
+                if (_exiting || _mainWindow is null || !getSettings().Enabled) return;
+                ShowMainWindow();
+                _mainWindow.OpenNotificationMessage(notification.SenderUuid, notification.MessageId, notification.Pinned);
+            }), peer: notification.SenderUuid);
     }
+
+    internal void ShowIncomingCallNotification(string callId, bool video, Func<bool> isStillRinging)
+    {
+        if (_exiting) return;
+        _trayIcon?.ShowNotification(Infrastructure.AppStrings.Get(video ? "UiIncomingVideoCall" : "UiIncomingVoiceCall"), true,
+            () => !_exiting && _mainWindow is { } window && (!window.IsActive || window.IsAppLocked) && isStillRinging(),
+            () => Dispatcher.BeginInvoke(() =>
+            {
+                if (_exiting || !isStillRinging()) return;
+                ShowMainWindow();
+                _mainWindow?.FocusIncomingCall(callId);
+            }), isCall: true);
+    }
+
+    internal void DismissIncomingCallNotification() => _trayIcon?.DismissCallNotification();
+    internal void DismissMessageNotifications(string? peer = null) => _trayIcon?.DismissMessageNotifications(peer);
+    internal bool HasTrayIcon => _trayIcon?.IsRegistered == true;
 
     public void RestartApplication(string executable)
     {
@@ -90,25 +126,24 @@ public partial class App : System.Windows.Application
     private void ConfigureTray()
     {
         var menu = new Forms.ContextMenuStrip();
-        menu.Items.Add("Open", null, (_, _) => Dispatcher.Invoke(ShowMainWindow));
-        menu.Items.Add("Exit", null, (_, _) => Dispatcher.Invoke(ExitApplication));
-        var executableIcon = Environment.ProcessPath is { } path ? Icon.ExtractAssociatedIcon(path) : null;
-        _trayIcon = new Forms.NotifyIcon
+        var open = menu.Items.Add(Infrastructure.AppStrings.Get("UiOpen"), null, (_, _) => Dispatcher.BeginInvoke(ShowMainWindow));
+        var exit = menu.Items.Add(Infrastructure.AppStrings.Get("UiExit"), null, (_, _) => Dispatcher.BeginInvoke(ExitApplication));
+        menu.Opening += (_, _) =>
         {
-            Icon = executableIcon ?? SystemIcons.Application,
-            Text = "MsgAT",
-            Visible = true,
-            ContextMenuStrip = menu
+            open.Text = Infrastructure.AppStrings.Get("UiOpen");
+            exit.Text = Infrastructure.AppStrings.Get("UiExit");
         };
-        _trayIcon.DoubleClick += (_, _) => Dispatcher.Invoke(ShowMainWindow);
-        _trayIcon.BalloonTipClicked += (_, _) => Dispatcher.Invoke(ShowMainWindow);
+        using var executableIcon=Environment.ProcessPath is { } path ? Icon.ExtractAssociatedIcon(path) : null;
+        _trayIcon=new Infrastructure.NativeTrayIcon(executableIcon??SystemIcons.Application,menu){Visible=true};
+        _trayIcon.Activated+=(_,_)=>Dispatcher.BeginInvoke(ShowMainWindow);
     }
 
     private void ShowMainWindow()
     {
         if (_exiting || _mainWindow is null) { return; }
         _mainWindow.Show();
-        _mainWindow.WindowState = WindowState.Normal;
+        if (_mainWindow.WindowState == WindowState.Minimized)
+            _mainWindow.WindowState = WindowState.Normal;
         _mainWindow.Activate();
     }
 }

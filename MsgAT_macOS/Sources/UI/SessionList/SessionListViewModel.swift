@@ -6,9 +6,89 @@ import SwiftUI
 @MainActor
 public final class SessionListViewModel: ObservableObject {
     @Published public var conversations: [ConversationWithUnread] = []
+    @Published var folders=[ConversationFolder]()
+    @Published var folderFilter="all"
+    @Published private(set) var clock = Date()
+    struct FolderTab: Identifiable {
+        let id: String
+        let title: String
+        let unreadCount: Int
+    }
+
+    private func includes(_ row: ConversationWithUnread, in id: String, folder: ConversationFolder?) -> Bool {
+        if let folder {
+            return (folder.includeAll || row.folderIDs.split(separator: ",").contains(Substring(id))) &&
+                (folder.includeArchived || !row.archived) &&
+                (!folder.unreadOnly || row.hasUnread) &&
+                (!folder.excludeMuted || !row.muted)
+        }
+        switch id {
+        case "archive": return row.archived
+        case "unread": return !row.archived && row.hasUnread
+        default: return !row.archived
+        }
+    }
+
+    func folderTabs(all: String, unreadTitle: String, archive: String) -> [FolderTab] {
+        let unread = conversations.filter(\.hasUnread)
+        var standard = [("all", all), ("unread", unreadTitle)]
+        if folderFilter == "archive" { standard.append(("archive", archive)) }
+        return standard.map { id, title in
+            FolderTab(id: id, title: title, unreadCount: unread.filter { includes($0, in: id, folder: nil) }.count)
+        } + folders.map { folder in
+            FolderTab(id: folder.id, title: folder.name, unreadCount: unread.filter {
+                includes($0, in: folder.id, folder: folder)
+            }.count)
+        }
+    }
+
+    var hasArchivedConversations: Bool { conversations.contains { $0.archived } }
+    var archivedUnreadCount: Int { conversations.lazy.filter { $0.archived && $0.hasUnread }.count }
+
+    var customFolderID: String? { folders.first { $0.id == folderFilter }?.id }
+
+    var visibleConversations: [ConversationWithUnread] {
+        let folder = folders.first { $0.id == folderFilter }
+        let visible = conversations.filter { includes($0, in: folderFilter, folder: folder) }
+        guard let folder else { return visible }
+        return visible.map { row in
+            var displayRow = row
+            displayRow.pinOrder = row.folderPinOrders[folder.id, default: 0]
+            return displayRow
+        }.sorted { left, right in
+            if left.pinOrder != right.pinOrder { return left.pinOrder > right.pinOrder }
+            if left.activityAt != right.activityAt { return left.activityAt > right.activityAt }
+            return left.conversation.uuid < right.conversation.uuid
+        }
+    }
+
+    func conversationAction(_ peer: String, _ action: String, until: Int64? = nil, folderID: String? = nil) {
+        if action == "read" {
+            SecureMessaging.shared.markAllRead(peer)
+        } else {
+            SecureMessaging.shared.changeConversation(peer, action: action, until: until, folderID: folderID)
+        }
+    }
+    func movePin(scope: String, peer: String, target: String, before: Bool) {
+        SecureMessaging.shared.moveConversationPin(scope: scope, peer: peer, target: target, before: before) { moved in
+            if !moved { Task { @MainActor in NoticeCenter.shared.show("Pinned chats could not be reordered") } }
+        }
+    }
+
+    func saveFolder(_ folder:ConversationFolder,peers:[String])async->Bool{await withCheckedContinuation{continuation in SecureMessaging.shared.saveConversationFolder(folder,peers:peers){continuation.resume(returning:$0)}}}
+    func deleteFolder(_ id:String)async->Bool{let ok:Bool=await withCheckedContinuation{continuation in SecureMessaging.shared.deleteConversationFolder(id){continuation.resume(returning:$0)}};if ok,folderFilter==id{folderFilter="all"};return ok}
+    func moveFolder(_ id: String, targetID: String, before: Bool) async -> Bool {
+        await withCheckedContinuation { continuation in
+            SecureMessaging.shared.moveConversationFolder(id, targetID: targetID, before: before) {
+                continuation.resume(returning: $0)
+            }
+        }
+    }
+
     @Published public var friendRequests: [FriendRequest] = []
     @Published public var syncState: SyncState = .disconnected
     @Published public var resetErrorMessage: String? = nil
+    private var resettingIdentity=false
     @Published public var showIdentityDialog: Bool = false
 
     public var currentIp: String { KeychainManager.shared.serverIp ?? "" }
@@ -20,8 +100,13 @@ public final class SessionListViewModel: ObservableObject {
     public var currentTurnUsername: String { KeychainManager.shared.turnUsername ?? "" }
     public var currentTurnPassword: String { KeychainManager.shared.turnPassword ?? "" }
     public var currentTurnUseTls: Bool { KeychainManager.shared.turnUseTls }
-    public var isIdentityMissing: Bool { (KeychainManager.shared.myNickname?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) || (KeychainManager.shared.myAvatarPath?.isEmpty ?? true) }
+    public var isIdentityMissing: Bool { (KeychainManager.shared.myNickname?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true) }
 
+    private var refreshTask:Task<Void,Never>?
+    private func scheduleRefresh(){guard refreshTask==nil else{return};refreshTask=Task { @MainActor [weak self] in
+        do{try await Task.sleep(nanoseconds:16_000_000)}catch{return};guard let self else{return};self.loadData();self.refreshTask=nil
+    }}
+    deinit{refreshTask?.cancel()}
     private var cancellables = Set<AnyCancellable>()
 
     public init() {
@@ -29,30 +114,94 @@ public final class SessionListViewModel: ObservableObject {
             .receive(on: DispatchQueue.main)
             .assign(to: &$syncState)
 
+        Timer.publish(every:60,on:.main,in:.common).autoconnect().sink { [weak self] now in self?.clock = now }.store(in: &cancellables)
         loadData()
 
-        if isIdentityMissing {
-            showIdentityDialog = true
+        Task {
+            do {
+                let oldName=KeychainManager.shared.legacyNickname
+                let oldPath=KeychainManager.shared.legacyAvatarPath
+                let profile=try await EncryptedMediaWork.run {try UserProfileStore.own()}
+                KeychainManager.shared.installProfile(profile)
+                if profile==nil,let oldName {
+                    saveIdentity(nickname:oldName,avatarUrl:oldPath.map {URL(fileURLWithPath:$0)}) {saved in
+                        if saved,let oldPath {
+                            let old=URL(fileURLWithPath:oldPath).standardizedFileURL
+                            if old.deletingLastPathComponent()==MediaStorageManager.shared.mediaDirectory.standardizedFileURL,old.lastPathComponent=="avatar_self.jpg" {try? FileManager.default.removeItem(at:old)}
+                        }
+                        self.showIdentityDialog = !saved || self.isIdentityMissing
+                    }
+                } else {showIdentityDialog=isIdentityMissing}
+                objectWillChange.send()
+            } catch {NoticeCenter.shared.show("Profile could not be loaded")}
         }
 
-        // Refresh timer for database polling
         NotificationCenter.default.publisher(for: MsgDao.didChangeNotification)
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
-                self?.loadData()
+                self?.scheduleRefresh()
             }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: MsgDao.visibleMessagesReadNotification)
+            .compactMap { $0.object as? VisibleMessagesRead }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] change in self?.refreshUnreadState(peer: change.peer) }
+            .store(in: &cancellables)
+
+        NotificationCenter.default.publisher(for: MsgDao.deliveryDidChangeNotification)
+            .compactMap { $0.object as? MessageDeliveryChange }
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] change in self?.refreshReceipt(change) }
             .store(in: &cancellables)
     }
 
-    public func loadData() {
-        if let list = try? MsgDao.shared.getAllConversationsWithUnread() {
-            self.conversations = list
+    private func refreshReceipt(_ change: MessageDeliveryChange) {
+        guard let index = conversations.firstIndex(where: {
+            $0.conversation.uuid == change.peer && $0.lastID == change.messageID
+        }) else { return }
+        do {
+            guard let message = try MsgDao.shared.getMessageById(change.messageID),
+                  message.conversationUuid == change.peer, message.isMine, message.isRevoked == 0,
+                  (-1...3).contains(message.status) else { scheduleRefresh(); return }
+            if conversations[index].lastReceiptStatus != message.status {
+                conversations[index].lastReceiptStatus = message.status
+            }
+        } catch {
+            scheduleRefresh()
         }
+    }
+
+    public func loadData() {
+        if let groups = try? ConversationIndexStore.folders() {
+            if folders != groups { folders = groups }
+            if !["all", "archive", "unread"].contains(folderFilter),
+               !groups.contains(where: { $0.id == folderFilter }) { folderFilter = "all" }
+        }
+        loadConversations()
         if let reqs = try? MsgDao.shared.getAllFriendRequests() {
             self.friendRequests = reqs
         }
     }
 
+    private func loadConversations() {
+        if let list = try? MsgDao.shared.getAllConversationsWithUnread(), conversations != list {
+            conversations = list
+        }
+    }
+
+    private func refreshUnreadState(peer: String) {
+        guard let index = conversations.firstIndex(where: { $0.conversation.uuid == peer }),
+              let state = try? MsgDao.shared.unreadState(peer: peer) else {
+            scheduleRefresh()
+            return
+        }
+        var row = conversations[index]
+        row.unreadCount = state.count
+        row.firstUnreadID = state.firstID
+        row.manualUnread = state.marked
+        if row != conversations[index] { conversations[index] = row }
+    }
     public func addConversation(rawUuid: String) {
         guard syncState == .synced else { return }
         let uuid = rawUuid.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -62,99 +211,54 @@ public final class SessionListViewModel: ObservableObject {
         SecureMessaging.shared.requestContact(uuid)
     }
 
-    public func acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
-        SecureMessaging.shared.acceptContact(senderUuid, nickname: nickname, avatarPath: avatarPath)
+    public func acceptFriendRequest(senderUuid: String, completion: @escaping @Sendable (Bool) -> Void) {
+        SecureMessaging.shared.acceptContact(senderUuid, completion: completion)
     }
 
-    public func declineFriendRequest(senderUuid: String) {
-        SecureMessaging.shared.declineContact(senderUuid)
+    public func declineFriendRequest(senderUuid: String, completion: @escaping @Sendable (Bool) -> Void) {
+        SecureMessaging.shared.declineContact(senderUuid, completion: completion)
     }
 
-    public func deleteConversation(uuid: String) {
-        if let messages = try? MsgDao.shared.getMessageListByConversation(uuid) {
-            for message in messages where message.ext != "txt" {
-                MediaStorageManager.shared.deleteMediaFile(msgId: message.messageId, ext: message.ext)
+    public func deleteConversation(uuid: String) async -> Bool {
+        let oldFiles: [(id: String, ext: String)]? = try? await EncryptedMediaWork.run {
+            try MsgDao.shared.getMessageListByConversation(uuid).compactMap { message in
+                message.ext == "txt" ? nil : (id: message.messageId, ext: message.ext)
             }
         }
-        SecureMessaging.shared.deleteContact(uuid)
-    }
-
-    public func clearMessages(uuid: String) {
-        if let msgs = try? MsgDao.shared.getMessageListByConversation(uuid) {
-            for m in msgs where m.ext != "txt" {
-                MediaStorageManager.shared.deleteMediaFile(msgId: m.messageId, ext: m.ext)
+        let deleted: Bool = await withCheckedContinuation { continuation in
+            SecureMessaging.shared.deleteContact(uuid) { continuation.resume(returning: $0) }
+        }
+        if deleted, let oldFiles, !oldFiles.isEmpty {
+            try? await EncryptedMediaWork.run {
+                for file in oldFiles {
+                    MediaStorageManager.shared.deleteMediaFile(msgId: file.id, ext: file.ext)
+                }
             }
         }
-        try? MsgDao.shared.clearMessages(conversationUuid: uuid)
-        loadData()
+        return deleted
+    }
+
+    public func clearMessages(uuid: String) async -> Bool {
+        await withCheckedContinuation { continuation in
+            SecureMessaging.shared.clearMessages(uuid) { continuation.resume(returning: $0) }
+        }
     }
 
     public func resetIdentity(onFail: (() -> Void)? = nil) {
-        guard NWClient.shared.connectionState == .synced else {
-            resetErrorMessage = "Must be online to reset"
-            onFail?()
-            return
-        }
-
-        Task {
-            let friends = (try? MsgDao.shared.getAllConversations()) ?? []
-            let myUuid = KeychainManager.shared.myUuid
-            let myPriv = KeychainManager.shared.x25519PrivateKey
-            let dict = ["senderUuid": myUuid]
-
-            if let json = try? JSONSerialization.data(withJSONObject: dict) {
-                for friend in friends where !friend.peerPublicKey.isEmpty {
-                    var ivBytes = [UInt8](repeating: 0, count: 16)
-                    _ = SecRandomCopyBytes(kSecRandomDefault, 16, &ivBytes)
-                    let iv = Data(ivBytes)
-
-                    if let (cipher, tag) = try? CryptoManager.encryptPayloadECDH(
-                        myPrivateKey: myPriv,
-                        peerPublicKeyBase64: friend.peerPublicKey,
-                        iv: iv,
-                        plaintext: json
-                    ) {
-                        let targetMailbox = CryptoManager.calculateMailboxId(uuid: friend.uuid)
-                        let packet = GhostPacket(
-                            type: GhostPacket.typeAccountReset,
-                            targetMailboxId: targetMailbox,
-                            nonceOrIv: iv,
-                            encryptedData: cipher,
-                            authTag: tag
-                        )
-                        NWClient.shared.sendPacket(packet)
-                    }
+        guard !resettingIdentity else{return}
+        resettingIdentity=true
+        Task { @MainActor in
+            do {
+                try await Task.detached(priority: .utility) { try IdentityLifecycle.prepare() }.value
+            } catch {
+                if !IdentityLifecycle.hasPendingReset {
+                    resettingIdentity = false
+                    resetErrorMessage = "identity_reset_prepare_failed"
+                    onFail?()
+                    return
                 }
             }
-
-            guard await NWClient.shared.deleteAccount() else {
-                resetErrorMessage = "The relay did not confirm account deletion. Identity was retained."
-                onFail?()
-                return
-            }
-            NWClient.shared.disconnect()
-            CallManager.shared.endCall()
-            do { try AppDatabase.shared.resetIdentityAndDatabase() }
-            catch {
-                resetErrorMessage = error.localizedDescription
-                onFail?()
-                return
-            }
-            MediaStorageManager.shared.deleteAllMedia()
-
-            // Reset memory state & trigger welcome setup dialog
-            await MainActor.run {
-                self.conversations = []
-                self.friendRequests = []
-                self.loadData()
-
-                NWClient.shared.disconnect()
-                if KeychainManager.shared.isConfigured {
-                    NWClient.shared.connect()
-                }
-
-                self.showIdentityDialog = true
-            }
+            NSApp.terminate(nil)
         }
     }
 
@@ -179,30 +283,10 @@ public final class SessionListViewModel: ObservableObject {
         objectWillChange.send()
     }
 
-    @discardableResult public func saveIdentity(nickname: String, avatarUrl: URL? = nil) -> Bool {
-        if let url = avatarUrl {
-            guard updateMyAvatar(from: url, broadcast: false) else { return false }
-            if url.lastPathComponent.hasPrefix("msgat-avatar-") { try? FileManager.default.removeItem(at: url) }
+    public func saveIdentity(nickname:String,avatarUrl:URL?=nil,avatarBytes:Data?=nil,removeAvatar:Bool=false,completion:@escaping(Bool)->Void){
+        SecureMessaging.shared.updateProfile(nickname:nickname,avatarURL:avatarUrl,avatarBytes:avatarBytes,removeAvatar:removeAvatar){saved in
+            Task { @MainActor in self.objectWillChange.send();completion(saved)}
         }
-        KeychainManager.shared.myNickname = nickname
-        broadcastProfileUpdate()
-        objectWillChange.send()
-        return true
-    }
-
-    @discardableResult public func updateMyAvatar(from sourceUrl: URL, broadcast: Bool = true) -> Bool {
-        let avatarTarget = MediaStorageManager.shared.mediaDirectory.appendingPathComponent("avatar_self.jpg")
-        guard let thumbnail = MediaStorageManager.shared.generateImageThumbnail(fileUrl: sourceUrl, maxDimension: 256),
-              let tiff = thumbnail.tiffRepresentation, let bitmap = NSBitmapImageRep(data: tiff),
-              let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.8]) else {
-            NoticeCenter.shared.show("Failed to save"); return false
-        }
-        do { try jpeg.write(to: avatarTarget, options: .atomic) }
-        catch { NoticeCenter.shared.show("Failed to save"); return false }
-        KeychainManager.shared.myAvatarPath = avatarTarget.path
-        if broadcast { broadcastProfileUpdate() }
-        objectWillChange.send()
-        return true
     }
 
     public func broadcastProfileUpdate() {

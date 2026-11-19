@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MsgAT 界面原型</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font: 14px/1.45 system-ui, -apple-system, "Segoe UI", "Microsoft YaHei UI", sans-serif;
+      --outside: #eef2ef;
+      --canvas: #f6f8f7;
+      --panel: #fff;
+      --rail: #edf2ef;
+      --selected: #e4efe9;
+      --received: #fff;
+      --sent: #dcefe4;
+      --line: #d5dfda;
+      --ink: #172620;
+      --muted: #4e6159;
+      --accent: #126741;
+      --on-accent: #fff;
+      --danger: #a72f3a;
+      --shadow: 0 24px 64px #233e3224, 0 2px 8px #233e321b;
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --outside: #111613;
+      --canvas: #171e1b;
+      --panel: #222b27;
+      --rail: #1c2521;
+      --selected: #2d4238;
+      --received: #28332e;
+      --sent: #204638;
+      --line: #3e4e47;
+      --ink: #e9f3ee;
+      --muted: #a9bdb3;
+      --accent: #8ddab1;
+      --on-accent: #102d20;
+      --danger: #ff9ca3;
+      --shadow: 0 24px 64px #0006, 0 2px 8px #0004;
+    }
+    *, *::before, *::after { box-sizing: border-box; }
+    [hidden] { display: none !important; }
+    body { margin: 0; background: var(--outside); color: var(--ink); }
+    button, input, textarea, select { font: inherit; color: inherit; }
+    button { cursor: pointer; }
+    button:disabled { cursor: default; opacity: .55; }
+    button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+    button, select { -webkit-tap-highlight-color: transparent; }
+    .harness {
+      display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+      max-width: 1080px; padding: 18px 14px 14px; margin: auto;
+    }
+    .harness h1 { margin: 0 auto 0 0; font-size: 17px; font-weight: 660; }
+    .harness label { display: flex; align-items: center; gap: 7px; color: var(--muted); }
+    select { padding: 5px 9px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); }
+    .workspace {
+      --sidebar: 300px;
+      --row: 68px;
+      --avatar: 42px;
+      --motion: 180ms;
+      position: relative; display: flex; flex-direction: column; overflow: hidden;
+      margin: 0 auto 24px; width: min(1052px, calc(100% - 28px));
+      height: clamp(500px, calc(100dvh - 110px), 760px);
+      background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow);
+    }
+    .workspace[data-platform="windows"] { --sidebar: 330px; --row: 62px; --avatar: 40px; --motion: 150ms; border-radius: 9px; }
+    .workspace[data-platform="macos"] { --motion: 210ms; }
+    .workspace[data-size="compact"] { width: min(704px, calc(100% - 28px)); --sidebar: 260px; }
+    .workspace[data-platform="windows"][data-size="compact"] { --sidebar: 280px; }
+    .workspace[data-platform="android"] {
+      --row: 72px; --avatar: 46px; --motion: 220ms;
+      width: min(400px, calc(100% - 24px)); height: clamp(500px, calc(100dvh - 111px), 810px);
+      border-radius: 22px;
+    }
+    .workspace[data-platform="android"][data-size="compact"] { width: min(340px, calc(100% - 24px)); }
+    .titlebar {
+      display: grid; grid-template-columns: 94px 1fr 94px; place-items: center; flex: 0 0 32px;
+      border-bottom: 1px solid var(--line); background: var(--panel); color: var(--muted);
+      font-size: 12px; font-weight: 650;
+    }
+    .window-dots { display: flex; gap: 6px; justify-self: start; margin-left: 12px; }
+    .window-dots i { width: 9px; height: 9px; border-radius: 50%; background: var(--line); }
+    [data-platform="macos"] .window-dots i:nth-child(1) { background: #e87979; }
+    [data-platform="macos"] .window-dots i:nth-child(2) { background: #d6aa59; }
+    [data-platform="macos"] .window-dots i:nth-child(3) { background: #65ac81; }
+    [data-platform="windows"] .titlebar { grid-template-columns: 1fr 94px; padding-left: 12px; justify-items: start; }
+    [data-platform="windows"] .window-dots { order: 2; justify-self: center; margin: 0; }
+    [data-platform="windows"] .window-dots i { width: 10px; height: 1px; margin: 0 4px; border-radius: 0; background: var(--muted); }
+    .layout { display: grid; grid-template-columns: minmax(240px,var(--sidebar)) minmax(0,1fr); flex: 1; min-height: 0; }
+    .sidebar { display: flex; flex-direction: column; min-width: 0; min-height: 0; background: var(--rail); border-right: 1px solid var(--line); }
+    .list-top { padding: 16px 14px 11px; }
+    .list-top h2 { font-size: 21px; margin: 0 0 12px; font-weight: 680; letter-spacing: -.02em; }
+    .filter { display: flex; align-items: center; gap: 8px; padding: 0 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+    .filter input { width: 100%; min-height: 34px; padding: 0; outline-offset: 3px; background: transparent; border: 0; }
+    .filter span { color: var(--muted); }
+    .threads { overflow: auto; padding: 0 8px 12px; }
+    .thread {
+      position: relative; display: grid; grid-template-columns: var(--avatar) minmax(0,1fr) auto;
+      grid-template-rows: repeat(2,auto); align-content: center; align-items: center; column-gap: 10px; row-gap: 2px;
+      width: 100%; min-height: var(--row); padding: 7px 10px; margin: 2px 0; text-align: left;
+      border: 1px solid transparent; border-radius: 10px; background: transparent;
+    }
+    .thread:hover { background: color-mix(in srgb, var(--selected) 70%, transparent); }
+    .thread[aria-current="true"] { background: var(--selected); border-color: var(--line); }
+    .thread[aria-current="true"]::before {
+      content: ""; position: absolute; left: -1px; inset-block: 12px; width: 3px;
+      background: var(--accent); border-radius: 2px;
+    }
+    .avatar {
+      --avatar-color: #36735c; width: var(--avatar); height: var(--avatar);
+      display: grid; place-items: center; flex: 0 0 auto;
+      border-radius: 45%; background: var(--avatar-color); color: #fff; font-weight: 650;
+    }
+    .thread .avatar { grid-row: span 2; }
+    .thread strong, .thread .excerpt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .thread strong { font-weight: 650; }
+    .thread .excerpt, .thread time { color: var(--muted); font-size: 12px; }
+    .thread time { text-align: right; font-variant-numeric: tabular-nums; }
+    .thread .unread { justify-self: end; min-width: 19px; padding: 1px 5px; border-radius: 9px; background: var(--accent); color: var(--on-accent); font-size: 11px; text-align: center; }
+    .state-empty { color: var(--muted); padding: 18px 14px; margin: 0; }
+    .chat { min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--canvas); }
+    .chat-top {
+      display: flex; align-items: center; gap: 10px; min-height: 62px; padding: 8px 16px;
+      border-bottom: 1px solid var(--line); background: var(--panel);
+    }
+    .chat-top .avatar { --avatar: 36px; }
+    .chat-title { flex: 1; min-width: 0; }
+    .chat-title h2 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; font-weight: 680; }
+    .subtle { color: var(--muted); font-size: 12px; }
+    .chat-top .verified { padding-left: 5px; color: var(--accent); }
+    .action {
+      padding: 7px 12px; min-height: 36px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--panel); white-space: nowrap;
+    }
+    .action:hover:not(:disabled) { background: var(--selected); }
+    .action.primary { border-color: var(--accent); background: var(--accent); color: var(--on-accent); font-weight: 650; }
+    .action.primary:hover:not(:disabled) { background: var(--accent); filter: brightness(1.07); }
+    .action.danger { color: var(--danger); }
+    #back { display: none; }
+    .timeline-region { position: relative; display: flex; flex: 1; min-height: 0; }
+    .timeline { flex: 1; display: flex; flex-direction: column; overflow: auto; overflow-anchor: none; min-height: 0; padding: 10px clamp(14px,4%,42px) 16px; }
+    #jump-latest {
+      position: absolute; right: 14px; bottom: 12px; box-shadow: 0 3px 12px #17262029;
+    }
+    .day { display: table; padding: 2px 9px; margin: 10px auto 16px; border-radius: 6px; background: var(--rail); color: var(--muted); font-size: 12px; }
+    .message {
+      width: fit-content; max-width: min(85%, 520px); margin: 0 auto 10px 0;
+      padding: 8px 11px 6px; border: 1px solid var(--line); border-radius: 12px 12px 12px 4px;
+      background: var(--received); overflow-wrap: anywhere; white-space: pre-wrap;
+    }
+    .message.mine { margin-inline: auto 0; background: var(--sent); border-color: transparent; border-radius: 12px 12px 4px 12px; }
+    .timeline > * { flex-shrink: 0; }
+    .timeline > :first-child { margin-top: auto; }
+    .timeline > .state-empty:first-child { margin-block: auto; align-self: center; }
+    .message time { display: inline-block; margin-left: 9px; color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .receipt { margin-left: 3px; font-weight: 700; }
+    .receipt.confirmed { color: var(--accent); }
+    .file-chip { display: flex; align-items: center; gap: 9px; padding: 0 0 5px; }
+    .file-kind { display: grid; place-items: center; min-width: 36px; height: 33px; border-radius: 7px; background: var(--selected); color: var(--accent); font-size: 10px; font-weight: 700; }
+    .file-chip strong, .file-chip small { display: block; }
+    .composer {
+      min-width: 0; display: flex; align-items: flex-end; gap: 8px;
+      padding: 10px 14px 12px; background: var(--panel); border-top: 1px solid var(--line);
+    }
+    .composer textarea, .caption {
+      width: 100%; min-width: 0; padding: 8px 10px; border: 1px solid var(--line);
+      border-radius: 8px; background: var(--canvas); resize: vertical;
+    }
+    .composer textarea { height: 38px; min-height: 38px; max-height: 120px; }
+    .new-message { animation: appear var(--motion) ease-out; }
+    @keyframes appear { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+    [data-platform="android"] .layout { grid-template-columns: minmax(0,1fr); }
+    [data-platform="android"] .titlebar, [data-platform="android"] .sidebar { border-right: 0; }
+    [data-platform="android"] .titlebar { display: none; }
+    [data-platform="android"][data-screen="list"] .chat, [data-platform="android"][data-screen="chat"] .sidebar { display: none; }
+    [data-platform="android"] #back { display: inline-grid; place-items: center; width: 42px; padding: 5px; }
+    [data-platform="android"] .action, [data-platform="android"] .composer textarea { min-height: 44px; }
+    dialog {
+      padding: 0; border: 1px solid var(--line); border-radius: 15px;
+      width: min(490px, calc(100vw - 28px)); max-height: min(640px, calc(100dvh - 28px));
+      background: var(--panel); color: var(--ink); box-shadow: var(--shadow);
+    }
+    dialog::backdrop { background: #14251e73; }
+    dialog[open] { display: flex; flex-direction: column; animation: dialog-in 180ms ease-out; }
+    @keyframes dialog-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    dialog[data-platform="android"] { margin: auto auto 0; border-radius: 18px 18px 0 0; }
+    .dialog-head, .dialog-footer { padding: 14px 16px; }
+    .dialog-head { border-bottom: 1px solid var(--line); }
+    .dialog-head h2 { margin: 0 0 2px; font-size: 18px; }
+    .dialog-files { min-height: 0; overflow: auto; padding: 8px 16px; margin: 0; list-style: none; }
+    .file-row {
+      display: grid; grid-template-columns: 38px minmax(0,1fr) auto; align-items: center; column-gap: 9px;
+      padding: 9px 0; min-height: 58px; border-bottom: 1px solid var(--line);
+    }
+    .file-row:last-child { border-bottom: 0; }
+    .file-row strong { display: block; overflow-wrap: anywhere; font-weight: 640; }
+    .file-row .failed { color: var(--danger); }
+    .file-actions { display: flex; gap: 5px; }
+    .file-actions .action { font-size: 12px; min-height: 31px; padding: 3px 8px; }
+    .dialog-footer { border-top: 1px solid var(--line); background: var(--panel); }
+    .caption { min-height: 58px; max-height: 110px; margin-top: 4px; }
+    .dialog-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+    .dialog-actions #add-file { margin-right: auto; }
+    .change-warning { color: var(--danger); }
+    .call-card {
+      position: absolute; z-index: 2; right: 16px; bottom: 64px;
+      display: grid; grid-template-columns: 38px minmax(0,1fr); gap: 9px 10px;
+      width: min(290px, calc(100% - 24px)); padding: 13px;
+      background: var(--panel); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow);
+    }
+    .call-card .avatar { --avatar: 38px; --avatar-color: #6c647e; }
+    .call-card strong { overflow-wrap: anywhere; }
+    .call-actions { display: flex; grid-column: 1/-1; justify-content: flex-end; gap: 7px; }
+    dialog .call-card { position: fixed; right: 16px; bottom: 16px; }
+    dialog:has(.call-card:not([hidden])) { animation: none; }
+    [data-platform="android"] .call-card { right: 12px; bottom: 66px; }
+    dialog[data-platform="android"] .call-card { top: max(12px, env(safe-area-inset-top)); bottom: auto; }
+    @media (max-width: 750px) { dialog .call-card { top: 12px; bottom: auto; } }
+    @media (max-width: 650px) {
+      .workspace:not([data-platform="android"]) { --sidebar: 157px; }
+      .workspace:not([data-platform="android"]) .thread time,
+      .workspace:not([data-platform="android"]) .thread .unread { display: none; }
+      .workspace:not([data-platform="android"]) .thread { grid-template-columns: var(--avatar) minmax(0,1fr); }
+      .composer, .chat-top { padding-inline: 8px; }
+      .composer .action { padding-inline: 7px; }
+      .harness label { font-size: 12px; }
+    }
+    @media (max-width: 400px) { .workspace:not([data-platform="android"]) { --sidebar: 115px; --avatar: 27px; } }
+    @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+  </style>
+</head>
+<body>
+  <section class="harness" aria-label="原型选项">
+    <h1>MsgAT 界面原型</h1>
+    <label>平台 <select id="platform"><option value="android">Android</option><option value="macos" selected>macOS</option><option value="windows">Windows</option></select></label>
+    <label>外观 <select id="theme"><option value="light">浅色</option><option value="dark">深色</option></select></label>
+    <label>宽度 <select id="size"><option value="normal">标准</option><option value="compact">窄窗</option></select></label>
+    <label>附件示例 <select id="fixture"><option value="ready">正常</option><option value="failed">读取失败</option></select></label>
+    <label>来电情景 <select id="call-fixture"><option value="manual">手动</option><option value="attachment">打开附件后</option><option value="reconnect">打开附件后，连接需重试</option></select></label>
+    <button class="action" id="simulate-incoming-message" type="button">模拟收到消息</button>
+    <button class="action" id="simulate-incoming-call" type="button">模拟来电</button>
+  </section>
+  <main class="workspace" id="workspace" data-platform="macos" data-size="normal" data-screen="list">
+    <div class="titlebar"><span class="window-dots" aria-hidden="true"><i></i><i></i><i></i></span><span>MsgAT</span></div>
+    <div class="layout">
+      <nav class="sidebar" aria-labelledby="threads-title">
+        <div class="list-top">
+          <h2 id="threads-title">会话</h2>
+          <label class="filter"><span aria-hidden="true">⌕</span><input type="search" id="filter" placeholder="搜索会话" aria-label="搜索会话"></label>
+        </div>
+        <div class="threads" id="threads"></div>
+      </nav>
+      <section class="chat" aria-labelledby="chat-name">
+        <header class="chat-top">
+          <button class="action" id="back" type="button" aria-label="返回会话列表">‹</button>
+          <span class="avatar" id="chat-avatar" aria-hidden="true"></span>
+          <div class="chat-title">
+            <h2><span id="chat-name"></span><span class="verified" role="img" aria-label="身份已验证" title="身份已验证">◇</span></h2>
+            <div class="subtle" id="status"></div>
+          </div>
+        </header>
+        <div class="timeline-region">
+          <div class="timeline" id="timeline" aria-label="消息"></div>
+          <button class="action" id="jump-latest" type="button" hidden>最新消息</button>
+        </div>
+        <form class="composer" id="composer">
+          <button class="action" id="attach" type="button">附件</button>
+          <textarea id="message" rows="1" placeholder="输入消息" aria-label="消息正文"></textarea>
+          <button class="action primary" type="submit">发送</button>
+        </form>
+      </section>
+    </div>
+  </main>
+  <dialog id="attachment-dialog" aria-labelledby="attachment-title">
+    <div class="dialog-head">
+      <h2 id="attachment-title">发送附件</h2>
+      <div class="subtle" id="recipient"></div>
+    </div>
+    <ul class="dialog-files" id="files"></ul>
+    <div class="dialog-footer">
+      <label for="caption">说明</label>
+      <textarea id="caption" class="caption" rows="2"></textarea>
+      <p class="subtle change-warning" id="discard-question" role="status" hidden>放弃本次修改？</p>
+      <div class="dialog-actions">
+        <button class="action" id="add-file" type="button">继续添加</button>
+        <button class="action" id="keep-editing" type="button" hidden>继续编辑</button>
+        <button class="action" id="cancel" type="button">取消</button>
+        <button class="action primary" id="confirm" type="button">发送</button>
+      </div>
+    </div>
+  </dialog>
+  <aside class="call-card" id="call-card" aria-label="通话" hidden>
+    <span class="avatar" aria-hidden="true">周</span>
+    <div><strong>周以宁</strong><div class="subtle" id="call-state" role="status"></div></div>
+    <div class="call-actions">
+      <button class="action danger" id="decline" type="button">拒接</button>
+      <button class="action primary" id="accept" type="button">接听</button>
+      <button class="action" id="mute" type="button" aria-pressed="false" hidden>静音</button>
+      <button class="action danger" id="hangup" type="button" hidden>挂断</button>
+    </div>
+  </aside>
+  <script>
+    const byId = (id) => document.getElementById(id);
+    const workspace = byId('workspace');
+    const dialog = byId('attachment-dialog');
+    const timeline = byId('timeline');
+    const callCard = byId('call-card');
+    const conversations = [
+      {
+        name: '林知遥', initial: '林', tone: '#3b735c', activity: '在线', verified: true, unread: 2, time: '16:42',
+        messages: [
+          { text: '下午的会改到四点，会议室还是二楼靠窗那间。', time: '14:06' },
+          { text: '好。我会带上对照稿。', time: '14:09', mine: true, receipt: 'read' },
+          { text: '上次标出的两处我已经改好了，等会儿可以一起过一遍。', time: '16:28' },
+          { file: { name: '讨论记录.pdf', kind: 'PDF', detail: '248 KB' }, time: '16:40', mine: true, receipt: 'delivered' },
+          { text: '补了一份带页码的版本。', time: '16:42', mine: true, receipt: 'stored' }
+        ]
+      },
+      {
+        name: '周以宁', initial: '周', tone: '#6c647e', activity: '离线', verified: false, unread: 0, time: '15:13',
+        messages: [{ text: '照片已经整理过了，下次见面我把原片带过去。', time: '15:13' }]
+      },
+      {
+        name: '许若舟 · Studio', initial: '许', tone: '#8b674b', activity: '输入中…', verified: false, unread: 0, time: '昨天',
+        messages: [{ text: '发我一份今天的目录就好。', time: '20:08' }]
+      },
+      {
+        name: '陈砚', initial: '陈', tone: '#446e85', activity: '离线', verified: true, unread: 0, time: '周一',
+        messages: []
+      }
+    ];
+    conversations[0].messages.unshift(...[
+      '我把周五的议程发给你了。',
+      '收到，第一项需要多少时间？',
+      '大概十五分钟。后面留十分钟讨论。',
+      '上周那份对照表也一起看吗？',
+      '可以，你先挑出变化最大的三处。',
+      '我把第 4 页和第 7 页重新标记了。',
+      '谢谢。先从第 4 页说起。',
+      '第二部分的文件名我也统一好了。',
+      '我们用一份带页码的版本吧。',
+      '明白，我最后对一下目录。',
+      '报告里的日期还需要改。',
+      '好，确认后我再发一版。'
+    ].map((text, index) => ({
+      text, day: '昨天', time: '15:' + String(10 + index * 3).padStart(2, '0'),
+      mine: index % 2 === 1, receipt: index % 2 === 1 ? 'read' : null
+    })));
+    const drafts = new Map();
+    const scrollPositions = new Map();
+    const arrivals = new Map();
+    const receipts = {
+      queued: ['◷', '等待发送'], stored: ['✓', '已发送'], delivered: ['✓', '已送达'], read: ['✓✓', '已读']
+    };
+    let active = 0;
+    let files = [];
+    let edited = false;
+    let discarding = false;
+    let call = null;
+
+    function element(tag, className, text) {
+      const node = document.createElement(tag);
+      if (className) node.className = className;
+      if (text) node.textContent = text;
+      return node;
+    }
+
+    function showThreads() {
+      const list = byId('threads');
+      const query = byId('filter').value.trim().toLocaleLowerCase();
+      list.replaceChildren();
+      conversations.forEach((thread, index) => {
+        const last = thread.messages.at(-1);
+        const excerpt = last?.file?.name || last?.text || '暂无消息';
+        if (query && !(thread.name + ' ' + excerpt).toLocaleLowerCase().includes(query)) return;
+        const row = element('button', 'thread');
+        row.type = 'button';
+        row.dataset.thread = String(index);
+        row.setAttribute('aria-current', String(index === active));
+        const avatar = element('span', 'avatar', thread.initial);
+        avatar.style.setProperty('--avatar-color', thread.tone);
+        avatar.setAttribute('aria-hidden', 'true');
+        row.append(avatar, element('strong', '', thread.name), element('time', '', thread.time), element('span', 'excerpt', excerpt));
+        if (thread.unread > 0) {
+          const unread = element('span', 'unread', String(thread.unread));
+          unread.title = String(thread.unread) + ' 条未读消息';
+          row.append(unread);
+        }
+        row.addEventListener('click', () => openConversation(index));
+        list.append(row);
+      });
+      if (!list.children.length) list.append(element('p', 'state-empty', '没有匹配的会话'));
+    }
+
+    function appendMessage(message, index, animate = false) {
+      const row = element('div', 'message' + (message.mine ? ' mine' : '') + (animate ? ' new-message' : ''));
+      row.dataset.messageIndex = String(index);
+      if (message.file) {
+        const chip = element('div', 'file-chip');
+        const summary = element('span');
+        summary.append(element('strong', '', message.file.name), element('small', 'subtle', message.file.detail));
+        chip.append(element('span', 'file-kind', message.file.kind), summary);
+        row.append(chip);
+      }
+      if (message.text) row.append(document.createTextNode(message.text));
+      const meta = element('time', '', message.time);
+      if (message.receipt) {
+        const [glyph, label] = receipts[message.receipt];
+        const receipt = element('span', 'receipt' + (['delivered', 'read'].includes(message.receipt) ? ' confirmed' : ''), glyph);
+        receipt.setAttribute('role', 'img');
+        receipt.setAttribute('aria-label', label);
+        receipt.title = label;
+        meta.append(receipt);
+      }
+      row.append(meta);
+      timeline.append(row);
+    }
+
+    function chatVisible() {
+      return workspace.dataset.platform !== 'android' || workspace.dataset.screen === 'chat';
+    }
+
+    function isAtLatest() {
+      return timeline.scrollHeight - timeline.scrollTop - timeline.clientHeight < 32;
+    }
+
+    function captureHistoryAnchor() {
+      if (isAtLatest()) return null;
+      const top = timeline.getBoundingClientRect().top;
+      const row = Array.from(timeline.querySelectorAll('[data-message-index]')).find((node) => node.getBoundingClientRect().bottom > top);
+      return row ? { index: row.dataset.messageIndex, offset: row.getBoundingClientRect().top - top } : null;
+    }
+
+    function restoreHistoryAnchor(anchor) {
+      const row = anchor && timeline.querySelector('[data-message-index="' + anchor.index + '"]');
+      if (row) timeline.scrollTop += row.getBoundingClientRect().top - timeline.getBoundingClientRect().top - anchor.offset;
+      else timeline.scrollTop = timeline.scrollHeight;
+      refreshLatestButton();
+    }
+
+    function refreshLatestButton() {
+      const button = byId('jump-latest');
+      button.hidden = !chatVisible() || isAtLatest();
+      const count = arrivals.get(active) || 0;
+      button.textContent = count ? '最新消息 · ' + count : '最新消息';
+    }
+
+    function showChat() {
+      const thread = conversations[active];
+      byId('chat-name').textContent = thread.name;
+      byId('chat-avatar').textContent = thread.initial;
+      byId('chat-avatar').style.setProperty('--avatar-color', thread.tone);
+      byId('chat-name').nextElementSibling.hidden = !thread.verified;
+      byId('status').textContent = thread.activity;
+      timeline.replaceChildren();
+      if (thread.messages.length) {
+        let currentDay;
+        thread.messages.forEach((message, index) => {
+          const day = message.day || '今天';
+          if (day !== currentDay) timeline.append(element('div', 'day', day));
+          currentDay = day;
+          appendMessage(message, index);
+        });
+      } else {
+        timeline.append(element('p', 'state-empty', '暂无消息'));
+      }
+      byId('message').value = drafts.get(active) || '';
+      if (chatVisible()) restoreHistoryAnchor(scrollPositions.get(active));
+    }
+
+    function openConversation(index) {
+      drafts.set(active, byId('message').value);
+      if (chatVisible()) scrollPositions.set(active, captureHistoryAnchor());
+      active = index;
+      if (!scrollPositions.get(active)) {
+        conversations[active].unread = 0;
+        arrivals.delete(active);
+      }
+      workspace.dataset.screen = 'chat';
+      showThreads();
+      showChat();
+      if (workspace.dataset.platform === 'android') byId('back').focus();
+      else byId('threads').querySelector('[aria-current="true"]')?.focus();
+    }
+
+    function timeNow() {
+      return new Intl.DateTimeFormat('zh-CN', { hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date());
+    }
+
+    function appendToday(message, followLatest) {
+      const history = followLatest ? null : captureHistoryAnchor();
+      const thread = conversations[active];
+      const last = thread.messages.at(-1);
+      thread.messages.push(message);
+      thread.time = message.time;
+      if (chatVisible()) {
+        timeline.querySelector('.state-empty')?.remove();
+        if (!last || last.day) timeline.append(element('div', 'day', '今天'));
+        appendMessage(message, thread.messages.length - 1, followLatest);
+        restoreHistoryAnchor(history);
+      }
+      showThreads();
+    }
+
+    function sendSample(sample) {
+      appendToday({ ...sample, time: timeNow(), mine: true, receipt: 'queued' }, true);
+    }
+
+    function receiveSample() {
+      const followLatest = chatVisible() && isAtLatest();
+      if (!followLatest) {
+        conversations[active].unread++;
+        arrivals.set(active, (arrivals.get(active) || 0) + 1);
+      }
+      appendToday({ text: '确认了，剩余的内容我们明天再处理。', time: timeNow() }, followLatest);
+    }
+
+    function showFiles() {
+      const list = byId('files');
+      list.replaceChildren();
+      files.forEach((file) => {
+        const row = element('li', 'file-row');
+        const summary = element('span');
+        summary.append(element('strong', '', file.name), element('small', 'subtle' + (file.failed ? ' failed' : ''), file.failed ? '无法读取文件' : file.detail));
+        const actions = element('span', 'file-actions');
+        if (file.failed) {
+          const retry = element('button', 'action', '重试');
+          retry.setAttribute('aria-label', '重试读取 ' + file.name);
+          retry.addEventListener('click', () => {
+            file.failed = false;
+            showFiles();
+            byId('confirm').focus();
+          });
+          actions.append(retry);
+        }
+        const remove = element('button', 'action', '移除');
+        remove.setAttribute('aria-label', '移除 ' + file.name);
+        remove.addEventListener('click', () => {
+          files = files.filter((candidate) => candidate !== file);
+          edited = true;
+          showFiles();
+          byId('add-file').focus();
+        });
+        actions.append(remove);
+        row.append(element('span', 'file-kind', file.kind), summary, actions);
+        list.append(row);
+      });
+      if (!files.length) list.append(element('li', 'state-empty', '没有已选附件'));
+      byId('confirm').disabled = discarding || !files.length || files.some((file) => file.failed);
+    }
+
+    function showDiscardPrompt(show) {
+      discarding = show;
+      byId('discard-question').hidden = !show;
+      byId('keep-editing').hidden = !show;
+      byId('cancel').textContent = show ? '放弃' : '取消';
+      byId('cancel').classList.toggle('danger', show);
+      byId('caption').disabled = show;
+      byId('add-file').disabled = show;
+      byId('confirm').disabled = show || !files.length || files.some((file) => file.failed);
+      byId('files').inert = show;
+    }
+
+    function requestClose() {
+      if (discarding || !edited) dialog.close();
+      else {
+        showDiscardPrompt(true);
+        byId('keep-editing').focus();
+      }
+    }
+
+    function renderCall() {
+      if (!call) {
+        callCard.hidden = true;
+        workspace.append(callCard);
+        return;
+      }
+      const surface = dialog.open ? dialog : workspace;
+      if (callCard.parentElement !== surface) surface.append(callCard);
+      callCard.hidden = false;
+      const ringing = call.state === 'ringing';
+      byId('call-state').textContent = {
+        ringing: '语音来电', connecting: '正在连接…', reconnecting: '正在重连…', connected: '通话中'
+      }[call.state];
+      byId('accept').hidden = !ringing;
+      byId('decline').hidden = !ringing;
+      byId('mute').hidden = ringing || call.state === 'connecting';
+      byId('mute').setAttribute('aria-pressed', String(call.muted));
+      byId('mute').textContent = call.muted ? '取消静音' : '静音';
+      byId('hangup').hidden = ringing;
+    }
+
+    function startCall(reconnect = false) {
+      if (call) return;
+      const focused = document.activeElement;
+      const input = dialog.open ? byId('caption') : chatVisible() ? byId('message') : byId('filter');
+      call = {
+        state: 'ringing', reconnect, muted: false,
+        returnTo: (dialog.contains(focused) || workspace.contains(focused)) ? focused : input
+      };
+      renderCall();
+    }
+
+    function finishCall() {
+      if (!call) return;
+      const restore = callCard.contains(document.activeElement);
+      const fallback = dialog.open ? byId('caption') : chatVisible() ? byId('message') : byId('filter');
+      const target = call.returnTo?.getClientRects().length && !call.returnTo.disabled ? call.returnTo : fallback;
+      call = null;
+      renderCall();
+      if (restore) target?.focus();
+    }
+
+    function acceptCall() {
+      if (call?.state !== 'ringing') return;
+      const accepted = call;
+      accepted.state = 'connecting';
+      renderCall();
+      byId('hangup').focus();
+      window.setTimeout(() => {
+        if (call !== accepted) return;
+        call.state = accepted.reconnect ? 'reconnecting' : 'connected';
+        renderCall();
+        if (!accepted.reconnect) return;
+        window.setTimeout(() => {
+          if (call !== accepted) return;
+          call.state = 'connected';
+          renderCall();
+        }, 1500);
+      }, 700);
+    }
+
+    byId('platform').addEventListener('change', (event) => {
+      if (chatVisible()) scrollPositions.set(active, captureHistoryAnchor());
+      workspace.dataset.platform = event.target.value;
+      workspace.dataset.screen = event.target.value === 'android' ? 'list' : 'chat';
+      showChat();
+    });
+    byId('size').addEventListener('change', (event) => { workspace.dataset.size = event.target.value; });
+    byId('theme').addEventListener('change', (event) => { document.documentElement.dataset.theme = event.target.value; });
+    byId('filter').addEventListener('input', showThreads);
+    byId('back').addEventListener('click', () => {
+      drafts.set(active, byId('message').value);
+      scrollPositions.set(active, captureHistoryAnchor());
+      workspace.dataset.screen = 'list';
+      (byId('threads').querySelector('[aria-current="true"]') || byId('filter')).focus();
+    });
+    byId('message').addEventListener('input', (event) => drafts.set(active, event.target.value));
+    byId('simulate-incoming-message').addEventListener('click', receiveSample);
+    byId('simulate-incoming-call').addEventListener('click', () => startCall());
+    timeline.addEventListener('scroll', () => {
+      if (chatVisible() && isAtLatest() && arrivals.delete(active)) {
+        conversations[active].unread = 0;
+        showThreads();
+      }
+      refreshLatestButton();
+    });
+    byId('jump-latest').addEventListener('click', () => {
+      arrivals.delete(active);
+      conversations[active].unread = 0;
+      scrollPositions.delete(active);
+      restoreHistoryAnchor(null);
+      showThreads();
+      byId('message').focus();
+    });
+    byId('message').addEventListener('keydown', (event) => {
+      if (workspace.dataset.platform !== 'android' && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        byId('composer').requestSubmit();
+      }
+    });
+    byId('composer').addEventListener('submit', (event) => {
+      event.preventDefault();
+      const text = byId('message').value.trim();
+      if (!text) return;
+      byId('message').value = '';
+      drafts.delete(active);
+      sendSample({ text });
+    });
+    byId('attach').addEventListener('click', () => {
+      files = [
+        { name: '讨论记录.pdf', kind: 'PDF', detail: '248 KB', failed: false },
+        { name: '界面修改说明与后续安排.txt', kind: 'TXT', detail: '12 KB', failed: byId('fixture').value === 'failed' }
+      ];
+      edited = false;
+      byId('caption').value = '';
+      byId('recipient').textContent = conversations[active].name;
+      dialog.dataset.platform = workspace.dataset.platform;
+      showDiscardPrompt(false);
+      showFiles();
+      dialog.showModal();
+      byId('caption').focus();
+      const callFixture = byId('call-fixture').value;
+      if (callFixture !== 'manual') startCall(callFixture === 'reconnect');
+      renderCall();
+    });
+    byId('add-file').addEventListener('click', () => {
+      if (files.some((file) => file.name === '会后补充.txt')) return;
+      files.push({ name: '会后补充.txt', kind: 'TXT', detail: '6 KB', failed: false });
+      edited = true;
+      showFiles();
+      byId('files').scrollTop = byId('files').scrollHeight;
+    });
+    byId('caption').addEventListener('input', () => { edited = true; });
+    byId('caption').addEventListener('keydown', (event) => {
+      if (workspace.dataset.platform !== 'android' && event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
+        event.preventDefault();
+        if (!discarding && !byId('confirm').disabled) byId('confirm').click();
+      }
+    });
+    byId('cancel').addEventListener('click', requestClose);
+    byId('keep-editing').addEventListener('click', () => {
+      showDiscardPrompt(false);
+      byId('caption').focus();
+    });
+    byId('confirm').addEventListener('click', () => {
+      if (discarding) return;
+      const caption = byId('caption').value.trim();
+      files.forEach((file, index) => sendSample({ file, text: index === 0 ? caption : '' }));
+      dialog.close();
+    });
+    dialog.addEventListener('cancel', (event) => {
+      event.preventDefault();
+      if (discarding) {
+        showDiscardPrompt(false);
+        byId('caption').focus();
+      } else requestClose();
+    });
+    dialog.addEventListener('close', () => {
+      renderCall();
+      byId('attach').focus();
+    });
+    byId('accept').addEventListener('click', acceptCall);
+    byId('decline').addEventListener('click', finishCall);
+    byId('hangup').addEventListener('click', finishCall);
+    byId('mute').addEventListener('click', () => {
+      if (!call) return;
+      call.muted = !call.muted;
+      renderCall();
+    });
+    callCard.addEventListener('keydown', (event) => {
+      if (event.key !== 'Escape' || !call) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const target = dialog.open ? byId('caption') : chatVisible() ? byId('message') : byId('filter');
+      (target.disabled ? byId('keep-editing') : target).focus();
+    });
+    showThreads();
+    showChat();
+  </script>
+</body>
+</html>

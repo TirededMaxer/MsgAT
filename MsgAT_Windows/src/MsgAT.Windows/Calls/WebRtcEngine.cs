@@ -9,11 +9,12 @@ namespace MsgAT.Windows.Calls;
 public sealed class WebRtcEngine
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
-    private readonly WebView2 _view;
+    private const string HostPage = "https://msgat.invalid/index.html";
+    private readonly WebView2CompositionControl _view;
     private TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private long _generation;
 
-    public WebRtcEngine(WebView2 view)
+    public WebRtcEngine(WebView2CompositionControl view)
     {
         _view = view;
     }
@@ -23,10 +24,16 @@ public sealed class WebRtcEngine
     public event EventHandler<IceCandidateInfo>? IceCandidateCreated;
     public event EventHandler<string>? ConnectionStateChanged;
     public event EventHandler<long?>? RttMeasured;
-    public event EventHandler? MicrophonePermissionDenied;
+    public event EventHandler<string>? MediaSetupFailed;
+    public event EventHandler<CameraStatus>? CameraChanged;
+    public event EventHandler<bool>? RemoteVideoChanged;
+    public event EventHandler<CallAudioDevices>? AudioDevicesChanged;
 
     private Task? _initialization;
-    private TaskCompletionSource<bool>? _speakerRequest;
+    private TaskCompletionSource? _mediaReleased;
+    private Task? _closeTask;
+    private bool _microphoneAllowed;
+    private bool _cameraAllowed;
     public async Task InitializeAsync()
     {
         try { await (_initialization ??= InitializeCoreAsync()); }
@@ -51,13 +58,18 @@ public sealed class WebRtcEngine
         await _view.EnsureCoreWebView2Async(environment);
         _view.CoreWebView2.Settings.AreDevToolsEnabled = false;
         _view.CoreWebView2.Settings.AreDefaultContextMenusEnabled = false;
+        _view.CoreWebView2.NavigationStarting += (_, args) => args.Cancel = args.Uri != HostPage;
+        _view.CoreWebView2.NewWindowRequested += (_, args) => args.Handled = true;
         _view.CoreWebView2.PermissionRequested += (_, args) =>
         {
-            if (args.PermissionKind == CoreWebView2PermissionKind.Microphone &&
-                Uri.TryCreate(args.Uri, UriKind.Absolute, out var origin) && origin.Host == "msgat.invalid")
+            var allowed = TrustedOrigin(args.Uri) && (args.PermissionKind switch
             {
-                args.State = CoreWebView2PermissionState.Allow;
-            }
+                CoreWebView2PermissionKind.Microphone => _microphoneAllowed,
+                CoreWebView2PermissionKind.Camera => _cameraAllowed,
+                _ => false
+            });
+            args.SavesInProfile = false;
+            args.State = allowed ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny;
         };
         _view.CoreWebView2.WebMessageReceived -= WebMessageReceived;
         _view.CoreWebView2.WebMessageReceived += WebMessageReceived;
@@ -65,20 +77,22 @@ public sealed class WebRtcEngine
         Directory.CreateDirectory(hostDirectory);
         await File.WriteAllTextAsync(Path.Combine(hostDirectory, "index.html"), ReadEmbeddedHtml());
         _view.CoreWebView2.SetVirtualHostNameToFolderMapping("msgat.invalid", hostDirectory, CoreWebView2HostResourceAccessKind.DenyCors);
-        _view.CoreWebView2.Navigate("https://msgat.invalid/index.html");
+        _view.CoreWebView2.Navigate(HostPage);
         await _ready.Task.WaitAsync(TimeSpan.FromSeconds(15));
     }
 
-    public Task CreateOfferAsync(IReadOnlyList<IceServer> iceServers)
+    public Task CreateOfferAsync(IReadOnlyList<IceServer> iceServers, bool video)
     {
         ++_generation;
-        return SendCommandAsync("offer", new { iceServers });
+        _microphoneAllowed = true;
+        return SendCommandAsync("offer", new { iceServers, video });
     }
 
-    public Task AcceptOfferAsync(string sdp, IReadOnlyList<IceServer> iceServers)
+    public Task AcceptOfferAsync(string sdp, IReadOnlyList<IceServer> iceServers, bool video)
     {
         ++_generation;
-        return SendCommandAsync("accept", new { sdp, iceServers });
+        _microphoneAllowed = true;
+        return SendCommandAsync("accept", new { sdp, iceServers, video });
     }
 
     public Task ApplyAnswerAsync(string sdp) => SendCommandAsync("answer", new { sdp });
@@ -87,19 +101,38 @@ public sealed class WebRtcEngine
         SendCommandAsync("ice", new { sdpMid, sdpMLineIndex, candidate });
 
     public Task SetMutedAsync(bool muted) => SendCommandAsync("mute", new { muted });
-    public async Task<bool> SetSpeakerAsync(bool enabled)
+    public Task SelectMicrophoneAsync(string id) => SendCommandAsync("audio-input", new { id });
+    public Task SelectOutputAsync(string id) => SendCommandAsync("audio-output", new { id });
+    public Task SetCameraAsync(bool enabled, bool switchDevice = false)
     {
-        if (_speakerRequest is not null) throw new InvalidOperationException("Audio routing is already changing.");
-        var request = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        _speakerRequest = request;
-        try { await SendCommandAsync("speaker", new { enabled }); return await request.Task.WaitAsync(TimeSpan.FromSeconds(5)); }
-        finally { if (_speakerRequest == request) _speakerRequest = null; }
+        _cameraAllowed = enabled;
+        return SendCommandAsync("camera", new { enabled, switchDevice });
     }
-    public Task CloseAsync()
+    public Task CloseAsync() => _closeTask is { IsCompleted: false } pending ? pending : _closeTask = CloseCoreAsync();
+
+    private async Task CloseCoreAsync()
     {
         ++_generation;
-        _speakerRequest?.TrySetCanceled();
-        return _ready.Task.IsCompletedSuccessfully ? SendCommandAsync("close", new { }) : Task.CompletedTask;
+        _microphoneAllowed = false;
+        _cameraAllowed = false;
+        if (!_ready.Task.IsCompletedSuccessfully) return;
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _mediaReleased = released;
+        try
+        {
+            await SendCloseAndAwaitReleaseAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            if (ReferenceEquals(_mediaReleased, released)) _mediaReleased = null;
+            released.TrySetCanceled();
+        }
+
+        async Task SendCloseAndAwaitReleaseAsync()
+        {
+            await SendCommandAsync("close", new { });
+            await released.Task;
+        }
     }
     public Task RequestStatsAsync() => SendCommandAsync("stats", new { });
 
@@ -116,13 +149,24 @@ public sealed class WebRtcEngine
     private void WebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs args)
     {
         _ = sender;
+        if (!TrustedOrigin(args.Source)) return;
         using var document = JsonDocument.Parse(args.WebMessageAsJson);
         var root = document.RootElement;
         var type = root.GetProperty("type").GetString();
         if (type != "ready" && (!root.TryGetProperty("generation", out var generation) || generation.GetInt64() != _generation)) return;
         switch (type)
         {
-            case "speaker": _speakerRequest?.TrySetResult(root.GetProperty("enabled").GetBoolean()); break;
+            case "media-released": _mediaReleased?.TrySetResult(); break;
+            case "audio-devices":
+                if (root.Deserialize<CallAudioDevices>(JsonOptions) is { } devices) AudioDevicesChanged?.Invoke(this, devices);
+                break;
+            case "camera":
+                CameraChanged?.Invoke(this, new CameraStatus(root.GetProperty("enabled").GetBoolean(),
+                    root.TryGetProperty("notice", out var notice) ? notice.GetString() : null));
+                break;
+            case "remote-video":
+                RemoteVideoChanged?.Invoke(this, root.GetProperty("visible").GetBoolean());
+                break;
             case "ready": _ready.TrySetResult(); break;
             case "offer": OfferCreated?.Invoke(this, root.GetProperty("sdp").GetString() ?? ""); break;
             case "answer": AnswerCreated?.Invoke(this, root.GetProperty("sdp").GetString() ?? ""); break;
@@ -136,8 +180,8 @@ public sealed class WebRtcEngine
                 System.Diagnostics.Trace.TraceWarning("ICE candidate rejected: {0}", root.GetProperty("detail").GetString());
                 break;
             case "state":
-                if (root.TryGetProperty("reason", out var reason) && reason.GetString() == "microphone-permission")
-                    MicrophonePermissionDenied?.Invoke(this, EventArgs.Empty);
+                if (root.TryGetProperty("reason", out var reason) && reason.GetString() is { } code)
+                    MediaSetupFailed?.Invoke(this, code);
                 if (root.TryGetProperty("detail", out var detail))
                 {
                     System.Diagnostics.Trace.TraceWarning("WebRTC state detail: {0}", detail.GetString());
@@ -153,6 +197,9 @@ public sealed class WebRtcEngine
         }
     }
 
+    private static bool TrustedOrigin(string uri) => Uri.TryCreate(uri, UriKind.Absolute, out var origin) &&
+        origin.Scheme == Uri.UriSchemeHttps && origin.Host == "msgat.invalid" && origin.IsDefaultPort;
+
     private static string ReadEmbeddedHtml()
     {
         using var stream = Assembly.GetExecutingAssembly()
@@ -164,5 +211,9 @@ public sealed class WebRtcEngine
 }
 
 public sealed record IceCandidateInfo(string SdpMid, int SdpMLineIndex, string Candidate);
+public sealed record CameraStatus(bool Enabled, string? Notice);
+public sealed record CallAudioEndpoint(string Id, string Name);
+public sealed record CallAudioDevices(string InputDevice, string OutputDevice, CallAudioEndpoint[] Inputs,
+    CallAudioEndpoint[] Outputs, string? Notice, bool CanSelectOutput);
 
 public sealed record IceServer(IReadOnlyList<string> Urls, string? Username = null, string? Credential = null);

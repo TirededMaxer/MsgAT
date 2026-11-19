@@ -2,6 +2,7 @@ import Foundation
 import Combine
 import WebRTC
 import AVFoundation
+import CoreAudio
 #if canImport(MsgATNativeAudio)
 import MsgATNativeAudio
 #endif
@@ -21,8 +22,15 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     @Published public var callState: CallState = .idle
     @Published public var callDurationSeconds: Int64 = 0
     @Published public var rttMs: Int64 = 0
+    @Published private(set) var isRecoveringConnection = false
     @Published public var currentPeerUuid: String? = nil
+    private(set) var endedOutcome: CallOutcome = .completed
 
+    public private(set) var currentCallId: String?
+    public func isCurrentCall(_ peer: String, _ id: String) -> Bool { isCurrentPeer(peer) && currentCallId == id }
+    public func isOutgoingCall(_ peer: String, _ id: String) -> Bool {
+        isCurrentCall(peer,id) && isCaller && (callState == .outgoingRinging || callState == .connecting)
+    }
     public func isCurrentPeer(_ peerUuid: String) -> Bool {
         currentPeerUuid == peerUuid && callState != .idle && callState != .ended
     }
@@ -31,9 +39,15 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     @Published public var isMinimized = false
     @Published public var isMuted: Bool = false
     @Published public private(set) var isSpeakerOn = false
+    @Published private(set) var isVideoCall = false
+    @Published private(set) var videoSession: CallVideoSession?
     private let audioOutput = CallAudioOutput()
     private let nativeAudioDevice = MacCallAudioDevice()
-    private var isSwitchingSpeaker = false
+    @Published private(set) var isSwitchingAudio = false
+    @Published private(set) var microphones: [CallAudioEndpoint] = []
+    @Published private(set) var outputs: [CallAudioEndpoint] = []
+    @Published private(set) var audioSelection = MacCallAudioDevice.Selection()
+    private var speakerDevice: AudioDeviceID?
 
     private var isCaller: Bool = false
     private var pendingOffer: RTCSessionDescription? = nil
@@ -45,6 +59,9 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     private var peerConnection: RTCPeerConnection?
     private var localAudioTrack: RTCAudioTrack?
     private var localAudioSource: RTCAudioSource?
+    private var microphone: MicrophoneOwnership.CallLease?
+    private var outgoingAttempt: UUID?
+    private var videoRelease: Task<Void, Never>?
 
     private var timerTask: Task<Void, Never>?
     private var timeoutTask: Task<Void, Never>?
@@ -105,6 +122,8 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     private func createPeerConnection() {
         guard let factory = peerConnectionFactory else { return }
         restoreAudioOutput()
+        nativeAudioDevice.resetRoutes()
+        updateAudioRoutes(MacCallAudioDevice.Selection())
         pendingLocalIceCandidates.removeAll()
         localDescriptionSignaled = false
 
@@ -120,15 +139,13 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
             nativeAudioDevice.setFailureHandler { [weak self] in
                 DispatchQueue.main.async {
                     guard let self, self.peerConnection.map(ObjectIdentifier.init) == identity else { return }
-                    self.endCall()
+                    self.endCall(outcome: .failed)
                 }
             }
-            nativeAudioDevice.setRouteChangeHandler { [weak self] in
+            nativeAudioDevice.setRouteChangeHandler { [weak self] selection in
                 DispatchQueue.main.async {
-                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == identity,
-                          !self.isSwitchingSpeaker, self.isSpeakerOn,
-                          (try? self.audioOutput.isSpeakerOverrideActive()) == false else { return }
-                    self.restoreAudioOutput()
+                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == identity else { return }
+                    self.updateAudioRoutes(selection)
                 }
             }
         }
@@ -150,39 +167,68 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                 peerConnection?.add(track, streamIds: ["ARDAMS"])
             }
         }
+        if isVideoCall, let connection = peerConnection {
+            let session = CallVideoSession(factory: factory)
+            guard connection.add(session.localTrack, streamIds: ["ARDAMS"]) != nil else {
+                endCall(outcome: .failed)
+                return
+            }
+            videoSession = session
+        }
     }
 
     // MARK: - Outgoing Call
-    public func startOutgoingCall(peerUuid: String) {
+    public func startOutgoingCall(peerUuid: String, video: Bool = false) {
         guard callState == .idle else { return }
-        guard let conv = try? MsgDao.shared.getConversationByUuid(peerUuid), !conv.peerPublicKey.isEmpty else {
-            Task { @MainActor in NoticeCenter.shared.show("Cannot call a non-friend.") }; return
+        guard ensureMicrophonePermission(resume: { [weak self] in self?.startOutgoingCall(peerUuid: peerUuid, video: video) }) else { return }
+        callState = .connecting
+        let attempt = UUID()
+        outgoingAttempt = attempt
+        SecureMessaging.shared.requireCallable(peerUuid) { success in
+            DispatchQueue.main.async {
+                guard self.callState == .connecting, self.currentCallId == nil, self.outgoingAttempt == attempt else { return }
+                self.outgoingAttempt = nil
+                guard success else {
+                    self.callState = .idle
+                    Task { @MainActor in NoticeCenter.shared.show("Connect and accept the contact before calling.") }
+                    return
+                }
+                self.beginOutgoingCall(peerUuid: peerUuid, video: video)
+            }
         }
-        guard ensureMicrophonePermission(resume: { [weak self] in self?.startOutgoingCall(peerUuid: peerUuid) }) else { return }
+    }
 
+    private func beginOutgoingCall(peerUuid: String, video: Bool) {
+        guard let conv = try? MsgDao.shared.getConversationByUuid(peerUuid) else { callState = .idle; return }
+        currentCallId = UUID().uuidString.lowercased()
         isCaller = true
         currentPeerUuid = peerUuid
         currentPeerAlias = conv.alias
         currentPeerAvatarPath = conv.avatarPath
+        isVideoCall = video
         callState = .outgoingRinging
         callDurationSeconds = 0
         rttMs = 0
         pendingIceCandidates.removeAll()
 
         startTimeoutTimer()
+        withMicrophone { [weak self] in self?.createOffer(peerUuid: peerUuid) }
+    }
+
+    private func createOffer(peerUuid: String) {
         createPeerConnection()
 
-        guard let connection = peerConnection else { endCall(); return }
+        guard let connection = peerConnection else { endCall(outcome: .failed); return }
         let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
         connection.offer(for: constraints) { [weak self] sdp, error in
             self?.withCurrentConnection(connection) {
-                guard let self, let desc = sdp, error == nil else { self?.endCall(); return }
+                guard let self, let desc = sdp, error == nil else { self?.endCall(outcome: .failed); return }
                 let finalOffer = RTCSessionDescription(type: desc.type,
                     sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: desc.sdp, maxBitrateKbps: 32))
                 connection.setLocalDescription(finalOffer) { [weak self] error in
                     self?.withCurrentConnection(connection) {
                         guard let self else { return }
-                        if error != nil { self.endCall() }
+                        if error != nil { self.endCall(outcome: .failed) }
                         else { self.signalLocalDescription(finalOffer, peerUuid: peerUuid, isOffer: true) }
                     }
                 }
@@ -191,11 +237,9 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     }
 
     // MARK: - Incoming Call
-    public func handleIncomingOffer(senderUuid: String, sdp: String) {
-        guard callState == .idle else {
-            CallSignalingHandler.shared.sendBusy(peerUuid: senderUuid)
-            return
-        }
+    public func handleIncomingOffer(senderUuid: String, callId: String, sdp: String, video: Bool = false) {
+        guard callState == .idle else { return }
+        currentCallId = callId
 
         let conv = try? MsgDao.shared.getConversationByUuid(senderUuid)
         let alias = conv?.alias ?? "Unknown"
@@ -206,45 +250,70 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         currentPeerAlias = alias
         currentPeerAvatarPath = avatar
         pendingOffer = RTCSessionDescription(type: .offer, sdp: sdp)
+        isVideoCall = video
         callState = .incomingRinging
         callDurationSeconds = 0
         rttMs = 0
         pendingIceCandidates.removeAll()
 
-        NotificationHelper.shared.showIncomingCallNotification(peerUuid: senderUuid, alias: alias)
+        NotificationHelper.shared.showIncomingCallNotification(id: callId, video: video)
         startTimeoutTimer()
     }
 
     public func acceptCall() {
-        guard callState == .incomingRinging, let peerUuid = currentPeerUuid, let rawOffer = pendingOffer else { return }
+        guard callState == .incomingRinging, let peerUuid = currentPeerUuid, let id = currentCallId,
+              let rawOffer = pendingOffer else { return }
         startTimeoutTimer()
 
         guard ensureMicrophonePermission(resume: { [weak self] in
-            guard self?.currentPeerUuid == peerUuid else { return }; self?.acceptCall()
+            guard let self, self.isCurrentCall(peerUuid, id) else { return }
+            self.acceptCall()
         }) else { return }
 
-        NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
+        NotificationHelper.shared.clearCallNotification()
         callState = .connecting
+        withMicrophone { [weak self] in self?.connectIncoming(peerUuid: peerUuid, rawOffer: rawOffer) }
+    }
 
+    private func withMicrophone(_ connect: @escaping @MainActor () -> Void) {
+        guard let callID = currentCallId, let lease = MicrophoneOwnership.shared.reserveCall() else {
+            endCall(outcome: .failed)
+            return
+        }
+        microphone = lease
+        Task { @MainActor in
+            let available = await MicrophoneOwnership.shared.drainRecording(for: lease)
+            if self.isVideoCall { await self.videoRelease?.value }
+            guard self.currentCallId == callID, self.microphone === lease else { return }
+            guard available else {
+                NoticeCenter.shared.show("Could not switch the microphone to the call.")
+                self.endCall(outcome: .failed)
+                return
+            }
+            connect()
+        }
+    }
+
+    private func connectIncoming(peerUuid: String, rawOffer: RTCSessionDescription) {
         createPeerConnection()
-        guard let connection = peerConnection else { endCall(); return }
+        guard let connection = peerConnection else { endCall(outcome: .failed); return }
         let offer = RTCSessionDescription(type: rawOffer.type,
             sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: rawOffer.sdp, maxBitrateKbps: 32))
         connection.setRemoteDescription(offer) { [weak self] error in
             self?.withCurrentConnection(connection) {
                 guard let self else { return }
-                guard error == nil else { self.endCall(); return }
+                guard error == nil else { self.endCall(outcome: .failed); return }
                 self.flushPendingCandidates(connection)
                 let constraints = RTCMediaConstraints(mandatoryConstraints: nil, optionalConstraints: nil)
                 connection.answer(for: constraints) { [weak self] answer, error in
                     self?.withCurrentConnection(connection) {
-                        guard let self, let answer, error == nil else { self?.endCall(); return }
+                        guard let self, let answer, error == nil else { self?.endCall(outcome: .failed); return }
                         let finalAnswer = RTCSessionDescription(type: answer.type,
                             sdp: OpusCodecHelper.modifySdpForOpus(sdpDescription: answer.sdp, maxBitrateKbps: 32))
                         connection.setLocalDescription(finalAnswer) { [weak self] error in
                             self?.withCurrentConnection(connection) {
                                 guard let self else { return }
-                                if error != nil { self.endCall() }
+                                if error != nil { self.endCall(outcome: .failed) }
                                 else { self.signalLocalDescription(finalAnswer, peerUuid: peerUuid, isOffer: false) }
                             }
                         }
@@ -287,38 +356,42 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
             sdpMLineIndex: Int(candidate.sdpMLineIndex), sdp: candidate.sdp, peerUuid: peerUuid)
     }
 
-    public func rejectCall() {
+    public func rejectCall() { rejectCall(outcome: .declined) }
+
+    private func rejectCall(outcome: CallOutcome) {
         guard callState == .incomingRinging else { return }
         if let peerUuid = currentPeerUuid {
-            NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
             CallSignalingHandler.shared.sendReject(peerUuid: peerUuid)
         }
-        resetState()
+        resetState(outcome: outcome)
     }
 
     public func handleRemoteAnswer(sdp: String) {
         guard isCaller, callState == .outgoingRinging else { return }
+        guard sdp.components(separatedBy: "\n").contains(where: { $0.hasPrefix("m=video ") }) == isVideoCall else {
+            endCall(outcome: .failed)
+            return
+        }
         startTimeoutTimer()
 
         let optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(sdpDescription: sdp, maxBitrateKbps: 32)
         let finalAnswer = RTCSessionDescription(type: .answer, sdp: optimizedAnswerSdp)
 
-        guard let connection = peerConnection else { endCall(); return }
+        guard let connection = peerConnection else { endCall(outcome: .failed); return }
         callState = .connecting
         connection.setRemoteDescription(finalAnswer) { [weak self] error in
             self?.withCurrentConnection(connection) {
                 guard let self else { return }
-                if error != nil { self.endCall() }
+                if error != nil { self.endCall(outcome: .failed) }
                 else { self.flushPendingCandidates(connection) }
             }
         }
     }
 
-    public func handleRemoteSync(duration: Int64) {
-        // CALL_SYNC is advisory signaling only. A peer must never be considered
-        // connected until WebRTC reports ICE connected/completed below.
-        // Starting timers here caused unanswered calls to appear connected.
-        _ = duration
+    public func signalingFailed() {
+        guard callState != .idle, callState != .ended else { return }
+        resetState(outcome: .failed)
+        Task { @MainActor in NoticeCenter.shared.show("Call signaling unavailable") }
     }
 
     public func handleRemoteIce(sdpMid: String, sdpMLineIndex: Int, sdp: String) {
@@ -337,40 +410,27 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
 
     public func handleRemoteReject() {
         guard callState != .idle && callState != .ended else { return }
-        if let peerUuid = currentPeerUuid {
-            NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
-        }
-        saveCallRecord(rejected: true)
-        resetState()
+        resetState(outcome: .declined)
     }
 
     public func handleRemoteBusy() {
         guard callState != .idle && callState != .ended else { return }
-        if let peerUuid = currentPeerUuid {
-            NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
-        }
-        saveCallRecord(busy: true)
-        resetState()
+        resetState(outcome: .busy)
     }
 
-    public func handleRemoteEnd(duration: Int64) {
+    public func handleRemoteEnd() {
         guard callState != .idle && callState != .ended else { return }
-        if let peerUuid = currentPeerUuid {
-            NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
-        }
-        saveCallRecord(durationOverride: duration >= 0 ? duration : nil)
-        resetState()
+        resetState(outcome: callState == .incomingRinging ? .missed : .failed)
     }
 
-    public func endCall() {
+    public func endCall() { endCall(outcome: .canceled) }
+
+    private func endCall(outcome: CallOutcome) {
         guard callState != .idle && callState != .ended else { return }
-        let finalDuration = callDurationSeconds
-        saveCallRecord(durationOverride: finalDuration)
         if let peerUuid = currentPeerUuid {
-            NotificationHelper.shared.clearCallNotification(peerUuid: peerUuid)
-            CallSignalingHandler.shared.sendEnd(peerUuid: peerUuid, duration: finalDuration)
+            CallSignalingHandler.shared.sendEnd(peerUuid: peerUuid)
         }
-        resetState()
+        resetState(outcome: outcome)
     }
 
     public func toggleMute() {
@@ -379,27 +439,42 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     }
 
     public func toggleSpeaker() {
-        guard !isSwitchingSpeaker,
-              callState == .outgoingRinging || callState == .connecting || callState == .connected else { return }
-        let requested = !isSpeakerOn
-        let connectionID = peerConnection.map(ObjectIdentifier.init)
-        do {
-            if isSpeakerOn { try audioOutput.restore() }
-            else { try audioOutput.enableSpeaker() }
-            isSwitchingSpeaker = true
-            nativeAudioDevice.refreshOutputRoute { [weak self] success in
-                DispatchQueue.main.async {
-                    guard let self, self.peerConnection.map(ObjectIdentifier.init) == connectionID,
-                          self.callState != .idle, self.callState != .ended else { return }
-                    self.isSwitchingSpeaker = false
-                    if success {
-                        self.isSpeakerOn = requested && (try? self.audioOutput.isSpeakerOverrideActive()) == true
-                        if requested && !self.isSpeakerOn { self.restoreAudioOutput() }
-                    } else { self.endCall() }
-                }
+        guard let speakerDevice else {
+            Task { @MainActor in NoticeCenter.shared.show(InterfaceStrings.current()("call_speaker_unavailable")) }
+            return
+        }
+        chooseAudioDevice(isSpeakerOn ? nil : speakerDevice, input: false)
+    }
+
+    func chooseAudioDevice(_ device: AudioDeviceID?, input: Bool) {
+        guard callState == .connected, !isSwitchingAudio, let connection = peerConnection else { return }
+        if let device, !(input ? microphones : outputs).contains(where: { $0.id == device }) {
+            Task { @MainActor in NoticeCenter.shared.show(InterfaceStrings.current()("call_audio_device_unavailable")) }
+            return
+        }
+        isSwitchingAudio = true
+        nativeAudioDevice.selectRoute(device, input: input) { [weak self] success in
+            DispatchQueue.main.async {
+                guard let self, self.peerConnection === connection else { return }
+                self.isSwitchingAudio = false
+                if !success { NoticeCenter.shared.show(InterfaceStrings.current()("call_audio_switch_failed")) }
             }
-        } catch {
-            print("[MsgAT-Call] Audio output switch failed: \(error.localizedDescription)")
+        }
+    }
+
+    private func updateAudioRoutes(_ selection: MacCallAudioDevice.Selection) {
+        let availableInputs = audioOutput.endpoints(input: true)
+        let availableOutputs = audioOutput.endpoints(input: false)
+        let inputLost = audioSelection.input.map { id in selection.input == nil && !availableInputs.contains { $0.id == id } } ?? false
+        let outputLost = audioSelection.output.map { id in selection.output == nil && !availableOutputs.contains { $0.id == id } } ?? false
+        if audioSelection != selection { audioSelection = selection }
+        if microphones != availableInputs { microphones = availableInputs }
+        if outputs != availableOutputs { outputs = availableOutputs }
+        speakerDevice = try? audioOutput.builtInSpeaker()
+        let speaker = speakerDevice != nil && selection.output == speakerDevice
+        if isSpeakerOn != speaker { isSpeakerOn = speaker }
+        if inputLost || outputLost {
+            Task { @MainActor in NoticeCenter.shared.show(InterfaceStrings.current()("call_audio_fallback")) }
         }
     }
 
@@ -412,28 +487,42 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         }
     }
 
-    private func saveCallRecord(rejected: Bool = false, busy: Bool = false, durationOverride: Int64? = nil) {
-        guard isCaller, let peerUuid = currentPeerUuid else { return }
-
-        let duration = durationOverride ?? callDurationSeconds
-        let recordText: String
-        if busy {
-            recordText = "[Voice Call: Busy]"
-        } else if rejected {
-            recordText = "[Voice Call: Declined]"
-        } else if duration == 0 {
-            recordText = "[Voice Call: Missed]"
-        } else {
-            let minutes = duration / 60
-            let seconds = duration % 60
-            recordText = String(format: "[Voice Call: %02d:%02d]", minutes, seconds)
+    private func sendCallRecord(peer: String, outcome: CallOutcome, duration: Int64) {
+        let kind = isVideoCall ? "Video Call" : "Voice Call"
+        let result: String
+        switch outcome {
+        case .completed: result = String(format: "%02lld:%02lld", duration / 60, duration % 60)
+        case .missed: result = "Missed"
+        case .declined: result = "Declined"
+        case .busy: result = "Busy"
+        case .canceled: result = "Canceled"
+        case .failed: result = "Failed"
         }
-        CallSignalingHandler.shared.sendCallRecordMessage(peerUuid: peerUuid, text: recordText)
+        CallSignalingHandler.shared.sendCallRecordMessage(peerUuid: peer, text: "[\(kind): \(result)]")
     }
 
-    private func resetState() {
+    func pauseVideoCamera() { videoSession?.disableCamera() }
+
+    @MainActor
+    func endCallAndDrainVideo() async {
+        endCall(outcome: .failed)
+        await videoRelease?.value
+    }
+
+    private func resetState(outcome: CallOutcome) {
+        NotificationHelper.shared.clearCallNotification()
+        endedOutcome = callState == .connected || callDurationSeconds > 0 ? .completed : outcome
+        if let peer=currentPeerUuid, let id=currentCallId {
+            SecureMessaging.shared.recordCallHistory(peer:peer,callId:id,outgoing:isCaller,video:isVideoCall,
+                outcome:endedOutcome,duration:callDurationSeconds,
+                endedAt:Int64(Date().timeIntervalSince1970*1000))
+            if isCaller { sendCallRecord(peer: peer, outcome: endedOutcome, duration: callDurationSeconds) }
+        }
         callState = .ended
-        isSwitchingSpeaker = false
+        isRecoveringConnection = false
+        currentCallId = nil
+        outgoingAttempt = nil
+        isSwitchingAudio = false
         timerTask?.cancel()
         timerTask = nil
         timeoutTask?.cancel()
@@ -443,6 +532,8 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         disconnectGraceTask?.cancel()
         disconnectGraceTask = nil
 
+        if let videoSession { videoRelease = videoSession.close() }
+        videoSession = nil
         peerConnection?.close()
         peerConnection = nil
         localAudioTrack = nil
@@ -453,11 +544,16 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
         localDescriptionSignaled = false
 
         restoreAudioOutput()
+        nativeAudioDevice.resetRoutes()
+        audioSelection = MacCallAudioDevice.Selection()
+        MicrophoneOwnership.shared.release(microphone)
+        microphone = nil
 
         Task {
             try? await Task.sleep(nanoseconds: 1_500_000_000)
             await MainActor.run {
                 self.callState = .idle
+                self.isVideoCall = false
                 self.callDurationSeconds = 0
                 self.rttMs = 0
                 self.currentPeerUuid = nil
@@ -516,7 +612,8 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                 if minRtt != Int64.max {
                     let measuredRtt = minRtt
                     await MainActor.run {
-                        if self.callState == .connected && self.peerConnection === pc && !Task.isCancelled {
+                        if self.callState == .connected && !self.isRecoveringConnection &&
+                            self.peerConnection === pc && !Task.isCancelled {
                             self.rttMs = measuredRtt
                         }
                     }
@@ -532,10 +629,10 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
             AVCaptureDevice.requestAccess(for: .audio) { granted in
                 DispatchQueue.main.async {
                     if granted { resume() }
-                    else { NoticeCenter.shared.show("Microphone permission is required for voice calls.") }
+                    else { NoticeCenter.shared.show(InterfaceStrings.current()("call_microphone_permission")) }
                 }
             }
-        default: Task { @MainActor in NoticeCenter.shared.show("Microphone permission is required for voice calls.") }
+        default: Task { @MainActor in NoticeCenter.shared.show(InterfaceStrings.current()("call_microphone_permission")) }
         }
         return false
     }
@@ -550,9 +647,9 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                     NoticeCenter.shared.show("Time out")
                 }
                 if self.callState == .incomingRinging {
-                    self.rejectCall()
+                    self.rejectCall(outcome: .missed)
                 } else if self.callState == .outgoingRinging || self.callState == .connecting {
-                    self.endCall()
+                    self.endCall(outcome: self.callState == .outgoingRinging ? .missed : .failed)
                 }
             }
         }
@@ -561,9 +658,25 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
     // MARK: - RTCPeerConnectionDelegate
     public func peerConnection(_ peerConnection: RTCPeerConnection, didChange stateChanged: RTCSignalingState) {}
 
-    public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {}
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd stream: RTCMediaStream) {
+        withCurrentConnection(peerConnection) { [weak self] in
+            if let track = stream.videoTracks.first { self?.videoSession?.setRemoteTrack(track) }
+        }
+    }
 
     public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove stream: RTCMediaStream) {}
+
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didAdd rtpReceiver: RTCRtpReceiver, streams: [RTCMediaStream]) {
+        withCurrentConnection(peerConnection) { [weak self] in
+            if let track = rtpReceiver.track as? RTCVideoTrack { self?.videoSession?.setRemoteTrack(track) }
+        }
+    }
+
+    public func peerConnection(_ peerConnection: RTCPeerConnection, didRemove rtpReceiver: RTCRtpReceiver) {
+        withCurrentConnection(peerConnection) { [weak self] in
+            if let track = rtpReceiver.track as? RTCVideoTrack { self?.videoSession?.removeRemoteTrack(track) }
+        }
+    }
 
     public func peerConnectionShouldNegotiate(_ peerConnection: RTCPeerConnection) {}
 
@@ -575,6 +688,7 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
             if newState == .connected || newState == .completed {
                 self.disconnectGraceTask?.cancel()
                 self.disconnectGraceTask = nil
+                self.isRecoveringConnection = false
                 if self.callState != .connected {
                     self.callState = .connected
                     self.startCallTimers()
@@ -591,6 +705,10 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                     }
                 }
             } else if newState == .disconnected {
+                if self.callState == .connected {
+                    self.isRecoveringConnection = true
+                    self.rttMs = 0
+                }
                 // Long-distance links can transiently drop ICE; give a 10s recovery
                 // window before treating the call as dead (prevents instant hang-up).
                 if self.disconnectGraceTask == nil {
@@ -601,13 +719,13 @@ public final class CallManager: NSObject, ObservableObject, RTCPeerConnectionDel
                             self.disconnectGraceTask = nil
                             let st = self.peerConnection?.iceConnectionState
                             if st != .connected && st != .completed {
-                                self.endCall()
+                                self.endCall(outcome: .failed)
                             }
                         }
                     }
                 }
             } else if newState == .failed {
-                self.endCall()
+                self.endCall(outcome: .failed)
             }
         }
     }

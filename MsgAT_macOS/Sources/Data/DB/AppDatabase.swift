@@ -1,5 +1,6 @@
 import Foundation
 import SQLCipher
+import Darwin
 
 public enum DatabaseValue: Sendable {
     case text(String)
@@ -22,18 +23,29 @@ public final class AppDatabase: @unchecked Sendable {
     private let queue = DispatchQueue(label: "org.msgat.mac.database", qos: .userInitiated)
     private var handle: OpaquePointer?
     private let databaseURL: URL
+    private var testLease: Int32 = -1
+    private var initializationFailure: String?
+    let storageOwner=UUID().uuidString.lowercased()
+    public static var startupFailure: String? {shared.initializationFailure}
+    private static let productionURL = RuntimePaths.applicationSupport.appendingPathComponent("msgat_v2_vault.sqlite")
+    // Hold the same file lease from identity recovery until the process exits.
+    private static let productionLease: Result<Int32, Error> = Result {
+        try FileManager.default.createDirectory(at: productionURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        return try acquireLease(productionURL)
+    }
+    static func requireProfileLease() throws { _ = try productionLease.get() }
 
     private init() {
+        databaseURL = Self.productionURL
         do {
-            let appDirectory = RuntimePaths.applicationSupport
-            try FileManager.default.createDirectory(
-                at: appDirectory,
-                withIntermediateDirectories: true,
-                attributes: [.posixPermissions: 0o700]
-            )
-
-            databaseURL = appDirectory.appendingPathComponent("msgat_v2_vault.sqlite")
-            let key = KeychainManager.shared.getOrCreateDatabasePassphrase()
+            try Self.requireProfileLease()
+            if !FileManager.default.fileExists(atPath: databaseURL.path),
+               ["-wal","-shm","-journal"].contains(where:{FileManager.default.fileExists(atPath:databaseURL.path+$0)}) {
+                throw MsgATDatabaseError(operation:"Open vault",detail:"The encrypted vault file is missing. Recovery files were preserved.")
+            }
+            var key = try KeychainManager.shared.getOrCreateDatabasePassphrase()
+            defer { key.resetBytes(in: key.startIndex..<key.endIndex) }
             if Self.isPlaintextSQLite(at: databaseURL) {
                 throw MsgATDatabaseError(operation: "Open V2 vault", detail: "Refusing an unauthenticated plaintext database in the encrypted vault location.")
             }
@@ -42,22 +54,47 @@ public final class AppDatabase: @unchecked Sendable {
             try createSchema()
             try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: databaseURL.path)
         } catch {
-            fatalError("Unable to initialize the encrypted MsgAT database: \(error.localizedDescription)")
+            if let handle {sqlite3_close_v2(handle);self.handle=nil}
+            initializationFailure = error.localizedDescription
         }
     }
 
     /// Test-only construction path that avoids Keychain and user data.
     init(testDatabaseURL: URL, key: Data) throws {
         databaseURL = testDatabaseURL
+        testLease=try Self.acquireLease(testDatabaseURL)
+        do {
         if Self.isPlaintextSQLite(at: testDatabaseURL) {
             try Self.migratePlaintextDatabase(at: testDatabaseURL, key: key)
         }
         try openEncryptedDatabase(key: key)
         try createSchema()
+        } catch {
+            if let handle {sqlite3_close_v2(handle);self.handle=nil}
+            Darwin.close(testLease);testLease = -1;throw error
+        }
     }
 
     deinit {
         if let handle { sqlite3_close_v2(handle) }
+        if testLease>=0 {Darwin.close(testLease)}
+    }
+
+    func closeForTermination() {
+        queue.sync {
+            guard let handle else { return }
+            sqlite3_close_v2(handle)
+            self.handle = nil
+        }
+    }
+    private static func acquireLease(_ url: URL) throws -> Int32 {
+        let descriptor=Darwin.open(url.path+".lock",O_RDWR|O_CREAT|O_CLOEXEC|O_NOFOLLOW,0o600)
+        guard descriptor>=0 else {throw MsgATDatabaseError(operation:"Open vault",detail:"The encrypted vault could not be locked.")}
+        guard fchmod(descriptor,0o600)==0,flock(descriptor,LOCK_EX|LOCK_NB)==0 else {
+            Darwin.close(descriptor)
+            throw MsgATDatabaseError(operation:"Open vault",detail:"The encrypted vault is already open or could not be locked.")
+        }
+        return descriptor
     }
 
     public func execute(_ sql: String, values: [DatabaseValue] = []) throws {
@@ -181,22 +218,16 @@ public final class AppDatabase: @unchecked Sendable {
         NotificationCenter.default.post(name: MsgDao.didChangeNotification, object: nil)
     }
 
-    public func resetIdentityAndDatabase() throws {
+    func reclaimUnusedPages() throws {
         try queue.sync {
-            if let handle {
-                try Self.execute(handle: handle, sql: "PRAGMA wal_checkpoint(TRUNCATE)")
-                guard sqlite3_close(handle) == SQLITE_OK else { throw Self.databaseError("Close identity database", handle: handle) }
-                self.handle = nil
-            }
-            for suffix in ["", "-wal", "-shm"] {
-                let path = databaseURL.path + suffix
-                if FileManager.default.fileExists(atPath: path) { try FileManager.default.removeItem(atPath: path) }
-            }
-            KeychainManager.shared.burnIdentityAndGenerateNew()
-            try openEncryptedDatabase(key: KeychainManager.shared.getOrCreateDatabasePassphrase())
-            try createSchema()
+            guard let handle else {throw Self.databaseError("Reclaim database pages",handle:nil)}
+            let mode = try Self.query(handle:handle,sql:"PRAGMA auto_vacuum",values:[]) {sqlite3_column_int($0,0)}.first
+            guard mode == 2 else {return}
+            let free = try Self.query(handle:handle,sql:"PRAGMA freelist_count",values:[]) {sqlite3_column_int64($0,0)}.first ?? 0
+            guard free >= 128 else {return}
+            _ = try Self.query(handle:handle,sql:"PRAGMA incremental_vacuum(64)",values:[]) {_ in ()}
+            _ = try Self.query(handle:handle,sql:"PRAGMA wal_checkpoint(PASSIVE)",values:[]) {_ in ()}
         }
-        NotificationCenter.default.post(name: MsgDao.didChangeNotification, object: nil)
     }
 
     private func openEncryptedDatabase(key: Data) throws {
@@ -204,26 +235,38 @@ public final class AppDatabase: @unchecked Sendable {
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(databaseURL.path, &opened, flags, nil) == SQLITE_OK,
               let opened else {
-            throw Self.databaseError("Open database", handle: opened)
+            let error = Self.databaseError("Open database", handle: opened)
+            if let opened { sqlite3_close_v2(opened) }
+            throw error
         }
 
-        let passphrase = Data(key.base64EncodedString().utf8)
-        let keyResult = passphrase.withUnsafeBytes { bytes in
-            sqlite3_key(opened, bytes.baseAddress, Int32(bytes.count))
+        let keyResult: Int32
+        do {
+            var passphrase = key.base64EncodedData()
+            defer { passphrase.resetBytes(in: passphrase.startIndex..<passphrase.endIndex) }
+            keyResult = passphrase.withUnsafeBytes { bytes in
+                sqlite3_key(opened, bytes.baseAddress, Int32(bytes.count))
+            }
         }
         guard keyResult == SQLITE_OK else {
+            let error = Self.databaseError("Apply database key", handle: opened)
             sqlite3_close_v2(opened)
-            throw Self.databaseError("Apply database key", handle: opened)
+            throw error
         }
 
         do {
             try Self.execute(handle: opened, sql: "PRAGMA cipher_memory_security = ON")
+            try Self.execute(handle: opened, sql: "PRAGMA temp_store = MEMORY")
             try Self.execute(handle: opened, sql: "PRAGMA foreign_keys = ON")
+            let schemaEntries = try Self.query(handle:opened,sql:"SELECT count(*) FROM sqlite_master",values:[]) {
+                sqlite3_column_int64($0,0)
+            }.first
+            if schemaEntries == 0 {try Self.execute(handle:opened,sql:"PRAGMA auto_vacuum=INCREMENTAL")}
             try Self.execute(handle: opened, sql: "PRAGMA journal_mode = WAL")
             try Self.execute(handle: opened, sql: "PRAGMA synchronous = FULL")
             try Self.execute(handle: opened, sql: "PRAGMA fullfsync = ON")
             try Self.execute(handle: opened, sql: "PRAGMA checkpoint_fullfsync = ON")
-            try Self.readOne(handle: opened, sql: "SELECT count(*) FROM sqlite_master")
+            try Self.readOne(handle: opened, sql: "PRAGMA journal_size_limit=4194304")
             handle = opened
         } catch {
             sqlite3_close_v2(opened)
@@ -234,8 +277,17 @@ public final class AppDatabase: @unchecked Sendable {
     // Called during initialization or while reset holds the database queue.
     private func createSchema() throws {
         guard let handle else { throw Self.databaseError("Create schema", handle: nil) }
-        for sql in SignalProtocolStore.schema { try Self.execute(handle: handle, sql: sql) }
+        try Self.execute(handle:handle,sql:"BEGIN IMMEDIATE")
+        do {
         try Self.execute(handle: handle, sql: "CREATE TABLE IF NOT EXISTS contact_states (uuid TEXT PRIMARY KEY NOT NULL, outgoing INTEGER NOT NULL DEFAULT 0, incoming INTEGER NOT NULL DEFAULT 0, accepted INTEGER NOT NULL DEFAULT 0, blocked INTEGER NOT NULL DEFAULT 0)")
+        try Self.execute(handle:handle,sql:"CREATE TABLE IF NOT EXISTS contact_links(uuid TEXT PRIMARY KEY NOT NULL,state_json TEXT NOT NULL)")
+        try Self.execute(handle:handle,sql:"CREATE TABLE IF NOT EXISTS contact_verifications(uuid TEXT PRIMARY KEY NOT NULL,display TEXT NOT NULL,verified_at INTEGER NOT NULL)")
+        try Self.execute(handle: handle, sql: """
+            CREATE TABLE IF NOT EXISTS attachment_export_preferences (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                folder TEXT NOT NULL
+            )
+            """)
         try Self.execute(handle: handle, sql: """
             CREATE TABLE IF NOT EXISTS conversations (
                 uuid TEXT PRIMARY KEY NOT NULL,
@@ -272,6 +324,73 @@ public final class AppDatabase: @unchecked Sendable {
                 timestamp INTEGER NOT NULL
             )
             """)
+        let pendingColumns=Set(try Self.query(handle:handle,sql:"PRAGMA table_info(protocol_pending_events)",values:[],map:{String(cString:sqlite3_column_text($0,1))}))
+        if pendingColumns.contains("created_at"),!pendingColumns.contains("held"){try Self.execute(handle:handle,sql:"ALTER TABLE protocol_pending_events ADD COLUMN held INTEGER NOT NULL DEFAULT 0 CHECK(held IN (0,1))")}
+        for sql in SignalProtocolStore.schema {try Self.execute(handle:handle,sql:sql)}
+        let notificationColumns = try Self.query(handle: handle, sql: "PRAGMA table_info(notification_targets)", values: []) {
+            String(cString: sqlite3_column_text($0, 1))
+        }
+        if !notificationColumns.contains("is_pin") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE notification_targets ADD COLUMN is_pin INTEGER NOT NULL DEFAULT 0 CHECK(is_pin IN (0,1))")
+            try Self.execute(handle: handle, sql: "DELETE FROM notification_targets")
+        }
+        let draftColumns = try Self.query(handle: handle, sql: "PRAGMA table_info(conversation_drafts)", values: []) {
+            String(cString: sqlite3_column_text($0, 1))
+        }
+        if !draftColumns.contains("reply_quote") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE conversation_drafts ADD COLUMN reply_quote TEXT")
+        }
+        let previewColumns = try Self.query(handle: handle, sql: "PRAGMA table_info(message_previews)", values: []) { row in
+            String(cString: sqlite3_column_text(row, 1))
+        }
+        for column in ["above_text", "compact_image"] where !previewColumns.contains(column) {
+            try Self.execute(handle: handle, sql: "ALTER TABLE message_previews ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 0 CHECK(\(column) IN (0,1))")
+        }
+        try Self.execute(handle:handle,sql:"UPDATE protocol_pending_events SET held=1 WHERE held=0 AND EXISTS(SELECT 1 FROM scheduled_sends s WHERE s.event_id=protocol_pending_events.event_id)")
+        let privacyColumns=Set(try Self.query(handle:handle,sql:"PRAGMA table_info(privacy_preferences)",values:[],map:{String(cString:sqlite3_column_text($0,1))}))
+        for column in ["share_online","share_typing","show_notification_previews","app_lock_enabled"] where !privacyColumns.contains(column) {try Self.execute(handle:handle,sql:"ALTER TABLE privacy_preferences ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 0 CHECK(\(column) IN (0,1))")}
+        for column in ["message_alerts_enabled", "message_alert_sound"] where !privacyColumns.contains(column) {
+            try Self.execute(handle: handle, sql: "ALTER TABLE privacy_preferences ADD COLUMN \(column) INTEGER NOT NULL DEFAULT 1 CHECK(\(column) IN (0,1))")
+        }
+        if !privacyColumns.contains("auto_download_attachments") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE privacy_preferences ADD COLUMN auto_download_attachments INTEGER NOT NULL DEFAULT 1 CHECK(auto_download_attachments IN (0,1))")
+        }
+        if !privacyColumns.contains("auto_download_limit_bytes") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE privacy_preferences ADD COLUMN auto_download_limit_bytes INTEGER NOT NULL DEFAULT 0 CHECK(auto_download_limit_bytes>=0)")
+        }
+        let transferColumns = try Self.query(handle: handle, sql: "PRAGMA table_info(object_transfers)", values: [],
+                                             map: { String(cString: sqlite3_column_text($0, 1)) })
+        if !transferColumns.contains("download_requested") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE object_transfers ADD COLUMN download_requested INTEGER NOT NULL DEFAULT 0 CHECK(download_requested IN (0,1))")
+        }
+        if !transferColumns.contains("download_paused") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE object_transfers ADD COLUMN download_paused INTEGER NOT NULL DEFAULT 0 CHECK(download_paused IN (0,1))")
+        }
+        if !transferColumns.contains("download_unavailable") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE object_transfers ADD COLUMN download_unavailable INTEGER NOT NULL DEFAULT 0 CHECK(download_unavailable IN (0,1))")
+        }
+        let legacy=try Self.query(handle:handle,sql:"SELECT 1 FROM sqlite_master WHERE type='table' AND name='media_transfers'",values:[],map:{_ in true})
+        if !legacy.isEmpty {
+            guard try Self.query(handle:handle,sql:"SELECT 1 FROM media_transfers t LEFT JOIN messages m ON m.messageId=t.message_id LEFT JOIN media_objects o ON o.object_id=t.object_id WHERE m.messageId IS NULL OR o.object_id IS NULL",values:[],map:{_ in true}).isEmpty else {throw MsgATDatabaseError(operation:"Upgrade transfers",detail:"Stored transfer state is inconsistent. Existing data was retained.")}
+            try Self.execute(handle:handle,sql:"INSERT OR IGNORE INTO object_transfers(event_id,object_id,owner_peer,owner_kind,created_at,direction,attempts,next_retry,remote_expiry,lease_session) SELECT t.message_id,t.object_id,m.conversationUuid,'message',m.timestamp,t.direction,t.attempts,t.next_retry,t.remote_expiry,t.lease_session FROM media_transfers t JOIN messages m ON m.messageId=t.message_id JOIN media_objects o ON o.object_id=t.object_id")
+            try Self.execute(handle:handle,sql:"DROP TABLE media_transfers")
+        }
+        let openedAt = Int64(Date().timeIntervalSince1970 * 1_000)
+        let changeColumns = try Self.query(handle: handle, sql: "PRAGMA table_info(message_changes)", values: [],
+                                           map: { String(cString: sqlite3_column_text($0, 1)) })
+        if !changeColumns.contains("pending_since") {
+            try Self.execute(handle: handle, sql: "ALTER TABLE message_changes ADD COLUMN pending_since INTEGER NOT NULL DEFAULT 0")
+            try Self.execute(handle: handle, sql: "UPDATE message_changes SET pending_since=? WHERE pending=1", values: [.integer(openedAt)])
+        }
+        try Self.execute(handle: handle, sql: "DELETE FROM protocol_incoming_dispositions WHERE expires_at<=?", values: [.integer(openedAt)])
+        try Self.execute(handle: handle, sql: "DELETE FROM message_changes WHERE pending=1 AND pending_since<=?", values: [.integer(openedAt - 15 * 86_400_000)])
+        try Self.execute(handle: handle, sql: MessageExpirationStore.markDueRetentionSQL, values: [.integer(openedAt), .integer(-1)])
+        try Self.execute(handle: handle, sql: """
+            DELETE FROM messages WHERE messageId IN (
+                SELECT message_id FROM message_expiration WHERE expires_at<=?)
+            """, values: [.integer(openedAt)])
+        try Self.execute(handle:handle,sql:"COMMIT")
+        } catch {try? Self.execute(handle:handle,sql:"ROLLBACK");throw error}
     }
 
     private static func execute(

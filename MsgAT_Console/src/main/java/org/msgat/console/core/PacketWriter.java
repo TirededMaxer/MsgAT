@@ -11,9 +11,35 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Account for queued writes before they cross to the I/O thread. */
 public final class PacketWriter {
     private static final AttributeKey<AtomicLong> PENDING = AttributeKey.valueOf("MSGAT_PENDING_BYTES");
+    private static final AttributeKey<Runnable> REPLAY_RESUME = AttributeKey.valueOf("MSGAT_REPLAY_RESUME");
     private static final long MAX_PENDING_BYTES = 4L * 1024 * 1024;
+    // Leave room for eight maximum-size replay frames and concurrent control replies.
+    private static final long REPLAY_LOW_WATER = 1024L * 1024;
 
     private PacketWriter() { }
+
+    static boolean canSendDelivery(Channel channel) {
+        if (!channel.isWritable()) return false;
+        AtomicLong pending = channel.attr(PENDING).get();
+        return pending == null || pending.get() <= REPLAY_LOW_WATER;
+    }
+
+    static boolean deferReplayIfBusy(Channel channel, Runnable resume) {
+        AtomicLong pending = channel.attr(PENDING).get();
+        if (pending == null || pending.get() <= REPLAY_LOW_WATER) return false;
+        channel.attr(REPLAY_RESUME).set(resume);
+        if (pending.get() <= REPLAY_LOW_WATER) resumeReplay(channel);
+        return true;
+    }
+
+    static void cancelReplayWait(Channel channel) {
+        if (channel.hasAttr(REPLAY_RESUME)) channel.attr(REPLAY_RESUME).set(null);
+    }
+
+    private static void resumeReplay(Channel channel) {
+        Runnable resume = channel.attr(REPLAY_RESUME).getAndSet(null);
+        if (resume != null && channel.isActive()) resume.run();
+    }
 
     public static ChannelFuture write(Channel channel, GhostPacket packet, boolean flush) {
         AtomicLong pending = channel.attr(PENDING).get();
@@ -32,8 +58,9 @@ public final class PacketWriter {
         }
         var promise = channel.newPromise();
         promise.addListener(done -> {
-            counter.addAndGet(-bytes);
+            long remaining = counter.addAndGet(-bytes);
             if (!done.isSuccess()) channel.close();
+            else if (remaining <= REPLAY_LOW_WATER && channel.hasAttr(REPLAY_RESUME)) resumeReplay(channel);
         });
         try {
             return flush ? channel.writeAndFlush(packet, promise) : channel.write(packet, promise);

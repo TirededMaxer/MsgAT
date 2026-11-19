@@ -96,7 +96,7 @@ public static class GhostPacketCodec
 
         packet = new GhostPacket(
             source[4],
-            Encoding.UTF8.GetString(mailboxBytes[..mailboxLength]),
+            mailboxLength==0 ? null : Encoding.UTF8.GetString(mailboxBytes[..mailboxLength]),
             source.Slice(69, 16).ToArray(),
             source.Slice(89, payloadLength).ToArray(),
             source.Slice(89 + payloadLength, 16).ToArray());

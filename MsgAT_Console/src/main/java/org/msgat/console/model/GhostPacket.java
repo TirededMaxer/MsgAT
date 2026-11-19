@@ -40,6 +40,21 @@ public class GhostPacket {
     public static final byte TYPE_V2_RECEIVED = 0x47;
     public static final byte TYPE_V2_SYNC = 0x48;
     public static final byte TYPE_V2_SYNC_END = 0x49;
+    public static final byte TYPE_V2_REVOKE = 0x4A;
+    public static final byte TYPE_V2_REVOKED = 0x4B;
+    public static final byte TYPE_V2_REJECTED = 0x4C;
+    public static final byte TYPE_V2_PUSH_UPDATE = 0x4D;
+    public static final byte TYPE_V2_PUSH_RESULT = 0x4E;
+    public static final byte TYPE_V2_DEFERRED = 0x4F;
+    public static final byte TYPE_OBJECT_BEGIN = 0x50;
+    public static final byte TYPE_OBJECT_STATUS = 0x51;
+    public static final byte TYPE_OBJECT_PUT = 0x52;
+    public static final byte TYPE_OBJECT_FINISH = 0x53;
+    public static final byte TYPE_OBJECT_GET = 0x54;
+    public static final byte TYPE_OBJECT_DATA = 0x55;
+    public static final byte TYPE_OBJECT_DELETE = 0x56;
+    public static final byte TYPE_OBJECT_DELETED = 0x57;
+    public static final byte TYPE_OBJECT_ERROR = 0x58;
 
     private final byte type;
     private final String targetMailboxId;

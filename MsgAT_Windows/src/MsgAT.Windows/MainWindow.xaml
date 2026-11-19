@@ -1,29 +1,251 @@
 <Window x:Class="MsgAT.Windows.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:views="clr-namespace:MsgAT.Windows.Views"
         xmlns:infra="clr-namespace:MsgAT.Windows.Infrastructure"
+        xmlns:network="clr-namespace:MsgAT.Windows.Core.Network;assembly=MsgAT.Windows.Core"
         xmlns:wv2="clr-namespace:Microsoft.Web.WebView2.Wpf;assembly=Microsoft.Web.WebView2.Wpf"
-        Title="MsgAT" Width="1040" Height="680" MinWidth="820" MinHeight="540"
+        Title="MsgAT" Width="1040" Height="680" MinWidth="700" MinHeight="540"
         Style="{StaticResource AppWindowStyle}" Background="{StaticResource WindowBrush}"
-        WindowStartupLocation="CenterScreen" AllowDrop="True"
-        Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed"
-        Drop="Window_Drop" DragOver="Window_DragOver">
-    <Grid x:Name="LayoutGrid" Background="{StaticResource WindowBrush}">
+        WindowStartupLocation="CenterScreen"
+        Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed">
+    <Window.Resources>
+        <Style x:Key="ChatAttachmentFocusVisual">
+            <Setter Property="Control.Template">
+                <Setter.Value>
+                    <ControlTemplate>
+                        <Border BorderBrush="White" BorderThickness="2" CornerRadius="11" Margin="2" />
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="TimelineDateButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="FontSize" Value="11" />
+            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="ToolTip" Value="{DynamicResource UiJumpToDate}" />
+            <Setter Property="AutomationProperties.HelpText" Value="{DynamicResource UiJumpToDate}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="DateChrome" Background="{TemplateBinding Background}" CornerRadius="12"
+                                BorderThickness="1" BorderBrush="Transparent" Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="DateChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="DateChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="ChatTypingDotStyle" TargetType="Ellipse">
+            <Setter Property="Width" Value="3" />
+            <Setter Property="Height" Value="3" />
+            <Setter Property="Fill" Value="{DynamicResource AccentTextBrush}" />
+            <Setter Property="Opacity" Value="0.6" />
+        </Style>
+        <DataTemplate x:Key="ChatTypingDotsTemplate">
+            <StackPanel x:Name="Dots" Orientation="Horizontal" IsHitTestVisible="False" VerticalAlignment="Center">
+                <Ellipse x:Name="First" Style="{StaticResource ChatTypingDotStyle}" />
+                <Ellipse x:Name="Second" Style="{StaticResource ChatTypingDotStyle}" Margin="2,0,0,0" />
+                <Ellipse x:Name="Third" Style="{StaticResource ChatTypingDotStyle}" Margin="2,0,0,0" />
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsVisible, ElementName=Dots}" Value="True" />
+                        <Condition Binding="{Binding Source={x:Static SystemParameters.ClientAreaAnimation}}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <MultiDataTrigger.EnterActions>
+                        <BeginStoryboard Name="AnimateTypingDots">
+                            <Storyboard RepeatBehavior="Forever" Duration="0:0:0.96">
+                                <DoubleAnimation Storyboard.TargetName="First" Storyboard.TargetProperty="Opacity"
+                                                 From="0.45" To="1" AutoReverse="True" Duration="0:0:0.32" />
+                                <DoubleAnimation Storyboard.TargetName="Second" Storyboard.TargetProperty="Opacity"
+                                                 From="0.45" To="1" AutoReverse="True" BeginTime="0:0:0.16" Duration="0:0:0.32" />
+                                <DoubleAnimation Storyboard.TargetName="Third" Storyboard.TargetProperty="Opacity"
+                                                 From="0.45" To="1" AutoReverse="True" BeginTime="0:0:0.32" Duration="0:0:0.32" />
+                            </Storyboard>
+                        </BeginStoryboard>
+                    </MultiDataTrigger.EnterActions>
+                    <MultiDataTrigger.ExitActions>
+                        <RemoveStoryboard BeginStoryboardName="AnimateTypingDots" />
+                    </MultiDataTrigger.ExitActions>
+                </MultiDataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <DataTemplate x:Key="ChatReceiptTemplate">
+            <Canvas Width="16" Height="12" VerticalAlignment="Center" Background="Transparent"
+                    ToolTip="{Binding StatusName}" AutomationProperties.Name="{Binding StatusName}">
+                <Canvas.Style>
+                    <Style TargetType="Canvas">
+                        <Setter Property="Visibility" Value="Visible" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding ReceiptStatus}" Value="4">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Canvas.Style>
+                <Path StrokeThickness="1.4" StrokeLineJoin="Round"
+                      StrokeStartLineCap="Round" StrokeEndLineCap="Round">
+                    <Path.Style>
+                        <Style TargetType="Path">
+                            <Setter Property="Data" Value="M 3,6.2 L 5.7,8.8 L 12,2.7" />
+                            <Setter Property="Stroke" Value="#FF808080" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsText}" Value="True">
+                                    <Setter Property="Stroke" Value="{DynamicResource MessagingMetadataBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsDelivered}" Value="True">
+                                    <Setter Property="Stroke" Value="{StaticResource AccentTextBrush}" />
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding IsText}" Value="True" />
+                                        <Condition Binding="{Binding IsDelivered}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Stroke" Value="{DynamicResource MessagingSelectionMarkBrush}" />
+                                </MultiDataTrigger>
+                                <DataTrigger Binding="{Binding ReceiptStatus}" Value="3">
+                                    <Setter Property="Data" Value="M 1.3,6.2 L 4,8.8 L 10.3,2.7 M 7.5,7.5 L 8.9,8.8 L 15.2,2.7" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ReceiptStatus}" Value="0">
+                                    <Setter Property="Data" Value="M 8,1.4 A 4.6,4.6 0 1 1 8,10.6 A 4.6,4.6 0 1 1 8,1.4 M 8,3.5 L 8,6 L 9.5,7" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsDeliveryFailed}" Value="True">
+                                    <Setter Property="Data" Value="M 8,1.4 A 4.6,4.6 0 1 1 8,10.6 A 4.6,4.6 0 1 1 8,1.4 M 8,3.5 L 8,6.4 M 8,8.4 L 8,8.5" />
+                                    <Setter Property="Stroke" Value="{DynamicResource DangerBrush}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding UsesVisualMediaFooter}" Value="True">
+                                    <Setter Property="Stroke" Value="#FFC4C9CD" />
+                                </DataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding UsesVisualMediaFooter}" Value="True" />
+                                        <Condition Binding="{Binding IsDelivered}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Stroke" Value="#FF69DAB1" />
+                                </MultiDataTrigger>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding UsesVisualMediaFooter}" Value="True" />
+                                        <Condition Binding="{Binding IsDeliveryFailed}" Value="True" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Stroke" Value="#FFFF9DA4" />
+                                </MultiDataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Path.Style>
+                </Path>
+            </Canvas>
+        </DataTemplate>
+        <DataTemplate x:Key="ChatMessageMetadataTemplate">
+            <StackPanel Orientation="Horizontal">
+                <TextBlock x:Name="ExpirationMark" Text="&#xE916;" FontFamily="Segoe MDL2 Assets" FontSize="10"
+                           Margin="0,0,4,0" VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}"
+                           Visibility="{Binding HasExpiration, Converter={StaticResource BooleanVisibilityConverter}}"
+                           ToolTip="{Binding ExpirationLabel}" AutomationProperties.Name="{Binding ExpirationLabel}" />
+                <TextBlock x:Name="Timestamp" Text="{Binding ShortTimeText}" ToolTip="{Binding TimeText}" Foreground="{StaticResource MutedBrush}" FontSize="10" />
+                <TextBlock x:Name="EditedTimestamp" Text="{Binding EditedText}" Foreground="{StaticResource MutedBrush}" FontSize="10" />
+                <Grid Margin="3,0,0,0">
+                    <infra:MessageReceiptPresenter x:Name="DeliveryStatus" Content="{Binding Receipt}" ContentTemplate="{StaticResource ChatReceiptTemplate}" />
+                    <Button x:Name="DeliveryAction" Visibility="Collapsed" Background="Transparent" BorderThickness="0"
+                            MinHeight="0" Padding="0" ToolTip="{Binding StatusName}"
+                            AutomationProperties.Name="{Binding StatusName}" Click="DeliveryStatus_Click" />
+                </Grid>
+            </StackPanel>
+            <DataTemplate.Triggers>
+                <DataTrigger Binding="{Binding HasAlbum}" Value="True">
+                    <Setter TargetName="DeliveryStatus" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding ReceiptStatus}" Value="4">
+                    <Setter TargetName="DeliveryStatus" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding CanRetrySend}" Value="True">
+                    <Setter TargetName="DeliveryAction" Property="Visibility" Value="Visible" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding HasAlbum}" Value="True">
+                    <Setter TargetName="DeliveryAction" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding DataContext.IsSelecting, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                    <Setter TargetName="DeliveryAction" Property="Visibility" Value="Collapsed" />
+                </DataTrigger>
+                <DataTrigger Binding="{Binding UsesVisualMediaFooter}" Value="True">
+                    <Setter TargetName="ExpirationMark" Property="Foreground" Value="White" />
+                    <Setter TargetName="Timestamp" Property="Foreground" Value="White" />
+                    <Setter TargetName="EditedTimestamp" Property="Foreground" Value="White" />
+                </DataTrigger>
+                <MultiDataTrigger>
+                    <MultiDataTrigger.Conditions>
+                        <Condition Binding="{Binding IsText}" Value="True" />
+                        <Condition Binding="{Binding IsMine}" Value="True" />
+                    </MultiDataTrigger.Conditions>
+                    <Setter TargetName="ExpirationMark" Property="Foreground" Value="{DynamicResource MessagingMetadataBrush}" />
+                    <Setter TargetName="Timestamp" Property="Foreground" Value="{DynamicResource MessagingMetadataBrush}" />
+                    <Setter TargetName="EditedTimestamp" Property="Foreground" Value="{DynamicResource MessagingMetadataBrush}" />
+                </MultiDataTrigger>
+            </DataTemplate.Triggers>
+        </DataTemplate>
+        <DataTemplate x:Key="ChatReplyQuoteTemplate">
+            <Button Click="ReplyPreview_Click" HorizontalAlignment="Left" HorizontalContentAlignment="Left"
+                    Cursor="Hand" Padding="8,4" Margin="0,0,0,4"
+                    ToolTip="{DynamicResource UiQuoteJump}" AutomationProperties.HelpText="{DynamicResource UiQuoteJump}">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="QuoteChrome" Background="{StaticResource RaisedBrush}" CornerRadius="5"
+                                BorderBrush="{StaticResource AccentTextBrush}" BorderThickness="2,0,0,0"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="QuoteChrome" Property="Opacity" Value="0.86" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+                <StackPanel>
+                    <TextBlock Text="{Binding ReplyQuoteAuthor}" Foreground="{StaticResource AccentTextBrush}"
+                               FontWeight="SemiBold" FontSize="11" TextTrimming="CharacterEllipsis" />
+                    <infra:MessageTextBlock MessageText="{Binding ReplyQuoteText}" IsSummary="True"
+                                            Foreground="{StaticResource TextBrush}" FontSize="11" MaxHeight="16"
+                                            TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Button>
+        </DataTemplate>
+    </Window.Resources>
+    <Grid Background="{StaticResource WindowBrush}">
+    <Grid x:Name="LayoutGrid" Background="{StaticResource WindowBrush}" Visibility="Collapsed">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition x:Name="SidebarColumn" Width="300" MinWidth="260" MaxWidth="400" />
-            <ColumnDefinition Width="5" />
-            <ColumnDefinition Width="*" MinWidth="450" />
+            <ColumnDefinition x:Name="SidebarColumn" Width="330" MinWidth="280" MaxWidth="460" />
+            <ColumnDefinition Width="7" />
+            <ColumnDefinition x:Name="ChatColumn" Width="*" MinWidth="390" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Background="{StaticResource PanelBrush}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0">
+        <Border Grid.Column="0" Background="{DynamicResource MessagingSidebarBrush}"
+                BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,0,1,0">
             <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="66" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="48" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Grid Margin="16,0,8,0">
+                <Grid Grid.Column="1" Margin="12,0,8,0">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
@@ -70,88 +292,340 @@
                                 </Path.Style>
                             </Path>
                         </Grid>
-                        <TextBlock Text="{Binding SyncText, FallbackValue=Disconnected}" FontSize="12">
+                        <TextBlock FontSize="12">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">
                                     <Setter Property="Foreground" Value="Red" />
+                                    <Setter Property="Text" Value="{DynamicResource UiDisconnected}" />
                                     <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Connected"><Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" /></DataTrigger>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Syncing..."><Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" /></DataTrigger>
+                                        <DataTrigger Binding="{Binding SyncText}" Value="Connected">
+                                            <Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" />
+                                            <Setter Property="Text" Value="{DynamicResource UiConnected}" />
+                                        </DataTrigger>
+                                        <DataTrigger Binding="{Binding SyncText}" Value="Syncing...">
+                                            <Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" />
+                                            <Setter Property="Text" Value="{DynamicResource UiSyncing}" />
+                                        </DataTrigger>
                                     </Style.Triggers>
                                 </Style>
                             </TextBlock.Style>
                         </TextBlock>
                     </StackPanel>
-                    <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" ToolTip="Menu" AutomationProperties.Name="Menu" Click="MainMenu_Click">
+                    <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" ToolTip="{DynamicResource UiMenu}" AutomationProperties.Name="{DynamicResource UiMenu}"
+                            IsEnabled="{Binding IsWorkspaceReady}" Click="MainMenu_Click">
                         <Button.Content><Geometry>M 12,4 L 12,20 M 4,12 L 20,12</Geometry></Button.Content>
                     </Button>
                 </Grid>
 
-                <TextBlock Grid.Row="1" Text="Friends" FontSize="14" Foreground="#FF808080" Margin="16,8">
+                <Border Grid.RowSpan="4" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0"
+                        Background="{StaticResource WindowBrush}">
+                    <ListBox x:Name="FolderList" ItemsSource="{Binding FolderChoices}" SelectedValuePath="Key"
+                             SelectedValue="{Binding FolderKey,Mode=TwoWay}" AutomationProperties.Name="{DynamicResource UiChatFolders}"
+                             Background="Transparent" BorderThickness="0" Padding="0,8"
+                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                             ScrollViewer.VerticalScrollBarVisibility="Hidden">
+                        <ListBox.ItemContainerStyle>
+                            <Style TargetType="ListBoxItem">
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                                <Setter Property="ToolTip" Value="{Binding AccessibleName}" />
+                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
+                                <Setter Property="Template">
+                                    <Setter.Value>
+                                        <ControlTemplate TargetType="ListBoxItem">
+                                            <Border x:Name="FolderChrome" Background="Transparent" BorderBrush="Transparent"
+                                                    BorderThickness="2,0,0,0" Padding="2,4,4,4">
+                                                <ContentPresenter HorizontalAlignment="Stretch" />
+                                            </Border>
+                                            <ControlTemplate.Triggers>
+                                                <Trigger Property="IsMouseOver" Value="True">
+                                                    <Setter TargetName="FolderChrome" Property="Background" Value="{StaticResource PanelBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsSelected" Value="True">
+                                                    <Setter TargetName="FolderChrome" Property="Background" Value="{StaticResource SurfaceBrush}" />
+                                                    <Setter TargetName="FolderChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                    <Setter Property="Foreground" Value="{StaticResource AccentTextBrush}" />
+                                                </Trigger>
+                                                <Trigger Property="IsKeyboardFocused" Value="True">
+                                                    <Setter TargetName="FolderChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                                </Trigger>
+                                            </ControlTemplate.Triggers>
+                                        </ControlTemplate>
+                                    </Setter.Value>
+                                </Setter>
+                            </Style>
+                        </ListBox.ItemContainerStyle>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Height="44">
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets" FontSize="17" HorizontalAlignment="Center" />
+                                        <TextBlock Text="{Binding Title}" FontSize="10" TextAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" Margin="1,4,1,0" />
+                                    </StackPanel>
+                                    <infra:CircularBadge Background="#FFF22626" Padding="3,1"
+                                                         HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                         Visibility="{Binding HasUnread, Converter={StaticResource BooleanVisibilityConverter}}">
+                                        <TextBlock Text="{Binding UnreadLabel}" Foreground="White" FontSize="9"
+                                                   FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </infra:CircularBadge>
+                                </Grid>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </Border>
+
+                <Button Grid.Column="1" Grid.Row="1" Padding="10,6" Margin="4,0,4,2"
+                        MinHeight="40" HorizontalContentAlignment="Stretch" Click="ArchiveEntry_Click"
+                        IsVisibleChanged="ArchiveHeader_IsVisibleChanged"
+                        AutomationProperties.Name="{Binding ArchiveEntry.AccessibleName}"
+                        Visibility="{Binding ShowArchiveEntry, Converter={StaticResource BooleanVisibilityConverter}}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="28" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="24" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="{Binding ArchiveEntry.Icon}" FontFamily="Segoe MDL2 Assets" VerticalAlignment="Center" />
+                        <TextBlock Grid.Column="1" Text="{Binding ArchiveEntry.Title}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                        <infra:CircularBadge Grid.Column="2" Background="#FFF22626" Padding="4,1"
+                                             VerticalAlignment="Center"
+                                             Visibility="{Binding ArchiveEntry.HasUnread, Converter={StaticResource BooleanVisibilityConverter}}">
+                            <TextBlock Text="{Binding ArchiveEntry.UnreadLabel}" Foreground="White" FontSize="10" FontWeight="SemiBold" />
+                        </infra:CircularBadge>
+                        <TextBlock Grid.Column="3" Text="&#xE76C;" FontFamily="Segoe MDL2 Assets"
+                                   HorizontalAlignment="Right" VerticalAlignment="Center" />
+                    </Grid>
+                </Button>
+
+                <Button Grid.Column="1" Grid.Row="1" Padding="10,6" Margin="4,0,4,2"
+                        MinHeight="40" HorizontalContentAlignment="Left" Click="LeaveArchive_Click"
+                        IsVisibleChanged="ArchiveHeader_IsVisibleChanged"
+                        AutomationProperties.Name="{DynamicResource UiAllChats}">
+                    <Button.Style>
+                        <Style TargetType="Button">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding FolderKey}" Value="archive">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Button.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE72B;" FontFamily="Segoe MDL2 Assets" Margin="0,0,8,0"
+                                   VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource UiAllChats}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+
+                <Grid Grid.Column="1" Grid.Row="2" ClipToBounds="True">
+                <Grid x:Name="ConversationFolderContent">
+                <ListBox x:Name="ConversationList" ItemsSource="{Binding VisibleConversations}"
+                         SelectedItem="{Binding SelectedConversation, Mode=OneWay}" SelectionChanged="ConversationList_SelectionChanged"
+                         Background="Transparent"
+                         BorderThickness="0" HorizontalContentAlignment="Stretch"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" AllowDrop="True"
+                         DragOver="PinnedConversation_DragOver" DragLeave="PinnedConversation_DragLeave" Drop="PinnedConversation_Drop">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource ConversationItemStyle}">
+                            <EventSetter Event="PreviewMouseRightButtonDown" Handler="Conversation_PreviewMouseRightButtonDown" />
+                            <EventSetter Event="PreviewKeyDown" Handler="Conversation_PreviewKeyDown" />
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Grid MinHeight="46">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="46" />
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <Border Width="46" Height="46" CornerRadius="23" Background="{StaticResource SurfaceBrush}"
+                                        HorizontalAlignment="Left" VerticalAlignment="Center">
+                                    <Grid>
+                                        <TextBlock Text="{Binding Initial}" HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center" FontWeight="SemiBold" FontSize="17" />
+                                        <Ellipse Fill="{Binding AvatarPath, Converter={StaticResource AvatarConverter}}" />
+                                    </Grid>
+                                </Border>
+                                <Grid Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
+                                    <Grid.RowDefinitions>
+                                        <RowDefinition Height="Auto" MinHeight="22" />
+                                        <RowDefinition Height="Auto" MinHeight="22" />
+                                    </Grid.RowDefinitions>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <DockPanel Grid.Row="0" Margin="0,0,5,0">
+                                        <Path DockPanel.Dock="Right" Margin="4,0,0,0" Width="11" Height="11" Stretch="Uniform"
+                                              Stroke="{StaticResource MutedBrush}" StrokeThickness="1.4"
+                                              Data="M 5,17 L 7,14 L 7,9 A 5,5 0 0 1 17,9 L 17,14 L 19,17 L 5,17 M 10,21 L 14,21 M 4,4 L 20,20"
+                                              ToolTip="{DynamicResource UiConversationMuted}"
+                                              AutomationProperties.Name="{DynamicResource UiConversationMuted}"
+                                              Visibility="{Binding IsMuted, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                        <TextBlock Text="{Binding Alias}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis" />
+                                    </DockPanel>
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
+                                        <infra:MessageReceiptPresenter Content="{Binding Receipt}" ContentTemplate="{StaticResource ChatReceiptTemplate}" />
+                                        <TextBlock Text="{Binding ActivityTime}" FontSize="13" VerticalAlignment="Center" Margin="3,0,0,0"
+                                                   TextAlignment="Right" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" MaxWidth="104" />
+                                    </StackPanel>
+                                    <DockPanel Grid.Row="1" VerticalAlignment="Center">
+                                        <TextBlock DockPanel.Dock="Left" Margin="0,0,4,0" FontSize="13" FontWeight="SemiBold"
+                                                   Text="{DynamicResource UiDraftPrefix}" Foreground="{StaticResource DangerBrush}"
+                                                   Visibility="{Binding IsDraftPreview, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                        <infra:MessageTextBlock MessageText="{Binding Preview}" IsSummary="True"
+                                                                VerticalAlignment="Center" FontSize="13" TextTrimming="CharacterEllipsis"
+                                                                Foreground="{StaticResource MutedBrush}" />
+                                    </DockPanel>
+                                    <StackPanel Grid.Column="1" Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center"
+                                                HorizontalAlignment="Right" Margin="5,0,0,0">
+                                        <TextBlock Text="&#xE718;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,4,0"
+                                                   VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}"
+                                                   ToolTip="{DynamicResource UiChatPinned}" AutomationProperties.Name="{DynamicResource UiChatPinned}"
+                                                   Visibility="{Binding IsPinned, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                        <infra:CircularBadge x:Name="Unread" Background="#FFF22626" Padding="5,2" VerticalAlignment="Center"
+                                                             AutomationProperties.Name="{Binding UnreadDescription}">
+                                            <TextBlock Text="{Binding UnreadLabel}" Foreground="White"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                       FontSize="12" FontWeight="Bold" />
+                                        </infra:CircularBadge>
+                                    </StackPanel>
+                                </Grid>
+                                <TextBlock Grid.Column="2" Text="&#xE700;" FontFamily="Segoe MDL2 Assets" FontSize="12"
+                                           Width="20" Padding="2,8" TextAlignment="Center" Background="Transparent" Cursor="SizeNS"
+                                           VerticalAlignment="Center" ToolTip="{DynamicResource UiReorderPinnedChat}" AutomationProperties.Name="{DynamicResource UiReorderPinnedChat}"
+                                           Visibility="{Binding IsPinned, Converter={StaticResource BooleanVisibilityConverter}}"
+                                           PreviewMouseLeftButtonDown="PinnedConversation_Grab" />
+                                <Border x:Name="PinInsertionLine" Grid.ColumnSpan="3" Height="2" Background="{StaticResource AccentBrush}"
+                                        IsHitTestVisible="False" Visibility="Collapsed" />
+                            </Grid>
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding HasUnread}" Value="False">
+                                    <Setter TargetName="Unread" Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="PinBefore">
+                                    <Setter TargetName="PinInsertionLine" Property="VerticalAlignment" Value="Top" />
+                                    <Setter TargetName="PinInsertionLine" Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="PinAfter">
+                                    <Setter TargetName="PinInsertionLine" Property="VerticalAlignment" Value="Bottom" />
+                                    <Setter TargetName="PinInsertionLine" Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+                <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Margin="16" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
+                           TextAlignment="Center" IsHitTestVisible="False">
                     <TextBlock.Style>
                         <Style TargetType="TextBlock">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Setter Property="Text" Value="{DynamicResource UiNoChats}" />
                             <Style.Triggers>
-                                <DataTrigger Binding="{Binding Conversations.Count}" Value="0">
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding IsWorkspaceReady}" Value="True" />
+                                        <Condition Binding="{Binding VisibleConversations.Count}" Value="0" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </MultiDataTrigger>
+                                <DataTrigger Binding="{Binding FolderKey}" Value="unread">
+                                    <Setter Property="Text" Value="{DynamicResource UiNoUnreadChats}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding FolderKey}" Value="archive">
+                                    <Setter Property="Text" Value="{DynamicResource UiNoArchivedChats}" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding ShowArchiveEntry}" Value="True">
                                     <Setter Property="Visibility" Value="Collapsed" />
                                 </DataTrigger>
                             </Style.Triggers>
                         </Style>
                     </TextBlock.Style>
                 </TextBlock>
-
-                <ListBox x:Name="ConversationList" Grid.Row="2" ItemsSource="{Binding Conversations}"
-                         SelectedItem="{Binding SelectedConversation}" Background="Transparent"
-                         BorderThickness="0" HorizontalContentAlignment="Stretch"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource ConversationItemStyle}">
-                            <EventSetter Event="PreviewMouseRightButtonDown" Handler="Conversation_PreviewMouseRightButtonDown" />
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16">
+                    <StackPanel.Style>
+                        <Style TargetType="StackPanel">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <MultiDataTrigger>
+                                    <MultiDataTrigger.Conditions>
+                                        <Condition Binding="{Binding IsWorkspaceReady}" Value="False" />
+                                        <Condition Binding="{Binding WorkspaceLoadFailed}" Value="False" />
+                                    </MultiDataTrigger.Conditions>
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </MultiDataTrigger>
+                            </Style.Triggers>
                         </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid MinHeight="48">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="48" />
-                                    <ColumnDefinition />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Border Width="48" Height="48" CornerRadius="8" Background="#FF333333"
-                                        HorizontalAlignment="Left" VerticalAlignment="Center">
-                                    <Grid>
-                                        <TextBlock Text="{Binding Initial}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" FontWeight="Bold" FontSize="20" />
-                                        <Rectangle RadiusX="8" RadiusY="8" Fill="{Binding AvatarPath, Converter={StaticResource AvatarConverter}}" />
-                                    </Grid>
-                                </Border>
-                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="16,0,0,0">
-                                    <TextBlock Text="{Binding Alias}" FontSize="18" FontWeight="Medium"
-                                               TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{Binding UuidPreview}" FontSize="13" Foreground="{StaticResource MutedBrush}"
-                                               Margin="0,4,0,0" TextTrimming="CharacterEllipsis" />
-                                </StackPanel>
-                                <infra:CircularBadge x:Name="Unread" Grid.Column="2" Background="#FFF22626"
-                                                     Padding="6,2" Margin="12,0,0,0" VerticalAlignment="Center">
-                                    <TextBlock Text="{Binding UnreadCount}" Foreground="White"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center"
-                                               FontSize="11" FontWeight="SemiBold" />
-                                </infra:CircularBadge>
-                            </Grid>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding UnreadCount}" Value="0">
-                                    <Setter TargetName="Unread" Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                    </StackPanel.Style>
+                    <TextBlock Text="{DynamicResource UiLoading}" HorizontalAlignment="Center"
+                               Foreground="{StaticResource MutedBrush}" AutomationProperties.LiveSetting="Polite" />
+                    <ProgressBar Height="3" Width="92" Margin="0,8,0,0" IsIndeterminate="True" />
+                </StackPanel>
+                <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="16"
+                            Visibility="{Binding WorkspaceLoadFailed, Converter={StaticResource BooleanVisibilityConverter}}">
+                    <TextBlock Text="{DynamicResource UiWorkspaceLoadFailed}" TextWrapping="Wrap" TextAlignment="Center"
+                               Foreground="{StaticResource MutedBrush}" AutomationProperties.LiveSetting="Polite" />
+                    <Button Content="{DynamicResource UiRetry}" Click="RetryWorkspace_Click"
+                            Margin="0,8,0,0" HorizontalAlignment="Center" />
+                </StackPanel>
+                </Grid>
+                </Grid>
+                <Border x:Name="ArchiveUndoBanner" Grid.Column="1" Grid.Row="3" Visibility="Collapsed"
+                        VerticalAlignment="Bottom" Margin="8" Padding="10,6" CornerRadius="8"
+                        Background="{DynamicResource RaisedBrush}">
+                    <DockPanel>
+                        <Button DockPanel.Dock="Right" Content="{DynamicResource UiUndo}" Click="ArchiveUndo_Click" Margin="8,0,0,0" />
+                        <TextBlock x:Name="ArchiveUndoText" VerticalAlignment="Center" TextWrapping="Wrap" />
+                    </DockPanel>
+                </Border>
             </Grid>
         </Border>
 
-        <GridSplitter Grid.Column="1" Width="5" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
+        <GridSplitter x:Name="SidebarSplitter" Grid.Column="1" Width="7" HorizontalAlignment="Stretch" VerticalAlignment="Stretch"
                       ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" ShowsPreview="True"
-                      Background="{StaticResource BorderBrush}" AutomationProperties.Name="Resize sidebar" />
-        <Grid Grid.Column="2" Background="{StaticResource WindowBrush}">
+                      AutomationProperties.Name="{DynamicResource UiResizeSidebar}">
+            <GridSplitter.Template>
+                <ControlTemplate TargetType="GridSplitter">
+                    <Grid Background="Transparent">
+                        <Border x:Name="Divider" Width="1" HorizontalAlignment="Center" Background="{DynamicResource MessagingDividerBrush}" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Divider" Property="Background" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Divider" Property="Background" Value="{StaticResource AccentBrush}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </GridSplitter.Template>
+        </GridSplitter>
+        <Border Grid.Column="2" HorizontalAlignment="Center" VerticalAlignment="Center"
+                Background="{StaticResource SurfaceBrush}" CornerRadius="15" Padding="14,7" IsHitTestVisible="False">
+            <Border.Style>
+                <Style TargetType="Border">
+                    <Setter Property="Visibility" Value="Collapsed" />
+                    <Style.Triggers>
+                        <MultiDataTrigger>
+                            <MultiDataTrigger.Conditions>
+                                <Condition Binding="{Binding IsWorkspaceReady}" Value="True" />
+                                <Condition Binding="{Binding HasConversation}" Value="False" />
+                            </MultiDataTrigger.Conditions>
+                            <Setter Property="Visibility" Value="Visible" />
+                        </MultiDataTrigger>
+                    </Style.Triggers>
+                </Style>
+            </Border.Style>
+            <TextBlock Text="{DynamicResource UiSelectChat}" Foreground="{StaticResource MutedBrush}"
+                       FontSize="13" FontWeight="Medium" TextWrapping="Wrap" TextAlignment="Center" />
+        </Border>
+        <Grid x:Name="ChatPane" Grid.Column="2" Background="{DynamicResource MessagingTimelineBrush}" AllowDrop="True"
+              PreviewDragOver="Chat_PreviewDragOver" DragLeave="Chat_DragLeave" PreviewDrop="Chat_PreviewDrop">
             <Grid.Style>
                 <Style TargetType="Grid">
                     <Setter Property="Visibility" Value="Collapsed" />
@@ -164,27 +638,327 @@
             </Grid.Style>
             <Grid.RowDefinitions>
                 <RowDefinition Height="48" />
+                <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-                <Grid Margin="16,0" HorizontalAlignment="Left">
-                    <Grid.ColumnDefinitions><ColumnDefinition /><ColumnDefinition Width="Auto" /></Grid.ColumnDefinitions>
-                    <TextBlock Text="{Binding SelectedConversation.Alias}" FontSize="16" FontWeight="Medium"
-                               VerticalAlignment="Center" Margin="0,0,6,0" TextTrimming="CharacterEllipsis" />
-                    <ContentControl Grid.Column="1" Content="{Binding SyncText}" ContentTemplate="{StaticResource ChatConnectionIndicatorTemplate}"
-                                    VerticalAlignment="Center" />
+            <Border Grid.Row="0" Background="{DynamicResource MessagingChromeBrush}"
+                    BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,0,0,1">
+                <Grid Margin="12,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid VerticalAlignment="Center">
+                        <Grid.Style>
+                            <Style TargetType="Grid">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelecting}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Grid.Style>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="36" />
+                            <ColumnDefinition />
+                        </Grid.ColumnDefinitions>
+                        <Button Width="36" Height="36" MinHeight="0" Padding="0" BorderThickness="0"
+                                Background="Transparent" Click="OpenContactProfile_Click"
+                                ToolTip="{DynamicResource UiContactProfile}" AutomationProperties.Name="{DynamicResource UiContactProfile}">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding ChatPeerVerified}" Value="True">
+                                            <Setter Property="AutomationProperties.ItemStatus" Value="{DynamicResource UiContactVerified}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Border Width="36" Height="36" CornerRadius="18" Background="{StaticResource SurfaceBrush}">
+                                <Grid>
+                                    <TextBlock Text="{Binding SelectedConversation.Initial}" FontSize="14" FontWeight="SemiBold"
+                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    <Ellipse Fill="{Binding SelectedConversation.AvatarPath, Converter={StaticResource AvatarConverter}}" />
+                                </Grid>
+                            </Border>
+                        </Button>
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,10,0">
+                            <Grid HorizontalAlignment="Left">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Text="{Binding SelectedConversation.Alias}" FontSize="15" FontWeight="SemiBold"
+                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                                <Path Grid.Column="1" Width="13" Height="13" Margin="4,0,0,0" VerticalAlignment="Center"
+                                      Data="M 7,1 L 12,3 V 7 C 12,10 10,12 7,13 C 4,12 2,10 2,7 V 3 Z M 4.5,7 L 6.3,8.8 L 9.5,5.5"
+                                      Stretch="Uniform" Stroke="{DynamicResource MessagingSelectionMarkBrush}"
+                                      StrokeThickness="1.2" StrokeLineJoin="Round" ToolTip="{DynamicResource UiContactVerified}"
+                                      Visibility="{Binding ChatPeerVerified, Converter={StaticResource BooleanVisibilityConverter}}" />
+                            </Grid>
+                            <DockPanel>
+                            <ContentControl DockPanel.Dock="Left" Margin="0,0,4,0" Content="{Binding SyncText}"
+                                            ContentTemplate="{StaticResource ChatConnectionIndicatorTemplate}" VerticalAlignment="Center" />
+                            <ContentControl DockPanel.Dock="Left" Content="{Binding PeerActivity}" Margin="0,0,4,0"
+                                            ContentTemplate="{StaticResource ChatTypingDotsTemplate}">
+                                <ContentControl.Style>
+                                    <Style TargetType="ContentControl">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Typing}">
+                                                <Setter Property="Visibility" Value="Visible" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </ContentControl.Style>
+                            </ContentControl>
+                            <TextBlock FontSize="11" TextTrimming="CharacterEllipsis">
+                                <TextBlock.Style>
+                                    <Style TargetType="TextBlock">
+                                        <Setter Property="Text" Value="{DynamicResource UiDisconnected}" />
+                                        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
+                                        <Style.Triggers>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.None}" />
+                                                    <Condition Binding="{Binding SyncText}" Value="Connected" />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Text" Value="{DynamicResource UiConnected}" />
+                                            </MultiDataTrigger>
+                                            <MultiDataTrigger>
+                                                <MultiDataTrigger.Conditions>
+                                                    <Condition Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.None}" />
+                                                    <Condition Binding="{Binding SyncText}" Value="Syncing..." />
+                                                </MultiDataTrigger.Conditions>
+                                                <Setter Property="Text" Value="{DynamicResource UiSyncing}" />
+                                            </MultiDataTrigger>
+                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Typing}">
+                                                <Setter Property="Text" Value="{DynamicResource UiPeerTyping}" />
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Online}">
+                                                <Setter Property="Text" Value="{DynamicResource UiPeerOnline}" />
+                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
+                                            </DataTrigger>
+                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Offline}">
+                                                <Setter Property="Text" Value="{DynamicResource UiPeerOffline}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </TextBlock.Style>
+                            </TextBlock>
+                            </DockPanel>
+                        </StackPanel>
+                    </Grid>
+                    <TextBlock Text="{Binding SelectionText}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"
+                               Visibility="{Binding IsSelecting, Converter={StaticResource BooleanVisibilityConverter}}" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsSelecting}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <Button Content="{StaticResource CallIcon}" Click="VoiceCall_Click"
+                                ToolTip="{DynamicResource UiVoiceCall}" AutomationProperties.Name="{DynamicResource UiVoiceCall}" IsEnabled="{Binding CanCompose}"
+                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32" />
+                        <Button Content="{StaticResource VideoCallIcon}" Click="VideoCall_Click"
+                                ToolTip="{DynamicResource UiVideoCall}" AutomationProperties.Name="{DynamicResource UiVideoCall}" IsEnabled="{Binding CanCompose}"
+                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32" />
+                        <Button Click="SearchChat_Click" ToolTip="{DynamicResource UiSearchMessages}" AutomationProperties.Name="{DynamicResource UiSearchMessages}"
+                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M 15.5,10 A 5.5,5.5 0 1 1 4.5,10 A 5.5,5.5 0 1 1 15.5,10 M 14,14 L 20,20"
+                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="ConversationMute_Click" AutomationProperties.Name="{DynamicResource UiConversationNotifications}"
+                                Width="32" Height="32">
+                            <Button.Style>
+                                <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                    <Setter Property="ToolTip" Value="{DynamicResource UiConversationNotifications}" />
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding SelectedConversation.IsMuted}" Value="True">
+                                            <Setter Property="ToolTip" Value="{DynamicResource UiConversationMuted}" />
+                                            <Setter Property="AutomationProperties.HelpText" Value="{DynamicResource UiConversationMuted}" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </Button.Style>
+                            <Grid Width="17" Height="17">
+                                <Path Data="M12,3 C8.6,3 6,5.4 6,9 V13 L4,16 H20 L18,13 V9 C18,5.4 15.4,3 12,3 M10,19 C10.8,21 13.2,21 14,19"
+                                      Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Stretch="Uniform" />
+                                <Line X1="1" Y1="1" X2="16" Y2="16" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5"
+                                      Visibility="{Binding SelectedConversation.IsMuted, Converter={StaticResource BooleanVisibilityConverter}}" />
+                            </Grid>
+                        </Button>
+                        <Button Click="NavigateHistory_Click" ToolTip="{DynamicResource UiHistoryNavigation}" AutomationProperties.Name="{DynamicResource UiHistoryNavigation}"
+                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M3,5 L21,5 L21,22 L3,22 Z M3,10 L21,10 M7,2 L7,7 M17,2 L17,7 M7,14 L11,14 M14,14 L17,14 M7,18 L11,18"
+                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="ChatSendQueue_Click" ToolTip="{DynamicResource UiSendingQueue}" AutomationProperties.Name="{DynamicResource UiSendingQueue}"
+                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 M12,7 L12,12 L16,14"
+                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
+                                Visibility="{Binding IsSelecting, Converter={StaticResource BooleanVisibilityConverter}}">
+                        <Button Click="ForwardSelected_Click" ToolTip="{DynamicResource UiForwardSelectedMessages}"
+                                AutomationProperties.Name="{DynamicResource UiForwardSelectedMessages}"
+                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M2,10 L9,3 M9,3 L9,8 C15,8 19,12 20,20 C17,15 14,13 9,13 L9,18 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="20" Height="20" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="SaveSelected_Click" ToolTip="{DynamicResource UiSaveSelectedMessages}"
+                                AutomationProperties.Name="{DynamicResource UiSaveSelectedMessages}"
+                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M4,2 L18,2 L18,22 L11,17 L4,22 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="20" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="CopySelected_Click" ToolTip="{DynamicResource UiCopySelectedMessages}"
+                                AutomationProperties.Name="{DynamicResource UiCopySelectedMessages}"
+                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M8,6 H18 V20 H8 Z M14,3 H5 V16"
+                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="DeleteSelected_Click" ToolTip="{DynamicResource UiDeleteMessages}"
+                                AutomationProperties.Name="{DynamicResource UiDeleteMessages}"
+                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M3,5 H17 M7,5 V3 H13 V5 M5,5 L6,17 H14 L15,5 M8,8 V14 M12,8 V14"
+                                  Stroke="{StaticResource DangerBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
+                        </Button>
+                        <Button Click="ClearSelection_Click" ToolTip="{DynamicResource UiCancelMessageSelection}"
+                                AutomationProperties.Name="{DynamicResource UiCancelMessageSelection}"
+                                IsEnabled="{Binding CanChangeSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                            <Path Data="M2,2 L18,18 M18,2 L2,18" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="16" Stretch="Uniform" />
+                        </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
 
-            <ListBox x:Name="MessageList" Grid.Row="1" ItemsSource="{Binding Messages}"
-                     Background="{StaticResource WindowBrush}" BorderThickness="0" Padding="16,16"
+            <StackPanel Grid.Row="1">
+            <Border x:Name="SearchNavigationBar" Background="{StaticResource PanelBrush}"
+                    Padding="8,4" Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="ReturnToSearchButton" Grid.Column="0" Click="ReturnToSearch_Click"
+                            HorizontalContentAlignment="Stretch" Background="Transparent" BorderThickness="0"
+                            ToolTip="{DynamicResource UiReturnToSearchResults}"
+                            AutomationProperties.Name="{DynamicResource UiReturnToSearchResults}">
+                        <DockPanel>
+                            <Path DockPanel.Dock="Left" Margin="0,0,8,0" Width="16" Height="16" Stretch="Uniform"
+                                  Data="M 15.5,10 A 5.5,5.5 0 1 1 4.5,10 A 5.5,5.5 0 1 1 15.5,10 M 14,14 L 20,20"
+                                  Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                                  StrokeThickness="1.5" />
+                            <TextBlock x:Name="SearchNavigationQuery" VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+                        </DockPanel>
+                    </Button>
+                    <Button x:Name="PreviousSearchResult" Grid.Column="1" Visibility="Collapsed" Click="PreviousSearchResult_Click"
+                            Style="{StaticResource IconButtonStyle}" Width="32" Height="32"
+                            ToolTip="{DynamicResource UiSearchPreviousResult}"
+                            AutomationProperties.Name="{DynamicResource UiSearchPreviousResult}">
+                        <Path Data="M4,10 L9,5 L14,10" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" />
+                    </Button>
+                    <Button x:Name="NextSearchResult" Grid.Column="2" Visibility="Collapsed" Click="NextSearchResult_Click"
+                            Style="{StaticResource IconButtonStyle}" Width="32" Height="32"
+                            ToolTip="{DynamicResource UiSearchNextResult}"
+                            AutomationProperties.Name="{DynamicResource UiSearchNextResult}">
+                        <Path Data="M4,5 L9,10 L14,5" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" />
+                    </Button>
+                    <Button Grid.Column="3" Click="CloseSearchNavigation_Click" Style="{StaticResource IconButtonStyle}"
+                            Width="32" Height="32" ToolTip="{DynamicResource UiCloseSearchNavigation}"
+                            AutomationProperties.Name="{DynamicResource UiCloseSearchNavigation}">
+                        <Path Data="M3,3 L13,13 M13,3 L3,13" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" />
+                    </Button>
+                </Grid>
+            </Border>
+            <Border Background="{StaticResource PanelBrush}" Padding="12,4"
+                    Visibility="{Binding HasLiveLocationShare,Converter={StaticResource BooleanVisibilityConverter}}">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Content="{DynamicResource UiLiveLocationStop}" Click="StopLiveLocation_Click" />
+                    <TextBlock Text="{Binding LiveLocationShareStatus}" VerticalAlignment="Center" />
+                </DockPanel>
+            </Border>
+            <Border Background="{StaticResource PanelBrush}" Padding="12,4"
+                    Visibility="{Binding HasPinnedMessage,Converter={StaticResource BooleanVisibilityConverter}}">
+                <DockPanel>
+                    <Button DockPanel.Dock="Right" Click="PinnedMessages_Click" ToolTip="{DynamicResource UiPinnedMessages}"
+                            AutomationProperties.Name="{DynamicResource UiPinnedMessages}"
+                            Style="{StaticResource IconButtonStyle}" Width="32" Height="32" MinHeight="32" ContentTemplate="{x:Null}">
+                        <Path Data="M3,4 H4 M7,4 H17 M3,9 H4 M7,9 H17 M3,14 H4 M7,14 H17"
+                              Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              Width="16" Height="14" Stretch="Uniform" />
+                    </Button>
+                    <Button DockPanel.Dock="Right" Click="CyclePinnedPreview_Click"
+                            Style="{StaticResource IconButtonStyle}" Width="32" Height="32" MinHeight="32"
+                            ContentTemplate="{x:Null}" ToolTip="{DynamicResource UiNextPinnedMessage}"
+                            AutomationProperties.Name="{DynamicResource UiNextPinnedMessage}"
+                            Visibility="{Binding CanCyclePinnedPreview,Converter={StaticResource BooleanVisibilityConverter}}">
+                        <Path Data="M4,6 L10,12 L16,6" Stroke="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}"
+                              StrokeThickness="1.5" StrokeStartLineCap="Round" StrokeEndLineCap="Round"
+                              StrokeLineJoin="Round" Width="14" Height="12" Stretch="Uniform" />
+                    </Button>
+                    <Button Click="PinnedMessage_Click" HorizontalContentAlignment="Left" Background="Transparent" BorderThickness="0">
+                        <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="3,0,0,0" Padding="8,0,0,0">
+                            <StackPanel>
+                                <TextBlock Text="{DynamicResource UiPinnedMessage}" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                <infra:MessageTextBlock MessageText="{Binding PinnedMessage.Summary}" IsSummary="True" TextTrimming="CharacterEllipsis" MaxHeight="22" />
+                            </StackPanel>
+                        </Border>
+                    </Button>
+                </DockPanel>
+            </Border>
+            </StackPanel>
+            <ListBox x:Name="MessageList" Grid.Row="2" ItemsSource="{Binding Messages}"
+                     Background="{DynamicResource MessagingTimelineBrush}" BorderThickness="0" Padding="16,8"
                      ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.PanningMode="VerticalFirst"
                      VirtualizingPanel.ScrollUnit="Pixel"
                      PreviewMouseWheel="MessageList_PreviewMouseWheel"
                      ScrollViewer.ScrollChanged="MessageList_ScrollChanged">
+                <ListBox.Resources>
+                    <Style x:Key="MessageJumpHighlightStyle" TargetType="Border">
+                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                        <Setter Property="CornerRadius" Value="10" />
+                        <Setter Property="Opacity" Value="0" />
+                        <Setter Property="IsHitTestVisible" Value="False" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding IsJumpHighlighted}" Value="True">
+                                <Setter Property="Opacity" Value="0.20" />
+                            </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsJumpHighlighted}" Value="True" />
+                                    <Condition Binding="{Binding Source={x:Static SystemParameters.ClientAreaAnimation}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <MultiDataTrigger.EnterActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="0.20" Duration="0:0:0.130" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiDataTrigger.EnterActions>
+                                <MultiDataTrigger.ExitActions>
+                                    <BeginStoryboard>
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.240" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiDataTrigger.ExitActions>
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </ListBox.Resources>
                 <ListBox.ItemContainerStyle>
                     <Style TargetType="ListBoxItem">
                         <Setter Property="HorizontalContentAlignment" Value="Stretch" />
@@ -193,7 +967,6 @@
                         <Setter Property="BorderThickness" Value="0" />
                         <Setter Property="Padding" Value="0" />
                         <Setter Property="Margin" Value="0" />
-                        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
                         <Setter Property="Template">
                             <Setter.Value>
                                 <ControlTemplate TargetType="ListBoxItem">
@@ -203,108 +976,239 @@
                         </Setter>
                         <EventSetter Event="PreviewMouseRightButtonDown"
                                      Handler="Message_PreviewMouseRightButtonDown" />
+                        <EventSetter Event="PreviewKeyDown" Handler="Message_PreviewKeyDown" />
+                        <EventSetter Event="PreviewMouseLeftButtonDown" Handler="Message_PreviewMouseLeftButtonDown" />
+                        <Style.Triggers>
+                            <DataTrigger Binding="{Binding HiddenByAlbum}" Value="True">
+                                <Setter Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                        </Style.Triggers>
                     </Style>
                 </ListBox.ItemContainerStyle>
                 <ListBox.ItemTemplate>
                     <DataTemplate>
-                        <Grid Margin="0,0,0,12">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" />
-                                <ColumnDefinition Width="Auto" />
-                            </Grid.ColumnDefinitions>
-                            <Border x:Name="PeerAvatar" Width="40" Height="40" CornerRadius="12"
-                                    Background="#FF444444" Margin="0,0,8,0" VerticalAlignment="Top">
-                                <Grid>
-                                    <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    <Rectangle RadiusX="12" RadiusY="12"
-                                               Fill="{Binding DataContext.SelectedConversation.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
-                                </Grid>
-                            </Border>
-                            <Border x:Name="Bubble" Grid.Column="1" HorizontalAlignment="Left" MaxWidth="250">
-                                <StackPanel>
-                                    <Border x:Name="TextBubble" HorizontalAlignment="Left" Padding="12,9" CornerRadius="12" Background="{StaticResource SurfaceBrush}">
-                                        <DockPanel>
-                                            <Button x:Name="ReEditButton" DockPanel.Dock="Right" Visibility="Collapsed"
-                                                    Content="Re-edit" Foreground="{StaticResource AccentBrush}" FontSize="12" FontWeight="Bold"
-                                                    Background="Transparent" BorderThickness="0" Padding="8,0,0,0" MinHeight="0"
-                                                    Click="ReEdit_Click" />
-                                            <infra:MessageTextBlock x:Name="MessageContent" MessageText="{Binding DisplayContent}"
-                                                       TextWrapping="Wrap" FontSize="14" Foreground="{StaticResource TextBrush}" VerticalAlignment="Center" />
-                                        </DockPanel>
-                                    </Border>
-                                    <infra:AttachmentPreview x:Name="Attachment" Message="{Binding}" Visibility="Collapsed"
-                                                             HorizontalAlignment="Left" MouseLeftButtonUp="AttachmentPreview_Click" Cursor="Hand" />
-                                    <Border x:Name="ReplyPreview" Background="{StaticResource RaisedBrush}" CornerRadius="6"
-                                            Padding="8,2" Margin="0,2,0,0" MouseLeftButtonDown="ReplyPreview_Click" Cursor="Hand">
-                                        <TextBlock Text="{Binding ReplyPreview}" Foreground="#FFD0D0D0"
-                                                   FontSize="11" TextTrimming="CharacterEllipsis" />
-                                    </Border>
-                                    <StackPanel x:Name="MessageMetadata" Orientation="Horizontal" HorizontalAlignment="Left" Margin="4,4,4,0">
-                                        <TextBlock Text="{Binding TimeText}" Foreground="#FF444444" FontSize="10" />
-                                        <TextBlock Text="{Binding EditedText}" Foreground="#FF444444" FontSize="10" />
-                                        <TextBlock x:Name="DeliveryStatus" Text="{Binding StatusText}" ToolTip="{Binding StatusName}" AutomationProperties.Name="{Binding StatusName}" Foreground="#FF808080"
-                                                   FontSize="12" Margin="4,0,0,0" />
-                                        <Path Data="M 6,1 A 5,5 0 1 1 1,6" Stroke="#FF808080" StrokeThickness="1.5"
-                                              Width="12" Height="12" Margin="4,0,0,0" RenderTransformOrigin="0.5,0.5">
-                                            <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
-                                            <Path.Style>
-                                                <Style TargetType="Path">
-                                                    <Setter Property="Visibility" Value="Collapsed" />
-                                                    <Style.Triggers>
-                                                        <DataTrigger Binding="{Binding IsSending}" Value="True">
-                                                            <Setter Property="Visibility" Value="Visible" />
-                                                            <DataTrigger.EnterActions>
-                                                                <BeginStoryboard Name="SendingAnimation">
-                                                                    <Storyboard>
-                                                                        <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                                         From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever" />
-                                                                    </Storyboard>
-                                                                </BeginStoryboard>
-                                                            </DataTrigger.EnterActions>
-                                                            <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="SendingAnimation" /></DataTrigger.ExitActions>
-                                                        </DataTrigger>
-                                                    </Style.Triggers>
-                                                </Style>
-                                            </Path.Style>
-                                        </Path>
+                        <StackPanel>
+                            <Button Content="{Binding TimelineDay}" Style="{StaticResource TimelineDateButtonStyle}"
+                                    Margin="0,8,0,7" Click="TimelineDate_Click"
+                                    Visibility="{Binding HasTimelineDay, Converter={StaticResource BooleanVisibilityConverter}}" />
+                            <Grid Margin="0,6,0,7" IsHitTestVisible="False"
+                                  Visibility="{Binding StartsUnread, Converter={StaticResource BooleanVisibilityConverter}}">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+                                <Border Height="1" Background="{StaticResource AccentBrush}" Opacity="0.35" />
+                                <TextBlock Grid.Column="1" Text="{DynamicResource UiUnreadMessages}" FontSize="11" FontWeight="Medium"
+                                           Margin="8,0" Foreground="{StaticResource AccentTextBrush}" />
+                                <Border Grid.Column="2" Height="1" Background="{StaticResource AccentBrush}" Opacity="0.35" />
+                            </Grid>
+                            <Grid x:Name="MessageRow" Margin="{Binding TimelineSpacing}" Background="Transparent"
+                                  Loaded="TimelineMessageRow_Loaded" DataContextChanged="TimelineMessageRow_DataContextChanged">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <CheckBox x:Name="SelectionMark" IsChecked="{Binding IsSelected, Mode=OneWay}" IsHitTestVisible="False" Focusable="False"
+                                          VerticalAlignment="Top" Margin="0,12,12,0" Visibility="Collapsed" />
+                                <Border x:Name="PeerAvatar" Width="34" Height="34" CornerRadius="17"
+                                        Background="{StaticResource SurfaceBrush}" Margin="0,0,6,0" VerticalAlignment="Bottom">
+                                    <Grid>
+                                        <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Ellipse Fill="{Binding DataContext.SelectedConversation.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
+                                    </Grid>
+                                </Border>
+                                <Border x:Name="Bubble" Grid.Column="1" HorizontalAlignment="Left" MaxWidth="250">
+                                    <StackPanel>
+                                        <TextBlock x:Name="ForwardAttachmentLabel" Text="{Binding ForwardLabel}" Visibility="{Binding HasForward,Converter={StaticResource BooleanVisibilityConverter}}"
+                                                   Foreground="{StaticResource AccentTextBrush}" FontSize="12" TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                                        <ContentControl x:Name="ReplyPreview" Content="{Binding}" ContentTemplate="{StaticResource ChatReplyQuoteTemplate}"
+                                                        Visibility="{Binding HasReplyQuote, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                        <Border x:Name="TextBubble" HorizontalAlignment="Left" Padding="11,8" CornerRadius="{Binding TimelineCorners}" Background="{DynamicResource MessagingIncomingBubbleBrush}">
+                                            <DockPanel>
+                                                <Button x:Name="ReEditButton" DockPanel.Dock="Right" Visibility="Collapsed"
+                                                        Content="{DynamicResource UiReEdit}" Foreground="{StaticResource AccentTextBrush}" FontSize="12" FontWeight="Bold"
+                                                        Background="Transparent" BorderThickness="0" Padding="8,0,0,0" MinHeight="0"
+                                                        Click="ReEdit_Click" />
+                                                <StackPanel>
+                                                    <TextBlock x:Name="ForwardTextLabel" Text="{Binding ForwardLabel}"
+                                                               Visibility="{Binding HasForward, Converter={StaticResource BooleanVisibilityConverter}}"
+                                                               Foreground="{StaticResource AccentTextBrush}" FontSize="12"
+                                                               FontWeight="Medium" TextTrimming="CharacterEllipsis" Margin="0,0,0,4" />
+                                                    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource ChatReplyQuoteTemplate}"
+                                                        Visibility="{Binding HasReplyQuote, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                    <Grid>
+                                                        <Grid.RowDefinitions>
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                            <RowDefinition Height="Auto" />
+                                                        </Grid.RowDefinitions>
+                                                        <infra:TextBubbleLayout Grid.Row="1" AllowInline="{Binding UsesTextFooter}">
+                                                            <infra:MessageTextBlock x:Name="MessageContent" MessageText="{Binding DisplayContent}"
+                                                                QuoteHighlight="{Binding JumpQuote}"
+                                                                TextWrapping="Wrap" FontSize="{DynamicResource ChatMessageFontSize}"
+                                                                Foreground="{DynamicResource TextBrush}" LinkForeground="{DynamicResource AccentTextBrush}" />
+                                                            <ContentControl Content="{Binding}" ContentTemplate="{StaticResource ChatMessageMetadataTemplate}"
+                                                                Visibility="{Binding UsesTextFooter, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                        </infra:TextBubbleLayout>
+                                                        <ContentControl x:Name="QuotePickerHost" Grid.Row="1" Visibility="Collapsed" />
+                                                        <views:WebPreviewCard Grid.Row="2" MessageId="{Binding MessageId}" MessageText="{Binding DisplayContent}"
+                                                            DownloadPeer="{Binding PreviewDownloadPeer}"
+                                                            Services="{Binding DataContext.Services,RelativeSource={RelativeSource AncestorType=Window}}" />
+                                                    </Grid>
+                                                    <ContentControl Content="{Binding}" ContentTemplate="{StaticResource ChatMessageMetadataTemplate}"
+                                                        HorizontalAlignment="Right" Margin="0,3,0,0"
+                                                        Visibility="{Binding HasStandaloneTextFooter, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Border>
+                                        <Button x:Name="MessageCard" Visibility="Collapsed" HorizontalAlignment="Left"
+                                                MaxWidth="250" Padding="12,8" Click="MessageCard_Click" ToolTip="{DynamicResource UiOpenContactCard}">
+                                            <DockPanel>
+                                                <TextBlock x:Name="MessageCardIcon" DockPanel.Dock="Left" Text="&#xE77B;" FontFamily="Segoe MDL2 Assets"
+                                                           FontSize="20" Margin="0,0,10,0" VerticalAlignment="Center" />
+                                                <StackPanel>
+                                                    <TextBlock Text="{Binding CardTitle}" TextTrimming="CharacterEllipsis" FontWeight="SemiBold" />
+                                                    <TextBlock x:Name="MessageCardLabel" Text="{DynamicResource UiContactCard}" FontSize="11" Opacity=".75" />
+                                                </StackPanel>
+                                            </DockPanel>
+                                        </Button>
+                                        <Grid HorizontalAlignment="Left">
+                                            <infra:AttachmentPreview x:Name="Attachment" Message="{Binding}" Visibility="Collapsed"
+                                                                     EnableUploadRetry="True" RetryUploadRequested="RetryAttachmentUpload_Click"
+                                                                     FileActionRequested="FileCardAction_Click"
+                                                                     Focusable="True" FocusVisualStyle="{StaticResource ChatAttachmentFocusVisual}"
+                                                                     AutomationProperties.Name="{Binding Filename}"
+                                                                     MouseLeftButtonUp="AttachmentPreview_Click" Cursor="Hand" />
+                                            <Border Visibility="{Binding UsesVisualMediaFooter, Converter={StaticResource BooleanVisibilityConverter}}"
+                                                    HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                    Margin="6" Padding="6,3" CornerRadius="10" Background="#B8000000">
+                                                <ContentPresenter Content="{Binding}" ContentTemplate="{StaticResource ChatMessageMetadataTemplate}" />
+                                            </Border>
+                                        </Grid>
+                                        <Border x:Name="AlbumGrid" Visibility="Collapsed" Width="250" Padding="3"
+                                                CornerRadius="12" Background="{StaticResource SurfaceBrush}">
+                                            <ItemsControl ItemsSource="{Binding AlbumMembers}">
+                                                <ItemsControl.ItemsPanel>
+                                                    <ItemsPanelTemplate><infra:ChatAlbumPanel /></ItemsPanelTemplate>
+                                                </ItemsControl.ItemsPanel>
+                                                <ItemsControl.ItemTemplate>
+                                                    <DataTemplate>
+                                                        <Grid x:Name="AlbumTile" Background="Transparent">
+                                                            <StackPanel Margin="2">
+                                                                <ContentControl Content="{Binding}" ContentTemplate="{StaticResource ChatReplyQuoteTemplate}"
+                                                                    Visibility="{Binding HasReplyQuote, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                                <Grid>
+                                                                    <infra:AttachmentPreview Compact="True" Message="{Binding}"
+                                                                                             EnableUploadRetry="True" RetryUploadRequested="RetryAttachmentUpload_Click"
+                                                                                             Focusable="True" FocusVisualStyle="{StaticResource ChatAttachmentFocusVisual}"
+                                                                                             AutomationProperties.Name="{Binding Filename}"
+                                                                                             Cursor="Hand" MouseLeftButtonUp="AttachmentPreview_Click" />
+                                                                    <Border x:Name="TileSelectionOutline" CornerRadius="12" BorderThickness="2"
+                                                                            BorderBrush="{StaticResource AccentBrush}" IsHitTestVisible="False"
+                                                                            Visibility="Collapsed" />
+                                                                    <CheckBox IsChecked="{Binding IsSelected, Mode=OneWay}" IsHitTestVisible="False"
+                                                                              Focusable="False" HorizontalAlignment="Right" VerticalAlignment="Top"
+                                                                              Margin="8" AutomationProperties.Name="{Binding Filename}"
+                                                                              Visibility="{Binding DataContext.IsSelecting, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                                </Grid>
+                                                                <infra:MessageTextBlock MessageText="{Binding AlbumItemCaption}" TextWrapping="Wrap"
+                                                                                        Margin="4,4,4,0" FontSize="{DynamicResource ChatMessageFontSize}"
+                                                                                        Visibility="{Binding HasAlbumItemCaption, Converter={StaticResource BooleanVisibilityConverter}}" />
+                                                                <infra:MessageReceiptPresenter Content="{Binding Receipt}" ContentTemplate="{StaticResource ChatReceiptTemplate}"
+                                                                                  HorizontalAlignment="Right" />
+                                                            </StackPanel>
+                                                            <Border Style="{StaticResource MessageJumpHighlightStyle}" Margin="2" />
+                                                        </Grid>
+                                                        <DataTemplate.Triggers>
+                                                            <DataTrigger Binding="{Binding IsSelected}" Value="True">
+                                                                <Setter TargetName="TileSelectionOutline" Property="Visibility" Value="Visible" />
+                                                            </DataTrigger>
+                                                        </DataTemplate.Triggers>
+                                                    </DataTemplate>
+                                                </ItemsControl.ItemTemplate>
+                                            </ItemsControl>
+                                        </Border>
+                                        <infra:MessageTextBlock MessageText="{Binding DisplayCaption}" TextWrapping="Wrap" MaxWidth="250" Margin="4,4,4,0"
+                                                                FontSize="{DynamicResource ChatMessageFontSize}" Foreground="{StaticResource TextBrush}">
+                                            <infra:MessageTextBlock.Style><Style TargetType="infra:MessageTextBlock"><Setter Property="Visibility" Value="Collapsed" /><Style.Triggers><DataTrigger Binding="{Binding HasDisplayCaption}" Value="True"><Setter Property="Visibility" Value="Visible" /></DataTrigger></Style.Triggers></Style></infra:MessageTextBlock.Style>
+                                        </infra:MessageTextBlock>
+                                        <ContentControl x:Name="MessageMetadata" Content="{Binding}" HorizontalAlignment="Left"
+                                                        Margin="4,4,4,0" ContentTemplate="{StaticResource ChatMessageMetadataTemplate}" />
                                     </StackPanel>
-                                </StackPanel>
-                            </Border>
-                            <Border x:Name="MyAvatar" Grid.Column="2" Width="40" Height="40" CornerRadius="12"
-                                    Background="#FF444444" Margin="8,0,0,0" VerticalAlignment="Top" Visibility="Collapsed">
-                                <Grid>
-                                    <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    <Rectangle RadiusX="12" RadiusY="12"
-                                               Fill="{Binding DataContext.Settings.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
-                                </Grid>
-                            </Border>
-                        </Grid>
+                                </Border>
+                                <Border x:Name="MyAvatar" Grid.Column="2" Width="34" Height="34" CornerRadius="17"
+                                        Background="{StaticResource SurfaceBrush}" Margin="6,0,0,0" VerticalAlignment="Bottom" Visibility="Collapsed">
+                                    <Grid>
+                                        <TextBlock Text="+" FontSize="24" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                        <Ellipse Fill="{Binding DataContext.Settings.AvatarPath, RelativeSource={RelativeSource AncestorType=Window}, Converter={StaticResource AvatarConverter}}" />
+                                    </Grid>
+                                </Border>
+                                <Border x:Name="JumpHighlight" Grid.ColumnSpan="3" Style="{StaticResource MessageJumpHighlightStyle}" />
+                            </Grid>
+                        </StackPanel>
                         <DataTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsContactCard}" Value="True">
+                                <Setter TargetName="MessageCard" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="TextBubble" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsLocation}" Value="True">
+                                <Setter TargetName="MessageCard" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="MessageCard" Property="ToolTip" Value="{DynamicResource UiOpenSharedLocation}" />
+                                <Setter TargetName="MessageCardIcon" Property="Text" Value="&#xE707;" />
+                                <Setter TargetName="MessageCardLabel" Property="Text" Value="{DynamicResource UiLocation}" />
+                                <Setter TargetName="TextBubble" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsLiveLocation}" Value="True">
+                                <Setter TargetName="MessageCard" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="MessageCard" Property="ToolTip" Value="{DynamicResource UiOpenSharedLocation}" />
+                                <Setter TargetName="MessageCardIcon" Property="Text" Value="&#xE707;" />
+                                <Setter TargetName="MessageCardLabel" Property="Text" Value="{Binding LiveLocationStatus}" />
+                                <Setter TargetName="TextBubble" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
                             <DataTrigger Binding="{Binding IsAttachment}" Value="True">
                                 <Setter TargetName="Attachment" Property="Visibility" Value="Visible" />
                                 <Setter TargetName="TextBubble" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
-                            <DataTrigger Binding="{Binding IsDelivered}" Value="True">
-                                <Setter TargetName="DeliveryStatus" Property="Foreground" Value="{StaticResource AccentBrush}" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
-                                <Setter TargetName="Bubble" Property="BorderBrush" Value="Yellow" />
-                                <Setter TargetName="Bubble" Property="BorderThickness" Value="1" />
-                            </DataTrigger>
-                            <DataTrigger Binding="{Binding ReplyPreview}" Value="">
+                            <DataTrigger Binding="{Binding HasAlbum}" Value="True">
+                                <Setter TargetName="JumpHighlight" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="AlbumGrid" Property="Visibility" Value="Visible" />
+                                <Setter TargetName="Attachment" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="Attachment" Property="Message" Value="{x:Null}" />
                                 <Setter TargetName="ReplyPreview" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding IsText}" Value="True">
+                                <Setter TargetName="ForwardAttachmentLabel" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="Bubble" Property="MaxWidth" Value="430" />
+                                <Setter TargetName="ReplyPreview" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="MessageMetadata" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <DataTrigger Binding="{Binding UsesVisualMediaFooter}" Value="True">
+                                <Setter TargetName="MessageMetadata" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
                             <DataTrigger Binding="{Binding IsMine}" Value="True">
                                 <Setter TargetName="Bubble" Property="HorizontalAlignment" Value="Right" />
                                 <Setter TargetName="TextBubble" Property="HorizontalAlignment" Value="Right" />
-                                <Setter TargetName="TextBubble" Property="Background" Value="{StaticResource AccentBrush}" />
-                                <Setter TargetName="MessageContent" Property="Foreground" Value="#FF07120F" />
-                                <Setter TargetName="MessageContent" Property="LinkForeground" Value="DarkBlue" />
+                                <Setter TargetName="TextBubble" Property="Background" Value="{DynamicResource MessagingOutgoingBubbleBrush}" />
                                 <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
                                 <Setter TargetName="MyAvatar" Property="Visibility" Value="Visible" />
                                 <Setter TargetName="MessageMetadata" Property="HorizontalAlignment" Value="Right" />
                             </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsMine}" Value="False" />
+                                    <Condition Binding="{Binding JoinsNewer}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Hidden" />
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding IsMine}" Value="True" />
+                                    <Condition Binding="{Binding JoinsNewer}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Hidden" />
+                            </MultiDataTrigger>
                             <DataTrigger Binding="{Binding CanReEdit}" Value="True">
                                 <Setter TargetName="ReEditButton" Property="Visibility" Value="Visible" />
                             </DataTrigger>
@@ -321,25 +1225,166 @@
                                 <Setter TargetName="MessageMetadata" Property="Visibility" Value="Collapsed" />
                                 <Setter TargetName="ReplyPreview" Property="Visibility" Value="Collapsed" />
                             </DataTrigger>
+                            <DataTrigger Binding="{Binding DataContext.IsSelecting, RelativeSource={RelativeSource AncestorType=Window}}" Value="True">
+                                <Setter TargetName="PeerAvatar" Property="Visibility" Value="Collapsed" />
+                                <Setter TargetName="MyAvatar" Property="Visibility" Value="Collapsed" />
+                            </DataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding HasAlbum}" Value="False" />
+                                    <Condition Binding="{Binding DataContext.IsSelecting, RelativeSource={RelativeSource AncestorType=Window}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="SelectionMark" Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding HasAlbum}" Value="False" />
+                                    <Condition Binding="{Binding IsSelected}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter TargetName="MessageRow" Property="Background" Value="#1826A69A" />
+                            </MultiDataTrigger>
                         </DataTemplate.Triggers>
                     </DataTemplate>
                 </ListBox.ItemTemplate>
             </ListBox>
 
-            <Button Grid.Row="1" HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,16,16" Width="40" Height="40"
-                    Content="{StaticResource MinimizeIcon}" ToolTip="Scroll to bottom" AutomationProperties.Name="Scroll to bottom" Click="Latest_Click"
-                    Padding="8" Foreground="{StaticResource TextBrush}"
-                    Visibility="{Binding ShowLatestButton, Converter={StaticResource BooleanVisibilityConverter}}">
-                <Button.Style><Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}"><Setter Property="Background" Value="{StaticResource BorderBrush}"/>
-                    <Style.Triggers><DataTrigger Binding="{Binding HasNewUnread}" Value="True"><Setter Property="Background" Value="{StaticResource AccentBrush}"/></DataTrigger></Style.Triggers>
-                </Style></Button.Style>
-            </Button>
+            <TextBlock Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center"
+                       Foreground="{StaticResource MutedBrush}" IsHitTestVisible="False"
+                       Text="{DynamicResource UiNoMessagesInConversation}">
+                <TextBlock.Style>
+                    <Style TargetType="TextBlock">
+                        <Setter Property="Visibility" Value="Collapsed" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding HasConversation}" Value="True" />
+                                    <Condition Binding="{Binding Messages.Count}" Value="0" />
+                                    <Condition Binding="{Binding HistoryLoadFailed}" Value="False" />
+                                    <Condition Binding="{Binding InitialHistoryLoading}" Value="False" />
+                                </MultiDataTrigger.Conditions>
+                                <Setter Property="Visibility" Value="Visible" />
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </TextBlock.Style>
+            </TextBlock>
+            <StackPanel Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Center"
+                        IsHitTestVisible="False"
+                        Visibility="{Binding InitialHistoryLoading, Converter={StaticResource BooleanVisibilityConverter}}">
+                <TextBlock Text="{DynamicResource UiLoading}" Foreground="{StaticResource MutedBrush}" HorizontalAlignment="Center" />
+                <ProgressBar Width="96" Height="3" Margin="0,8,0,0" IsIndeterminate="True" />
+            </StackPanel>
+            <Border Grid.Row="2" HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,36,0,0"
+                    Padding="12,6" CornerRadius="8" Background="{StaticResource SurfaceBrush}"
+                    Visibility="{Binding HistoryLoadFailed, Converter={StaticResource BooleanVisibilityConverter}}">
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock Text="{DynamicResource UiHistoryLoadFailed}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Button Content="{DynamicResource UiRetry}" Click="RetryHistory_Click" />
+                </StackPanel>
+            </Border>
+            <Button x:Name="FloatingTimelineDate" Grid.Row="2" VerticalAlignment="Top" Margin="0,8,0,0"
+                    Style="{StaticResource TimelineDateButtonStyle}" Visibility="Collapsed" Click="TimelineDate_Click" />
 
-            <Border Grid.Row="2" Background="{StaticResource PanelBrush}"
-                    BorderBrush="{StaticResource BorderBrush}" BorderThickness="0" Padding="0">
+            <StackPanel x:Name="TimelineActions" Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right"
+                        VerticalAlignment="Bottom" Margin="0,0,16,16">
+                <Button x:Name="QuoteReturnButton" Visibility="Collapsed" VerticalAlignment="Bottom"
+                        Width="40" Height="40" Margin="0,0,8,0" Padding="8" Style="{StaticResource IconButtonStyle}"
+                        Background="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}"
+                        Content="{StaticResource HistoryReturnIcon}" ToolTip="{DynamicResource UiReturnToPosition}"
+                        AutomationProperties.Name="{DynamicResource UiReturnToPosition}" Click="QuoteReturn_Click" />
                 <Grid>
+                <Grid.Style>
+                    <Style TargetType="Grid">
+                        <Setter Property="Visibility" Value="{Binding ShowLatestButton, Converter={StaticResource BooleanVisibilityConverter}}" />
+                        <Style.Triggers>
+                            <MultiDataTrigger>
+                                <MultiDataTrigger.Conditions>
+                                    <Condition Binding="{Binding ShowLatestButton}" Value="True" />
+                                    <Condition Binding="{Binding Source={x:Static SystemParameters.ClientAreaAnimation}}" Value="True" />
+                                </MultiDataTrigger.Conditions>
+                                <MultiDataTrigger.EnterActions>
+                                    <BeginStoryboard Name="ShowLatestAnimation">
+                                        <Storyboard>
+                                            <DoubleAnimation Storyboard.TargetProperty="Opacity" From="0" To="1" Duration="0:0:0.18" />
+                                        </Storyboard>
+                                    </BeginStoryboard>
+                                </MultiDataTrigger.EnterActions>
+                                <MultiDataTrigger.ExitActions>
+                                    <RemoveStoryboard BeginStoryboardName="ShowLatestAnimation" />
+                                </MultiDataTrigger.ExitActions>
+                            </MultiDataTrigger>
+                        </Style.Triggers>
+                    </Style>
+                </Grid.Style>
+                <Button Width="40" Height="40" Margin="0,7,0,0" Padding="8" Style="{StaticResource IconButtonStyle}"
+                        Background="{StaticResource BorderBrush}" Foreground="{StaticResource TextBrush}"
+                        Content="{StaticResource MinimizeIcon}" ToolTip="{DynamicResource UiGoToLatest}" AutomationProperties.Name="{DynamicResource UiGoToLatest}"
+                        AutomationProperties.HelpText="{Binding SelectedConversation.UnreadDescription}" Click="Latest_Click" />
+                <infra:CircularBadge HorizontalAlignment="Center" VerticalAlignment="Top" IsHitTestVisible="False"
+                                     Background="#FFF22626" Padding="5,2">
+                    <infra:CircularBadge.Style>
+                        <Style TargetType="infra:CircularBadge">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding SelectedConversation.UnreadCount, FallbackValue=0}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </infra:CircularBadge.Style>
+                    <TextBlock Text="{Binding SelectedConversation.UnreadLabel}" Foreground="White" FontSize="11" FontWeight="SemiBold" />
+                </infra:CircularBadge>
+                </Grid>
+            </StackPanel>
+
+            <Button x:Name="AttachmentScrim" Grid.Row="2" Background="#26000000" Focusable="False"
+                    Click="DismissAttachments_Click" AutomationProperties.Name="{DynamicResource UiCloseAttachments}"
+                    Visibility="Collapsed" Opacity="0">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border Background="{TemplateBinding Background}" />
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+            <Border x:Name="AttachmentPanel" Grid.Row="2" HorizontalAlignment="Left" VerticalAlignment="Bottom"
+                    Margin="8,0,8,6" Width="234" Padding="5" CornerRadius="12"
+                    Background="{DynamicResource MessagingChromeBrush}" BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="1"
+                    Visibility="Collapsed" Opacity="0" KeyboardNavigation.TabNavigation="Cycle"
+                    KeyboardNavigation.DirectionalNavigation="Cycle">
+                <Border.RenderTransform><TranslateTransform Y="12" /></Border.RenderTransform>
+                <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                    <StackPanel>
+                        <Button x:Name="FirstAttachmentAction" Style="{StaticResource AttachmentActionStyle}" Tag="Visual"
+                                ToolTip="{DynamicResource UiPhotoVideo}" Click="Media_Click">
+                            <Geometry>M 3,4 L 21,4 L 21,20 L 3,20 Z M 4,17 L 9,12 L 13,16 L 16,13 L 20,17 M 16,9 A 1,1 0 1 0 18,9 A 1,1 0 1 0 16,9</Geometry>
+                        </Button>
+                        <Button Style="{StaticResource AttachmentActionStyle}" Tag="Files"
+                                ToolTip="{DynamicResource UiFiles}" Click="Media_Click">
+                            <Geometry>M 6,2 L 14,2 L 20,8 L 20,22 L 6,22 Z M 14,2 L 14,8 L 20,8 M 9,13 L 17,13 M 9,17 L 17,17</Geometry>
+                        </Button>
+                        <Button Style="{StaticResource AttachmentActionStyle}" Tag="Audio"
+                                ToolTip="{DynamicResource UiAudio}" Click="Media_Click">
+                            <Geometry>M 9,17 L 9,5 L 21,3 L 21,14 M 9,17 A 3,2 0 1 0 3,17 A 3,2 0 1 0 9,17 M 21,14 A 3,2 0 1 0 15,14 A 3,2 0 1 0 21,14 M 9,9 L 21,7</Geometry>
+                        </Button>
+                        <Border Margin="7,4" Height="1" Background="{DynamicResource MessagingDividerBrush}" />
+                        <Button Style="{StaticResource AttachmentActionStyle}" Content="{StaticResource MicrophoneIcon}"
+                                ToolTip="{DynamicResource UiVoiceMessage}" Click="RecordVoice_Click" />
+                        <Button Style="{StaticResource AttachmentActionStyle}" ToolTip="{DynamicResource UiStickers}" Click="Stickers_Click">
+                            <Geometry>M 4,4 L 20,4 L 20,14 L 14,20 L 4,20 Z M 14,20 L 14,14 L 20,14 M 8,9 L 8,9.5 M 15,9 L 15,9.5 M 8,13 Q 11,16 14,13</Geometry>
+                        </Button>
+                        <Button Style="{StaticResource AttachmentActionStyle}" ToolTip="{DynamicResource UiContactCard}" Click="ShareContact_Click">
+                            <Geometry>M 8,7 A 4,4 0 1 0 16,7 A 4,4 0 1 0 8,7 M 4,21 L 4,19 C 4,14 20,14 20,19 L 20,21 Z</Geometry>
+                        </Button>
+                        <Button Style="{StaticResource AttachmentActionStyle}" ToolTip="{DynamicResource UiLocation}" Click="ShareLocation_Click">
+                            <Geometry>M 12,22 C 10,18 5,14 5,9 A 7,7 0 1 1 19,9 C 19,14 14,18 12,22 Z M 9,9 A 3,3 0 1 0 15,9 A 3,3 0 1 0 9,9</Geometry>
+                        </Button>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <Border Grid.Row="3" Background="{DynamicResource MessagingChromeBrush}"
+                    BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,1,0,0" Padding="0">
+                <Grid x:Name="ComposerLayout">
                     <Grid.RowDefinitions>
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="Auto" />
                     </Grid.RowDefinitions>
@@ -348,125 +1393,428 @@
                         <ColumnDefinition />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
-                    <Border x:Name="ReplyBar" Grid.Row="0" Grid.ColumnSpan="3"
-                            Background="{StaticResource SurfaceBrush}" Padding="12,6">
+                    <StackPanel Grid.Row="0" Grid.ColumnSpan="3">
+                        <ScrollViewer MaxHeight="170" VerticalScrollBarVisibility="Auto" Visibility="{Binding HasPendingPreparations,Converter={StaticResource BooleanVisibilityConverter}}">
+                            <ItemsControl ItemsSource="{Binding PendingPreparations}">
+                                <ItemsControl.ItemTemplate><DataTemplate><DockPanel Margin="12,6">
+                                    <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" Tag="{Binding Id}" ToolTip="{DynamicResource UiPreparationCancel}" AutomationProperties.Name="{DynamicResource UiPreparationCancel}" Click="CancelPreparation_Click" Style="{StaticResource IconButtonStyle}" Width="28" Height="28" Visibility="{Binding Progress.CanCancel,Converter={StaticResource BooleanVisibilityConverter}}" />
+                                    <StackPanel><TextBlock Text="{Binding Label}" TextTrimming="CharacterEllipsis"/><TextBlock Text="{Binding Status}" FontSize="11" Foreground="{StaticResource MutedBrush}"/><ProgressBar Margin="0,3,0,0" Height="3" Minimum="0" Maximum="{Binding Progress.Total}" Value="{Binding Progress.Completed}" IsIndeterminate="{Binding Indeterminate}" /></StackPanel>
+                                </DockPanel></DataTemplate></ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </ScrollViewer>
+                        <StackPanel>
+                            <StackPanel.Style>
+                                <Style TargetType="StackPanel">
+                                    <Style.Triggers><DataTrigger Binding="{Binding HasMessageEdit}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers>
+                                </Style>
+                            </StackPanel.Style>
+                        <DockPanel Margin="12,4" Visibility="{Binding HasSendOptions,Converter={StaticResource BooleanVisibilityConverter}}">
+                            <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" ToolTip="{DynamicResource UiClearSendOptions}" AutomationProperties.Name="{DynamicResource UiClearSendOptions}" Click="ClearSendOptions_Click" Style="{StaticResource IconButtonStyle}" Width="28" Height="28" />
+                            <TextBlock Text="{Binding SendOptionsSummary}" TextWrapping="Wrap" Foreground="{StaticResource MutedBrush}" VerticalAlignment="Center" />
+                        </DockPanel>
+                        <Border Margin="8,4" Padding="8,5" CornerRadius="8" BorderThickness="1"
+                                Background="{DynamicResource MessagingTimelineBrush}" BorderBrush="{DynamicResource MessagingDividerBrush}"
+                                Visibility="{Binding HasPreviewLinks,Converter={StaticResource BooleanVisibilityConverter}}">
+                        <StackPanel>
+                            <DockPanel Margin="0,0,0,4">
+                                <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" ToolTip="{DynamicResource UiRemoveLinkPreview}"
+                                        AutomationProperties.Name="{DynamicResource UiRemoveLinkPreview}" Click="RemoveWebPreview_Click"
+                                        Visibility="{Binding HasWebPreview,Converter={StaticResource BooleanVisibilityConverter}}"
+                                        Style="{StaticResource IconButtonStyle}" Width="28" Height="28" MinHeight="28" />
+                                <Button DockPanel.Dock="Right" Width="28" Height="28" MinHeight="28"
+                                        Visibility="{Binding HasWebPreview,Converter={StaticResource BooleanVisibilityConverter}}"
+                                        Click="ToggleWebPreviewPlacement_Click">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                            <Setter Property="Content" Value="{StaticResource PreviewUpIcon}" />
+                                            <Setter Property="ToolTip" Value="{DynamicResource UiMoveLinkPreviewAbove}" />
+                                            <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiMoveLinkPreviewAbove}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding PreviewAboveText}" Value="True">
+                                                    <Setter Property="Content" Value="{StaticResource PreviewDownIcon}" />
+                                                    <Setter Property="ToolTip" Value="{DynamicResource UiMoveLinkPreviewBelow}" />
+                                                    <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiMoveLinkPreviewBelow}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button DockPanel.Dock="Right" Width="28" Height="28" MinHeight="28" Click="ToggleWebPreviewImageSize_Click">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                            <Setter Property="Content" Value="{StaticResource MediaExitFullScreenIcon}" />
+                                            <Setter Property="ToolTip" Value="{DynamicResource UiLinkPreviewSmallImage}" />
+                                            <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiLinkPreviewSmallImage}" />
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding WebPreview.Image, FallbackValue={x:Null}}" Value="{x:Null}">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding PreviewCompactImage}" Value="True">
+                                                    <Setter Property="Content" Value="{StaticResource MediaFullScreenIcon}" />
+                                                    <Setter Property="ToolTip" Value="{DynamicResource UiLinkPreviewLargeImage}" />
+                                                    <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiLinkPreviewLargeImage}" />
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                </Button>
+                                <Button DockPanel.Dock="Right" ToolTip="{DynamicResource UiChooseLinkPreview}" Content="{StaticResource LinkIcon}"
+                                        AutomationProperties.Name="{DynamicResource UiChooseLinkPreview}" Click="ChooseWebPreview_Click"
+                                        IsVisibleChanged="ChooseWebPreview_IsVisibleChanged"
+                                        Visibility="{Binding CanChooseWebPreview,Converter={StaticResource BooleanVisibilityConverter}}"
+                                        Style="{StaticResource IconButtonStyle}" Width="28" Height="28" MinHeight="28" />
+                                <CheckBox IsChecked="{Binding PreviewEnabled}" MinHeight="28" Margin="0,0,8,0"
+                                          AutomationProperties.Name="{DynamicResource UiLinkPreviews}">
+                                    <TextBlock Text="{DynamicResource UiLinkPreviews}" TextWrapping="Wrap" />
+                                </CheckBox>
+                            </DockPanel>
+                            <views:WebPreviewDraftCard Preview="{Binding WebPreview}" TargetUrl="{Binding PreviewTarget}"
+                                                       CompactImage="{Binding PreviewCompactImage}"
+                                                       Visibility="{Binding HasWebPreview,Converter={StaticResource BooleanVisibilityConverter}}" />
+                            <ProgressBar IsIndeterminate="True" Height="2" Margin="0,3,0,0"
+                                         AutomationProperties.Name="{DynamicResource UiLoading}"
+                                         Visibility="{Binding PreviewLoading,Converter={StaticResource BooleanVisibilityConverter}}" />
+                            <DockPanel Margin="1,3,0,0"
+                                       Visibility="{Binding CanRetryWebPreview,Converter={StaticResource BooleanVisibilityConverter}}">
+                                <Button DockPanel.Dock="Right" Content="{DynamicResource UiRetry}"
+                                        Click="RetryWebPreview_Click" Padding="8,2" Margin="8,0,0,0" />
+                                <TextBlock Text="{DynamicResource UiLinkPreviewUnavailable}" FontSize="11"
+                                           Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap" VerticalAlignment="Center" />
+                            </DockPanel>
+                        </StackPanel>
+                        </Border>
+                    </StackPanel>
+                    <Border Background="{DynamicResource MessagingTimelineBrush}"
+                            BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,1,0,0"
+                            Padding="12,6" MinHeight="49" ClipToBounds="True">
                         <Border.Style>
                             <Style TargetType="Border">
                                 <Setter Property="Visibility" Value="Visible" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding HasReplyTarget}" Value="False">
+                                    <MultiDataTrigger>
+                                        <MultiDataTrigger.Conditions>
+                                            <Condition Binding="{Binding HasReplyTarget}" Value="False" />
+                                            <Condition Binding="{Binding HasMessageEdit}" Value="False" />
+                                        </MultiDataTrigger.Conditions>
                                         <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
+                                    </MultiDataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Border.Style>
                         <DockPanel>
-                            <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" ToolTip="Cancel reply" AutomationProperties.Name="Cancel reply"
-                                    Style="{StaticResource IconButtonStyle}" Width="24" Height="24" MinHeight="24"
-                                    Click="CancelReply_Click" />
-                            <Border DockPanel.Dock="Left" Width="4" Height="32" CornerRadius="2" Background="{StaticResource AccentBrush}" Margin="0,0,8,0"/>
-                            <StackPanel>
-                                <TextBlock Text="{Binding ReplyTitle}" Foreground="{StaticResource AccentBrush}" FontSize="12" FontWeight="Bold" />
-                                <TextBlock Text="{Binding ReplyPreview}" Foreground="{StaticResource MutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis" />
-                            </StackPanel>
+                            <Button DockPanel.Dock="Right" Content="{StaticResource CloseIcon}" Width="32" Height="32" MinHeight="32"
+                                    Click="DismissComposerAccessory_Click">
+                                <Button.Style>
+                                    <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiCancelReply}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiCancelReply}" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                                <Setter Property="ToolTip" Value="{DynamicResource UiCancelEdit}" />
+                                                <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiCancelEdit}" />
+                                                <Setter Property="IsEnabled" Value="{Binding CanCancelEdit}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Button.Style>
+                            </Button>
+                            <Button Background="Transparent" BorderThickness="0" Padding="0" MinHeight="0" HorizontalContentAlignment="Stretch"
+                                    ToolTip="{DynamicResource UiJumpToMessage}" AutomationProperties.HelpText="{DynamicResource UiJumpToMessage}"
+                                    Click="PreviewReplyTarget_Click">
+                                <DockPanel LastChildFill="True">
+                                    <Border DockPanel.Dock="Left" Width="3" Height="28" Margin="0,0,8,0" CornerRadius="2"
+                                            Background="{DynamicResource MessagingSelectionMarkBrush}" />
+                                    <Path DockPanel.Dock="Left"
+                                          Stroke="{StaticResource AccentTextBrush}" StrokeThickness="1.5" StrokeLineJoin="Round"
+                                          Width="18" Height="18" Stretch="Uniform" VerticalAlignment="Center" Margin="2,0,11,0">
+                                        <Path.Style>
+                                            <Style TargetType="Path">
+                                                <Setter Property="Data" Value="M10,4 L3,10 L10,16 M3,10 H13 C17,10 19,12 19,16" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                                        <Setter Property="Data" Value="M3,17 L4,12 L14,2 L18,6 L8,16 Z M12,4 L16,8" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Path.Style>
+                                    </Path>
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Foreground="{StaticResource AccentTextBrush}" FontSize="12" FontWeight="SemiBold" TextTrimming="CharacterEllipsis">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="{Binding ReplyTitle}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                                            <Setter Property="Text" Value="{Binding EditingTitle}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                        <infra:MessageTextBlock IsSummary="True" Foreground="{StaticResource MutedBrush}" FontSize="12" TextTrimming="CharacterEllipsis">
+                                            <infra:MessageTextBlock.Style>
+                                                <Style TargetType="infra:MessageTextBlock">
+                                                    <Setter Property="MessageText" Value="{Binding ReplyPreview}" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                                            <Setter Property="MessageText" Value="{Binding EditingPreview}" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </infra:MessageTextBlock.Style>
+                                        </infra:MessageTextBlock>
+                                    </StackPanel>
+                                </DockPanel>
+                            </Button>
                         </DockPanel>
                     </Border>
-                    <TextBox x:Name="Composer" Grid.Row="1" Grid.ColumnSpan="2"
+                    </StackPanel>
+                    <TextBox x:Name="Composer" Grid.Row="1" Grid.Column="1"
                              Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
-                             Margin="8" MinHeight="56" MaxHeight="132" AcceptsReturn="True"
-                             FontSize="16" Background="{StaticResource WindowBrush}" Foreground="{StaticResource TextBrush}"
+                             Margin="8,9" MinHeight="36" MaxHeight="72" AcceptsReturn="True"
+                             FontSize="{DynamicResource ChatComposerFontSize}" Background="{DynamicResource MessagingTimelineBrush}" Foreground="{StaticResource TextBrush}"
                              TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             IsEnabled="{Binding HasConversation}">
+                             AutomationProperties.Name="{DynamicResource UiMessagePlaceholder}"
+                             IsEnabled="{Binding CanCompose}">
                         <TextBox.Style>
                             <Style TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
                                 <Setter Property="Template">
                                     <Setter.Value>
                                         <ControlTemplate TargetType="TextBox">
-                                            <Border Background="{TemplateBinding Background}" CornerRadius="20" Padding="12">
+                                            <Border x:Name="InputChrome" Background="{TemplateBinding Background}" CornerRadius="20"
+                                                    BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="1" Padding="11">
                                                 <Grid>
-                                                    <TextBlock x:Name="Placeholder" Text="Message..." Foreground="#FF808080" Visibility="Collapsed" IsHitTestVisible="False" />
+                                                    <TextBlock x:Name="Placeholder" Text="{DynamicResource UiMessagePlaceholder}"
+                                                               Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis"
+                                                               Visibility="Collapsed" IsHitTestVisible="False" />
                                                     <ScrollViewer x:Name="PART_ContentHost" />
                                                 </Grid>
                                             </Border>
                                             <ControlTemplate.Triggers>
                                                 <Trigger Property="Text" Value=""><Setter TargetName="Placeholder" Property="Visibility" Value="Visible" /></Trigger>
+                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                                    <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource MessagingSelectionMarkBrush}" />
+                                                </Trigger>
                                             </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </Setter.Value>
                                 </Setter>
+                                <Style.Triggers><DataTrigger Binding="{Binding HasMessageEdit}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers>
                             </Style>
                         </TextBox.Style>
                     </TextBox>
-                    <Button Grid.Row="1" Grid.Column="2" Width="48" Height="48"
-                            Margin="0,8,8,8" VerticalAlignment="Bottom"
-                            IsEnabled="{Binding HasConversation}" Click="Send_Click">
+                    <TextBox x:Name="EditComposer" Grid.Row="1" Grid.ColumnSpan="2" Margin="8,9" MinHeight="36" MaxHeight="72"
+                             Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="True"
+                             FontSize="{DynamicResource ChatComposerFontSize}" VerticalScrollBarVisibility="Auto"
+                             AutomationProperties.Name="{DynamicResource UiEditMessage}" IsReadOnly="{Binding IsSavingEdit}"
+                             Visibility="{Binding HasMessageEdit, Converter={StaticResource BooleanVisibilityConverter}}">
+                        <TextBox.Style>
+                            <Style TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
+                                <Setter Property="Background" Value="{DynamicResource MessagingTimelineBrush}" />
+                            </Style>
+                        </TextBox.Style>
+                    </TextBox>
+                    <Button x:Name="AttachmentToggle" Grid.Row="1" Grid.Column="0" Width="44" Height="46" Margin="8,9,0,9"
+                            VerticalAlignment="Bottom" Background="Transparent" ContentTemplate="{x:Null}"
+                            IsEnabled="{Binding CanCompose}" Click="ToggleAttachments_Click">
                         <Button.Style>
                             <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
-                                <Setter Property="Content" Value="{StaticResource MenuPlusIcon}" />
-                                <Setter Property="ToolTip" Value="Add Media" />
-                                <Setter Property="AutomationProperties.Name" Value="Add Media" />
-                                <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
+                                <Setter Property="ToolTip" Value="{DynamicResource UiAddAttachments}" />
+                                <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiAddAttachments}" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding HasDraft}" Value="True">
-                                        <Setter Property="Content" Value="{StaticResource SendIcon}" />
-                                        <Setter Property="ToolTip" Value="Send" />
-                                        <Setter Property="AutomationProperties.Name" Value="Send" />
-                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
-                                        <Setter Property="Foreground" Value="White" />
+                                    <DataTrigger Binding="{Binding HasMessageEdit}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger>
+                                    <DataTrigger Binding="{Binding ShowAttachments}" Value="True">
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiCloseAttachments}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiCloseAttachments}" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <ContentPresenter Content="{StaticResource MenuPlusIcon}" ContentTemplate="{StaticResource IconTemplate}"
+                                          Width="18" Height="18" IsHitTestVisible="False" RenderTransformOrigin="0.5,0.5">
+                            <ContentPresenter.RenderTransform><RotateTransform x:Name="AttachmentToggleRotation" /></ContentPresenter.RenderTransform>
+                        </ContentPresenter>
+                    </Button>
+                    <StackPanel Grid.Row="1" Grid.Column="2" Orientation="Horizontal" Margin="0,9,8,9" VerticalAlignment="Bottom">
+                    <Button Click="SendOptions_Click" ToolTip="{DynamicResource UiSendOptions}"
+                            AutomationProperties.Name="{DynamicResource UiSendOptions}" Width="32" Height="46" Background="Transparent"
+                            ContentTemplate="{x:Null}" IsEnabled="{Binding CanCompose}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                        <Path Data="M2,4 L20,4 M2,11 L20,11 M2,18 L20,18 M6,1 L6,7 M15,8 L15,14 M9,15 L9,21"
+                              Stroke="{StaticResource MutedBrush}" StrokeThickness="1.5" Width="16" Height="18" Stretch="Uniform" />
+                    </Button>
+                    <Button x:Name="StickerToggle" Width="38" Height="46" Margin="0,0,4,0" Background="Transparent"
+                            Content="{StaticResource StickerIcon}" Click="Stickers_Click"
+                            ToolTip="{DynamicResource UiStickers}" AutomationProperties.Name="{DynamicResource UiStickers}">
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Setter Property="IsEnabled" Value="{Binding CanCompose}" />
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                        <Setter Property="Visibility" Value="Collapsed" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
                         </Button.Style>
                     </Button>
-                    <Border Grid.Row="2" Grid.ColumnSpan="3" ClipToBounds="True">
-                        <Border.Style>
-                            <Style TargetType="Border">
-                                <Setter Property="Height" Value="0" />
-                                <Setter Property="Opacity" Value="0" />
-                                <Setter Property="IsHitTestVisible" Value="False" />
-                                <Setter Property="IsEnabled" Value="False" />
+                    <Button x:Name="ComposerActionButton" Width="44" Height="46" ContentTemplate="{x:Null}" Click="Send_Click"
+                            ContextMenuOpening="ComposerSendMenu_Opening" ToolTipService.ShowOnDisabled="True">
+                        <Button.ContextMenu>
+                            <ContextMenu Opened="ComposerSendMenu_Opened" Closed="ComposerSendMenu_Closed">
+                                <MenuItem Header="{DynamicResource UiSendWithoutSound}" Click="SendWithoutSound_Click" />
+                                <MenuItem Header="{DynamicResource UiScheduleNextMessage}" Click="ScheduleNextMessage_Click" />
+                            </ContextMenu>
+                        </Button.ContextMenu>
+                        <Button.Style>
+                            <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Setter Property="IsEnabled" Value="{Binding CanCompose}" />
+                                <Setter Property="ToolTip" Value="{DynamicResource UiVoiceMessage}" />
+                                <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiVoiceMessage}" />
+                                <Setter Property="Background" Value="{StaticResource RaisedBrush}" />
                                 <Style.Triggers>
-                                    <DataTrigger Binding="{Binding ShowAttachments}" Value="True">
-                                        <Setter Property="IsHitTestVisible" Value="True" />
-                                        <Setter Property="IsEnabled" Value="True" />
-                                        <DataTrigger.EnterActions>
-                                            <BeginStoryboard><Storyboard>
-                                                <DoubleAnimation Storyboard.TargetProperty="Height" To="116" Duration="0:0:0.18" />
-                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="1" Duration="0:0:0.18" />
-                                            </Storyboard></BeginStoryboard>
-                                        </DataTrigger.EnterActions>
-                                        <DataTrigger.ExitActions>
-                                            <BeginStoryboard><Storyboard>
-                                                <DoubleAnimation Storyboard.TargetProperty="Height" To="0" Duration="0:0:0.18" />
-                                                <DoubleAnimation Storyboard.TargetProperty="Opacity" To="0" Duration="0:0:0.18" />
-                                            </Storyboard></BeginStoryboard>
-                                        </DataTrigger.ExitActions>
+                                    <DataTrigger Binding="{Binding HasDraft}" Value="True">
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiSend}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiSend}" />
+                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Foreground" Value="#FF07120F" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding TextSendPending}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiPreparationQueuing}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiPreparationQueuing}" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding HasMessageEdit}" Value="True">
+                                        <Setter Property="IsEnabled" Value="{Binding CanSubmitEdit}" />
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiSave}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiSave}" />
+                                        <Setter Property="Background" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                        <Setter Property="Foreground" Value="#FF07120F" />
+                                    </DataTrigger>
+                                    <DataTrigger Binding="{Binding IsSavingEdit}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                        <Setter Property="ToolTip" Value="{DynamicResource UiSaving}" />
+                                        <Setter Property="AutomationProperties.Name" Value="{DynamicResource UiSaving}" />
                                     </DataTrigger>
                                 </Style.Triggers>
                             </Style>
-                        </Border.Style>
-                        <UniformGrid Columns="2" Margin="16" Height="84" VerticalAlignment="Top">
-                        <StackPanel HorizontalAlignment="Center">
-                            <Button Content="{StaticResource MenuPlusIcon}" Style="{StaticResource AttachmentActionStyle}"
-                                    Width="60" Height="60" ToolTip="Media" AutomationProperties.Name="Media" Click="Media_Click" />
-                            <TextBlock Text="Media" FontSize="12" Foreground="#FF808080" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                        </StackPanel>
-                        <StackPanel HorizontalAlignment="Center">
-                            <Button Content="{StaticResource CallIcon}" Style="{StaticResource AttachmentActionStyle}"
-                                    Width="60" Height="60" ToolTip="Voice Call" AutomationProperties.Name="Voice Call" Click="VoiceCall_Click" />
-                            <TextBlock Text="Voice Call" FontSize="12" Foreground="#FF808080" HorizontalAlignment="Center" Margin="0,8,0,0" />
-                        </StackPanel>
-                        </UniformGrid>
-                    </Border>
+                        </Button.Style>
+                        <Grid Width="18" Height="18" IsHitTestVisible="False">
+                            <Grid.Resources>
+                                <Style TargetType="ContentPresenter">
+                                    <Setter Property="ContentTemplate" Value="{StaticResource IconTemplate}" />
+                                    <Setter Property="RenderTransformOrigin" Value="0.5,0.5" />
+                                </Style>
+                            </Grid.Resources>
+                            <ContentPresenter x:Name="RecordActionIcon" Content="{StaticResource MicrophoneIcon}">
+                                <ContentPresenter.RenderTransform><ScaleTransform /></ContentPresenter.RenderTransform>
+                            </ContentPresenter>
+                            <ContentPresenter x:Name="SendActionIcon" Content="{StaticResource SendIcon}" Opacity="0">
+                                <ContentPresenter.RenderTransform><ScaleTransform ScaleX="0.8" ScaleY="0.8" /></ContentPresenter.RenderTransform>
+                            </ContentPresenter>
+                            <ContentPresenter x:Name="SaveEditActionIcon" Content="{StaticResource CheckIcon}" Opacity="0">
+                                <ContentPresenter.RenderTransform><ScaleTransform ScaleX="0.8" ScaleY="0.8" /></ContentPresenter.RenderTransform>
+                            </ContentPresenter>
+                            <ContentPresenter x:Name="PendingActionIcon" Opacity="0">
+                                <ContentPresenter.Content>
+                                    <Geometry>M12,3 A9,9 0 0 1 12,21 A9,9 0 0 1 12,3 M12,7 V12 L15,14</Geometry>
+                                </ContentPresenter.Content>
+                                <ContentPresenter.RenderTransform><ScaleTransform ScaleX="0.8" ScaleY="0.8" /></ContentPresenter.RenderTransform>
+                            </ContentPresenter>
+                        </Grid>
+                    </Button>
+                    </StackPanel>
                 </Grid>
             </Border>
 
 
+            <Button x:Name="StickerScrim" Grid.Row="2" Panel.ZIndex="7" Background="Transparent"
+                    Focusable="False" Visibility="Collapsed" AutomationProperties.Name="{DynamicResource UiStickerClosePanel}"
+                    Click="CloseStickerPanel_Click">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button"><Border Background="{TemplateBinding Background}" /></ControlTemplate>
+                </Button.Template>
+            </Button>
+            <Border x:Name="StickerHost" Grid.Row="2" Panel.ZIndex="8" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="8,0,10,7" Width="345" Visibility="Collapsed" Opacity="0"
+                    ClipToBounds="True" CornerRadius="10" BorderThickness="1" BorderBrush="{StaticResource BorderBrush}"
+                    Background="{StaticResource PanelBrush}">
+                <Border.RenderTransform><TranslateTransform Y="9" /></Border.RenderTransform>
+            </Border>
+
+            <Border x:Name="AttachmentCheckIndicator" Grid.Row="2" Panel.ZIndex="19" Visibility="Collapsed"
+                    HorizontalAlignment="Center" VerticalAlignment="Top" Margin="0,8" Padding="10,4"
+                    Background="{StaticResource PanelBrush}" CornerRadius="8">
+                <StackPanel Orientation="Horizontal">
+                    <ProgressBar IsIndeterminate="True" Width="24" Height="3" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <TextBlock Text="{DynamicResource UiCheckingAttachment}" VerticalAlignment="Center" Margin="0,0,8,0" />
+                    <Button Content="{DynamicResource UiCancel}" Click="CancelAttachmentCheck_Click" Padding="8,2" />
+                </StackPanel>
+            </Border>
+            <Border x:Name="ChatDropIndicator" Grid.RowSpan="4" Panel.ZIndex="20" IsHitTestVisible="False"
+                    Visibility="Collapsed" Opacity="0" Margin="20,10">
+                <Grid>
+                    <Grid.RowDefinitions><RowDefinition /><RowDefinition /></Grid.RowDefinitions>
+                    <Border Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Margin="0,0,0,4">
+                        <Grid>
+                            <Border x:Name="DropMediaRegion" Opacity="0" Background="{StaticResource RaisedBrush}"
+                                    BorderBrush="{StaticResource AccentBrush}" BorderThickness="2" CornerRadius="12" />
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12">
+                                <Path Data="M 3,4 L 21,4 L 21,20 L 3,20 Z M 4,17 L 9,12 L 13,16 L 16,13 L 20,17"
+                                      Width="30" Height="25" Stroke="{StaticResource AccentTextBrush}" StrokeThickness="1.8" Stretch="Uniform" />
+                                <TextBlock Text="{DynamicResource UiDropAsMedia}" TextAlignment="Center" Margin="0,7,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <Border Grid.Row="1" Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="12" Margin="0,4,0,0">
+                        <Grid>
+                            <Border x:Name="DropFileRegion" Opacity="0" Background="{StaticResource RaisedBrush}"
+                                    BorderBrush="{StaticResource AccentBrush}" BorderThickness="2" CornerRadius="12" />
+                            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" Margin="12">
+                                <Path Data="M 6,2 L 14,2 L 20,8 L 20,22 L 6,22 Z M 14,2 L 14,8 L 20,8 M 9,13 L 17,13 M 9,17 L 17,17"
+                                      Width="30" Height="25" Stroke="{StaticResource AccentTextBrush}" StrokeThickness="1.8" Stretch="Uniform" />
+                                <TextBlock Text="{DynamicResource UiDropAsFile}" TextAlignment="Center" Margin="0,7,0,0" TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                </Grid>
+            </Border>
+            <Border x:Name="DropPreparationIndicator" Grid.RowSpan="4" Panel.ZIndex="20"
+                    Visibility="Collapsed" IsHitTestVisible="False"
+                    HorizontalAlignment="Center" VerticalAlignment="Center" Padding="16"
+                    Background="{StaticResource PanelBrush}" BorderBrush="{StaticResource BorderBrush}"
+                    BorderThickness="1" CornerRadius="12">
+                <StackPanel>
+                    <TextBlock Text="{DynamicResource UiPreparingDroppedFiles}" Margin="0,0,0,8"
+                               HorizontalAlignment="Center" AutomationProperties.LiveSetting="Polite" />
+                    <ProgressBar Height="3" IsIndeterminate="True" />
+                </StackPanel>
+            </Border>
         </Grid>
-            <wv2:WebView2 x:Name="WebRtcView" Width="1" Height="1"
+            <wv2:WebView2CompositionControl x:Name="WebRtcView" Width="1" Height="1" Opacity="0"
                           HorizontalAlignment="Left" VerticalAlignment="Top"
-                          IsHitTestVisible="False" />
+                          IsHitTestVisible="False" Focusable="False" />
         <ContentControl x:Name="MediaOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
         <ContentControl x:Name="CallOverlayHost" Grid.ColumnSpan="3" HorizontalContentAlignment="Stretch" VerticalContentAlignment="Stretch" />
+    </Grid>
+    <StackPanel x:Name="AppLockPane" VerticalAlignment="Center" HorizontalAlignment="Center" MaxWidth="380">
+        <TextBlock x:Name="AppLockTitle" Text="{DynamicResource UiOpeningApp}" FontSize="24" TextAlignment="Center"
+                   AutomationProperties.LiveSetting="Polite" />
+        <ProgressBar x:Name="AppOpeningProgress" Height="3" Width="144" Margin="0,12,0,0" IsIndeterminate="True" />
+        <Button x:Name="AppUnlockButton" Content="{DynamicResource UiUnlock}" Visibility="Collapsed" Margin="0,18,0,0"
+                HorizontalAlignment="Center" Click="AppUnlock_Click" />
+        <TextBlock x:Name="AppLockError" Margin="0,12,0,0" TextWrapping="Wrap" TextAlignment="Center"
+                   Foreground="{StaticResource TextBrush}" />
+    </StackPanel>
     </Grid>
 </Window>

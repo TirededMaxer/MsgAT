@@ -1,3 +1,19 @@
 {
-  "port": 34478
+  "port": 34478,
+  "listenAddress": "*",
+  "dataDirectory": "data",
+  "maxConnections": 1024,
+  "maxUnauthenticatedConnections": 64,
+  "maxUnauthenticatedPerAddress": 16,
+  "maxInboundFrameBytes": 262144,
+  "authenticationTimeoutSeconds": 30,
+  "readTimeoutSeconds": 300,
+  "writeTimeoutSeconds": 60,
+  "mailboxRecipientQuotaBytes": 67108864,
+  "mailboxGlobalQuotaBytes": 2147483648,
+  "mailboxRetentionDays": 7,
+  "attachmentMaxBytes": 104857600,
+  "attachmentOwnerQuotaBytes": 536870912,
+  "attachmentGlobalQuotaBytes": 8589934592,
+  "attachmentRetentionDays": 14
 }

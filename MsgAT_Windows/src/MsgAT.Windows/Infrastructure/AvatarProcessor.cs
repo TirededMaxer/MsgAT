@@ -5,12 +5,16 @@ namespace MsgAT.Windows.Infrastructure;
 
 public static class AvatarProcessor
 {
-    private const int MaximumDimension = 256;
-    private const int MaximumBytes = 128 * 1024;
+    private const int MaximumDimension = 512;
+    private const int MaximumBytes = 512 * 1024;
 
     public static byte[] EncodeJpeg(string sourcePath)
     {
-        var frame = ImageDecoder.Load(sourcePath);
+        using var input=File.OpenRead(sourcePath);return EncodeJpeg(input);
+    }
+    public static byte[] EncodeJpeg(Stream input)
+    {
+        var frame=ImageDecoder.Load(input);
         var scale = Math.Min(1d, Math.Min((double)MaximumDimension / frame.PixelWidth, (double)MaximumDimension / frame.PixelHeight));
         BitmapSource bitmap = scale < 1d
             ? new TransformedBitmap(frame, new ScaleTransform(scale, scale))

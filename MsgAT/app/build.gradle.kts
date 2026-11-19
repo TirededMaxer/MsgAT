@@ -6,8 +6,11 @@ plugins {
 }
 
 android {
+    sourceSets.getByName("main").assets.srcDir(rootProject.file("../shared/storage"))
     namespace = "org.msgat"
     compileSdk = 36
+
+    sourceSets.getByName("main").assets.srcDir(rootProject.file("../shared/licenses"))
 
     defaultConfig {
         applicationId = "org.msgat"
@@ -94,6 +97,10 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }
 }
 
 dependencies {
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("androidx.camera:camera-lifecycle:1.5.3")
+    implementation("androidx.camera:camera-view:1.5.3")
+    implementation("androidx.camera:camera-video:1.5.3")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -115,6 +122,10 @@ dependencies {
 
     // Networking
     implementation("io.netty:netty-all:4.1.107.Final")
+    implementation("org.unifiedpush.android:connector:3.0.10") {
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
+    implementation("com.google.crypto.tink:tink-android:1.17.0")
     // Cryptography (Ed25519, X25519, and AES-GCM primitives)
     implementation("org.bouncycastle:bcprov-jdk18on:1.77")
     // JSON serialization
@@ -133,10 +144,9 @@ dependencies {
     implementation("androidx.sqlite:sqlite:2.6.2")
     // Process lifecycle monitoring
     implementation("androidx.lifecycle:lifecycle-process:2.7.0")
+    implementation("com.google.zxing:core:3.5.4")
     // Image loading
     implementation("io.coil-kt:coil-compose:2.6.0")
-    // Image cropping
-    implementation("com.github.yalantis:ucrop:2.2.8")
     // WebRTC Engine for Voice Calls
     implementation("io.github.webrtc-sdk:android:144.7559.09")
     // Paging 3
@@ -145,5 +155,7 @@ dependencies {
 
     // ExoPlayer for Video Playback
     implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-transformer:1.3.1")
+    implementation("androidx.media3:media3-effect:1.3.1")
     implementation("androidx.media3:media3-ui:1.3.1")
 }

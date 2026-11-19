@@ -1,61 +1,151 @@
 import SwiftUI
 import AppKit
 
+private struct ReplyGutterBoundary: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        if let next = nextValue() { value = next }
+    }
+}
+
 public struct ChatBubbleView: View {
+    @State private var linkTargets: [URL] = []
+    @State private var revealedForCopy = Set<Int>()
+    @State private var copyTask: Task<Void, Never>?
+    @State private var attachmentMetadata: AttachmentMetadata?
+    @State private var confirmPin = false
+    @State private var unpinRequested = false
+    @State private var confirmDownloadAgain = false
+    @Environment(\.interfaceStrings) private var interfaceText
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.layoutDirection) private var layoutDirection
     let message: ChatMessage
     let replyAuthor: String
     let peerAlias: String
     let peerAvatarPath: String?
-    let isHighlighted: Bool
+    let forwardLabel: String?
+    let albumTile: Bool
+    let maximumMessageBodyWidth: CGFloat
+    let joinsOlder: Bool
+    let joinsNewer: Bool
+    let showAvatars: Bool
+    let quickReplyEnabled: Bool
 
     var onMediaClick: (ChatMessage) -> Void
+    private var onPhotoOpen: ((ChatMessage, CGRect, NSImage) -> Void)?
     var onReply: (ChatMessage) -> Void
+    var onQuoteText: ((ChatMessage) -> Void)?
+    var quotePicker: AnyView?
     var onQuotedClick: (String) -> Void
+    var quoteHighlight: String?
     var onRevoke: (String) -> Void
+    var onCancelQueuedSend: (() -> Void)?
+    var onRetrySend: (() -> Void)?
+    var retryingSend: Bool
+    var onDeleteLocally: (() -> Void)?
     var onEdit: (ChatMessage) -> Void
     var onReEdit: (String) -> Void
+    var onSelect: ()->Void
+    var onForward: ()->Void
+    var onSave: ()->Void
+    var onPinState:()->Bool
+    var onSetPinned:(Bool,Bool)->Void
+    var onContactClick: (ChatMessage) -> Void
+    var onLocationClick: (ChatMessage) -> Void
 
-    @State private var thumbnail: NSImage? = nil
-    @State private var showSaveConfirmation = false
 
     public init(
         message: ChatMessage,
         peerAlias: String,
         replyAuthor: String = "User",
         peerAvatarPath: String?,
-        isHighlighted: Bool = false,
+        forwardLabel: String? = nil,
+        albumTile: Bool = false,
+        maximumMessageBodyWidth: CGFloat = 408,
+        joinsOlder: Bool = false,
+        joinsNewer: Bool = false,
+        showAvatars: Bool = true,
+        quickReplyEnabled: Bool = false,
         onMediaClick: @escaping (ChatMessage) -> Void,
         onReply: @escaping (ChatMessage) -> Void,
+        onQuoteText: ((ChatMessage) -> Void)? = nil,
+        quotePicker: AnyView? = nil,
         onQuotedClick: @escaping (String) -> Void,
+        quoteHighlight: String? = nil,
         onRevoke: @escaping (String) -> Void,
+        onCancelQueuedSend: (() -> Void)? = nil,
+        onRetrySend: (() -> Void)? = nil,
+        retryingSend: Bool = false,
+        onDeleteLocally: (() -> Void)? = nil,
         onEdit: @escaping (ChatMessage) -> Void,
-        onReEdit: @escaping (String) -> Void
+        onReEdit: @escaping (String) -> Void,
+        onSelect: @escaping ()->Void = {},
+        onForward: @escaping ()->Void = {},
+        onSave: @escaping ()->Void = {},
+        onPinState:@escaping()->Bool={false},
+        onSetPinned:@escaping(Bool,Bool)->Void={_,_ in},
+        onContactClick: @escaping (ChatMessage) -> Void = { _ in },
+        onLocationClick: @escaping (ChatMessage) -> Void = { _ in },
+        onPhotoOpen: ((ChatMessage, CGRect, NSImage) -> Void)? = nil
     ) {
         self.message = message
         self.replyAuthor = replyAuthor
         self.peerAlias = peerAlias
         self.peerAvatarPath = peerAvatarPath
-        self.isHighlighted = isHighlighted
+        self.forwardLabel=forwardLabel
+        self.albumTile = albumTile
+        self.maximumMessageBodyWidth = maximumMessageBodyWidth
+        self.joinsOlder = joinsOlder
+        self.joinsNewer = joinsNewer
+        self.showAvatars = showAvatars
+        self.quickReplyEnabled = quickReplyEnabled
         self.onMediaClick = onMediaClick
+        self.onPhotoOpen = onPhotoOpen
         self.onReply = onReply
+        self.onQuoteText = onQuoteText
+        self.quotePicker = quotePicker
         self.onQuotedClick = onQuotedClick
+        self.quoteHighlight = quoteHighlight
         self.onRevoke = onRevoke
+        self.onCancelQueuedSend = onCancelQueuedSend
+        self.onRetrySend = onRetrySend
+        self.retryingSend = retryingSend
+        self.onDeleteLocally = onDeleteLocally
         self.onEdit = onEdit
         self.onReEdit = onReEdit
+        self.onSelect=onSelect;self.onForward=onForward;self.onSave=onSave
+        self.onPinState=onPinState;self.onSetPinned=onSetPinned
+        self.onContactClick = onContactClick
+        self.onLocationClick = onLocationClick
     }
 
     private var isMe: Bool { message.isMine }
+    private var hasLinkText: Bool {
+        message.content.localizedCaseInsensitiveContains("https://") ||
+            message.content.localizedCaseInsensitiveContains("http://")
+    }
 
-    private var timeString: String {
-        let date = Date(timeIntervalSince1970: Double(message.timestamp) / 1000.0)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        return formatter.string(from: date)
+    private var allowInlineFooter: Bool {
+        !hasLinkText && message.content.rangeOfCharacter(from: .newlines) == nil
+    }
+
+    private var showVisualFooter: Bool {
+        message.ext == "attachment" &&
+            EncryptedAttachmentCard.usesVisualFooter(attachmentMetadata, albumTile: albumTile)
     }
 
     private var canRevokeOrEdit: Bool {
-        let elapsed = Date().timeIntervalSince1970 * 1000 - Double(message.timestamp)
-        return isMe && elapsed >= 0 && elapsed <= 120_000 && message.isRevoked == 0
+        return isMe && message.isRevoked == 0
+    }
+
+    @ViewBuilder
+    private func forwardAttribution(inTextBubble: Bool = false) -> some View {
+        if let forwardLabel {
+            Text(forwardLabel).font(.caption.weight(.medium))
+                .foregroundStyle(inTextBubble ? Color.primary : Color.accentColor)
+                .lineLimit(2)
+        }
     }
 
     public var body: some View {
@@ -63,11 +153,11 @@ public struct ChatBubbleView: View {
             HStack {
                 Spacer()
                 HStack(spacing: 6) {
-                    Text(isMe ? "You revoked a message" : "Peer revoked a message")
+                    Text(interfaceText(isMe ? "revoked_by_you" : "revoked_by_peer"))
                         .font(.system(size: 12))
                         .foregroundColor(Color(white: 128/255))
                     if isMe && message.ext == "txt" && !message.content.isEmpty {
-                        Button("Re-edit") {
+                        Button(interfaceText("re_edit")) {
                             onReEdit(message.content)
                         }
                         .buttonStyle(.plain)
@@ -81,257 +171,484 @@ public struct ChatBubbleView: View {
             }
             .padding(.vertical, 4)
         } else {
-            HStack(alignment: .top, spacing: 8) {
-                if isMe { Spacer(minLength: 0) }
+            HStack(alignment: .bottom, spacing: 6) {
+                if isMe && !albumTile { Spacer(minLength: 0) }
 
-                // Peer Avatar on Left
-                if !isMe {
-                    AvatarView(
-                        avatarPath: peerAvatarPath,
-                        fallbackText: peerAlias,
-                        size: 40,
-                        cornerRadius: 12,
-                        fallbackSymbol: "plus"
-                    )
+                if !isMe && !albumTile && showAvatars {
+                    timelineAvatar(path: peerAvatarPath, name: peerAlias)
                 }
 
                 // Bubble Column
                 VStack(alignment: isMe ? .trailing : .leading, spacing: 4) {
+                    if message.ext != "txt" { forwardAttribution() }
                     // Bubble Content Box
                     VStack(alignment: isMe ? .trailing : .leading, spacing: 3) {
                         // Main Bubble
                         VStack(alignment: .leading, spacing: 0) {
+                            if message.ext != "txt", message.replyToId?.isEmpty == false { replyQuote.padding(.bottom, 4) }
                             if message.ext == "txt" {
-                                CappedBubbleLayout {
-                                Text(attributedMessage(message.content))
-                                    .font(.system(size: 14))
-                                    .foregroundColor(isMe ? .white : Color(red: 32/255, green: 32/255, blue: 36/255))
-                                    .textSelection(.enabled)
-                                    .padding(.horizontal, 14).padding(.vertical, 10)
-                                    .onTapGesture { openFirstMessageLink() }
+                                VStack(alignment: .leading, spacing: 4) {
+                                    forwardAttribution(inTextBubble: true)
+                                    replyQuote
+                                    if let quotePicker {
+                                        quotePicker
+                                        messageMetadata.frame(maxWidth: .infinity, alignment: .trailing)
+                                    } else {
+                                        CappedBubbleLayout(allowInline: allowInlineFooter, direction: layoutDirection,
+                                                           maximumBodyWidth: maximumMessageBodyWidth) {
+                                            let displayText = quoteHighlight == nil ? displayCallSummary(message.content, strings: interfaceText) : message.content
+                                            let textBody = RichMessageText(text: displayText, quoteHighlight: quoteHighlight,
+                                                                           onReveal: { revealedForCopy = $0 },
+                                                                           measuresFinalLine: !hasLinkText && !allowInlineFooter).id(displayText)
+                                                .foregroundColor(.primary)
+                                                .textSelection(.enabled)
+                                                .onPreferenceChange(VisibleMessageLinks.self) { targets in
+                                                    var seen = Set<URL>()
+                                                    linkTargets = targets.filter { seen.insert($0).inserted }
+                                                }
+                                            if hasLinkText {
+                                                LinkPreviewMessage(id: message.messageId, text: message.content, canOpen: showAvatars,
+                                                                   downloadPeer: isMe ? nil : message.conversationUuid) { textBody }
+                                            } else {
+                                                textBody
+                                            }
+                                            messageMetadata
+                                        }
+                                    }
                                 }
-                                    .background(isMe ? MsgATTheme.myBubbleColor : MsgATTheme.peerBubbleColor)
+                                    .padding(.horizontal, 11).padding(.vertical, 7)
+                                    .background(bubbleColor(isMe: isMe))
                                     .clipShape(
                                         UnevenRoundedRectangle(
-                                            topLeadingRadius: isMe ? 18 : 4,
-                                            bottomLeadingRadius: 18,
-                                            bottomTrailingRadius: 18,
-                                            topTrailingRadius: isMe ? 4 : 18
+                                            topLeadingRadius: !isMe && joinsOlder ? 4 : 16,
+                                            bottomLeadingRadius: !isMe && joinsNewer ? 4 : 16,
+                                            bottomTrailingRadius: isMe && joinsNewer ? 4 : 16,
+                                            topTrailingRadius: isMe && joinsOlder ? 4 : 16
                                         )
                                     )
-                            } else if ["jpg", "jpeg", "png", "webp"].contains(message.ext.lowercased()) {
-                                // Image Thumbnail
-                                Button { onMediaClick(message) } label: {
-                                    ZStack {
-                                        if let img = thumbnail {
-                                            Image(nsImage: img)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: 250, height: 200)
-                                                .clipped()
-                                                .cornerRadius(12)
-                                        } else {
-                                            Rectangle()
-                                                .fill(Color.gray.opacity(0.2))
-                                                .frame(width: 250, height: 200)
-                                                .cornerRadius(12)
-                                                .overlay(ProgressView())
+                            } else if ["contact", "location", "live_location"].contains(message.ext) {
+                                let location = message.ext != "contact"
+                                let live = message.ext == "live_location"
+                                Button {
+                                    if location { onLocationClick(message) } else { onContactClick(message) }
+                                } label: {
+                                    HStack(spacing: 10) {
+                                        Image(systemName: location ? "mappin.circle.fill" : "person.crop.circle.fill").font(.system(size: 28))
+                                        VStack(alignment: .leading, spacing: 3) {
+                                            Text(message.content == "Location" ? interfaceText(live ? "live_location" : "location") : message.content).font(.headline).lineLimit(2)
+                                            if live {
+                                                LiveLocationCardStatus(message: message)
+                                            } else if !location || message.content != "Location" {
+                                                Text(interfaceText(location ? "location" : "contact_card")).font(.caption).opacity(0.78)
+                                            }
                                         }
+                                        Image(systemName: "chevron.right").font(.caption)
                                     }
+                                    .padding(.horizontal, 12).padding(.vertical, 7)
+                                    .frame(maxWidth: 275, alignment: .leading)
+                                    .foregroundColor(.primary)
+                                    .background(bubbleColor(isMe: isMe))
+                                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                                    .contentShape(RoundedRectangle(cornerRadius: 14))
                                 }
                                 .buttonStyle(.plain)
-                                .accessibilityLabel("Open image")
+                                .accessibilityHint(interfaceText(location ? "open_shared_location" : "open_contact_card"))
+                            } else if message.ext == "attachment" {
+                                EncryptedAttachmentCard(message: message, albumTile: albumTile,
+                                    onRetryUpload: isMe && message.status == 0 ? onRetrySend : nil, retryingUpload: retryingSend,
+                                    onMetadataChange: { attachmentMetadata = $0 },
+                                    onStatusRetry: retryingSend ? nil : onRetrySend) { origin in
+                                    if let origin, let onPhotoOpen {
+                                        onPhotoOpen(message, origin.frame, origin.thumbnail)
+                                    } else {
+                                        onMediaClick(message)
+                                    }
+                                }
                             } else {
-                                // Video Thumbnail
-                                Button { onMediaClick(message) } label: {
-                                    ZStack {
-                                        if let img = thumbnail {
-                                            Image(nsImage: img)
-                                                .resizable()
-                                                .aspectRatio(contentMode: .fill)
-                                                .frame(width: 250, height: 200)
-                                                .clipped()
-                                                .cornerRadius(12)
-                                        } else {
-                                            Rectangle()
-                                                .fill(Color.black.opacity(0.7))
-                                                .frame(width: 250, height: 200)
-                                                .cornerRadius(12)
-                                        }
-                                        Circle()
-                                            .fill(Color.black.opacity(0.6))
-                                            .frame(width: 48, height: 48)
-                                            .overlay(
-                                                Image(systemName: "play.fill")
-                                                    .foregroundColor(.white)
-                                            )
-                                    }
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel("Open video")
+                                Text(interfaceText("unsupported_attachment")).font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 14)
-                                .stroke(isHighlighted ? Color.yellow : Color.clear, lineWidth: 2)
-                        )
 
-                        // Quoted Message Preview Underneath Bubble (Matching Android layout)
-                        if let replyId = message.replyToId, !replyId.isEmpty {
-                            let sender = replyAuthor
-                            let rawContent = message.replyToContent ?? ""
-                            let displayContent = (rawContent.hasPrefix("[") && rawContent.hasSuffix("]")) ? "[Media]" : rawContent
-
-                            HStack(spacing: 0) {
-                                Text("\(sender): \(displayContent)")
-                                    .font(.system(size: 11))
-                                    .foregroundColor(Color(white: 208/255))
-                                    .lineLimit(1)
-                            }
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Color(white: 56/255))
-                            .cornerRadius(6)
-                            .onTapGesture {
-                                onQuotedClick(replyId)
-                            }
-                        }
                     }
                     .contextMenu {
-                        Button("Reply") { onReply(message) }
+                        if let deadline = messageExpirationLabel(message, format: interfaceText("message_expiration_deadline")) {
+                            Text(deadline)
+                        }
+                        Button {
+                            onReply(message)
+                        } label: {
+                            Label(interfaceText("reply"), systemImage: "arrowshape.turn.up.left")
+                        }
+                        if ["txt", "attachment", "contact", "location"].contains(message.ext) {
+                            Button(action: onSelect) {
+                                Label(interfaceText("select"), systemImage: "checkmark.circle")
+                            }
+                            if message.expiresAt == nil {
+                                Button(action: onForward) {
+                                    Label(interfaceText("forward"), systemImage: "arrowshape.turn.up.right")
+                                }
+                                Button(action: onSave) {
+                                    Label(interfaceText("save_message"), systemImage: "bookmark")
+                                }
+                            }
+                            let pinned = onPinState()
+                            Button {
+                                unpinRequested = pinned
+                                confirmPin = true
+                            } label: {
+                                Label(interfaceText(pinned ? "unpin_message" : "pin_message"),
+                                      systemImage: pinned ? "pin.slash" : "pin")
+                            }
+                        }
                         if message.ext == "txt" {
-                            Button("Copy Text") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(message.content, forType: .string); NoticeCenter.shared.show("Copied to clipboard") }
+                            if message.expiresAt == nil, let onQuoteText {
+                                Button {
+                                    onQuoteText(message)
+                                } label: {
+                                    Label(interfaceText("quote_selected_text"), systemImage: "quote.bubble")
+                                }
+                            }
+                            Button {
+                                copyDisplayedText(message.content, revealed: revealedForCopy)
+                            } label: {
+                                Label(interfaceText("copy_message_text"), systemImage: "doc.on.doc")
+                            }
+                            ForEach(linkTargets, id: \.self) { destination in
+                                Menu(destination.absoluteString) { MessageLinkActions(url: destination) }
+                            }
+                        } else if message.ext == "attachment", let caption = attachmentMetadata?.caption,
+                                  !caption.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Button {
+                                copyDisplayedText(caption)
+                            } label: {
+                                Label(interfaceText("copy_attachment_caption"), systemImage: "doc.on.doc")
+                            }
                         }
                         if canRevokeOrEdit {
-                            Button("Revoke") { onRevoke(message.messageId) }
-                            if message.ext == "txt" { Button("Edit") { onEdit(message) } }
-                        }
-                        if ["jpg", "jpeg", "png", "webp", "mp4", "m4a"].contains(message.ext) {
-                            Button("Save Media") { showSaveConfirmation = true }
-                        }
-                    }
-                    .sheet(isPresented: $showSaveConfirmation) {
-                        ConfirmationDialog(message: "Do you want to save this media to your gallery?", title: "Save Media", confirmColor: MsgATTheme.primaryColor,
-                            onCancel: { showSaveConfirmation = false }, onConfirm: { showSaveConfirmation = false; saveMediaToGallery() })
-                    }
-
-                    // Time and Message Status Checkmarks
-                    HStack(spacing: 4) {
-                        Text(message.isEdited == 1 ? "\(timeString) (edited)" : timeString)
-                            .font(.system(size: 10))
-                            .foregroundColor(Color(white: 68/255))
-
-                        if isMe {
-                            switch message.status {
-                            case 0:
-                                ProgressView()
-                                    .scaleEffect(0.5)
-                                    .frame(width: 12, height: 12)
-                            case 1:
-                                // Single grey check (Sent)
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundColor(.gray).help("Sent").accessibilityLabel("Sent")
-                            case 2:
-                                // Single green check (Delivered)
-                                Image(systemName: "checkmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundColor(MsgATTheme.primaryColor).help("Delivered").accessibilityLabel("Delivered")
-                            case 3:
-                                // Double green check (Read)
-                                HStack(spacing: -4) {
-                                    Image(systemName: "checkmark")
-                                    Image(systemName: "checkmark")
+                            if (-1...0).contains(message.status), let onRetrySend {
+                                Button(action: onRetrySend) {
+                                    Label(interfaceText("send_retry"), systemImage: "arrow.clockwise")
+                                }.disabled(retryingSend)
+                            }
+                            if message.expiresAt == nil &&
+                                (message.ext == "txt" || (message.ext == "attachment" && attachmentMetadata?.isSticker == false)) {
+                                Button {
+                                    onEdit(message)
+                                } label: {
+                                    Label(interfaceText(message.ext == "attachment" ? "edit_caption" : "edit_message"),
+                                          systemImage: "pencil")
                                 }
-                                .font(.system(size: 9, weight: .bold))
-                                .foregroundColor(MsgATTheme.primaryColor).help("Read").accessibilityElement(children: .ignore).accessibilityLabel("Read")
-                            default:
-                                EmptyView()
+                            }
+                        }
+                        if message.ext == "attachment" {
+                            if message.expiresAt == nil {
+                                Button {
+                                    saveEncryptedAttachment(message)
+                                } label: {
+                                    Label(interfaceText("save_attachment"), systemImage: "square.and.arrow.down")
+                                }
+                            }
+                            if !isMe && attachmentMetadata?.available == true {
+                                Button {
+                                    confirmDownloadAgain = true
+                                } label: {
+                                    Label(interfaceText("download_attachment_again"), systemImage: "arrow.clockwise")
+                                }
+                            }
+                        }
+                        let canDelete = message.ext != "live_location" && (!isMe || message.status != 0)
+                        if canRevokeOrEdit || (canDelete && onDeleteLocally != nil) { Divider() }
+                        if canRevokeOrEdit {
+                            if message.status == 0, let onCancelQueuedSend {
+                                Button(role: .destructive, action: onCancelQueuedSend) {
+                                    Label(interfaceText("send_cancel_action"), systemImage: "xmark.circle")
+                                }
+                            }
+                            Button(role: .destructive) {
+                                onRevoke(message.messageId)
+                            } label: {
+                                Label(interfaceText("revoke"), systemImage: "arrow.uturn.backward")
+                            }
+                        }
+                        if canDelete, let onDeleteLocally {
+                            Button(role: .destructive, action: onDeleteLocally) {
+                                Label(interfaceText("local_delete_action"), systemImage: "trash")
                             }
                         }
                     }
+
+
+                    if message.ext != "txt" && !showVisualFooter { messageMetadata }
+                }
+                .anchorPreference(key: ReplyGutterBoundary.self, value: .bounds) {
+                    quickReplyEnabled && !albumTile ? $0 : nil
                 }
 
-                if isMe {
-                    AvatarView(
-                        avatarPath: KeychainManager.shared.myAvatarPath,
-                        fallbackText: KeychainManager.shared.myNickname ?? "Me",
-                        size: 40,
-                        cornerRadius: 12,
-                        fallbackSymbol: "plus"
-                    )
-                } else {
+                if isMe && !albumTile && showAvatars {
+                    timelineAvatar(path: KeychainManager.shared.myAvatarPath, name: KeychainManager.shared.myNickname ?? "Me")
+                } else if !isMe && !albumTile {
                     Spacer(minLength: 0)
                 }
             }
-            .onAppear {
-                loadThumbnail()
+            .overlayPreferenceValue(ReplyGutterBoundary.self) { boundary in
+                if let boundary {
+                    GeometryReader { geometry in
+                        let bubble = geometry[boundary]
+                        let onLeft = isMe == (layoutDirection == .leftToRight)
+                        let gutterWidth = onLeft ? bubble.minX : geometry.size.width - bubble.maxX
+                        if gutterWidth > 0 {
+                            Color.clear
+                                .frame(width: gutterWidth, height: geometry.size.height)
+                                .contentShape(Rectangle())
+                                .onTapGesture(count: 2) { onReply(message) }
+                                .accessibilityHidden(true)
+                                .position(x: onLeft ? gutterWidth / 2 : bubble.maxX + gutterWidth / 2,
+                                          y: geometry.size.height / 2)
+                        }
+                    }
+                }
+            }
+            .alert(interfaceText("download_attachment_again"), isPresented: $confirmDownloadAgain) {
+                Button(interfaceText("cancel"), role: .cancel) {}
+                Button(interfaceText("download_attachment_again"), role: .destructive) {
+                    SecureMessaging.shared.replaceAttachmentCache(peer: message.conversationUuid, messageID: message.messageId)
+                }
+            } message: {
+                Text(interfaceText("download_attachment_again_confirm"))
+            }
+            .confirmationDialog(interfaceText(unpinRequested ? "unpin_message" : "pin_message"),
+                                isPresented: $confirmPin, titleVisibility: .visible) {
+                if unpinRequested {
+                    Button(interfaceText("unpin_message"), role: .destructive) { onSetPinned(false, false) }
+                } else {
+                    Button(interfaceText("pin_message")) { onSetPinned(true, false) }
+                    Button(interfaceText("pin_and_notify_peer")) { onSetPinned(true, true) }
+                }
+                Button(interfaceText("cancel"), role: .cancel) {}
+            } message: {
+                if unpinRequested { Text(interfaceText("unpin_for_both")) }
+            }
+            .onDisappear { copyTask?.cancel() }
+            .onChange(of: message.content) { _ in
+                copyTask?.cancel()
+                revealedForCopy = []
+            }
+            .onChange(of: attachmentMetadata?.caption) { _ in copyTask?.cancel() }
+        }
+    }
+
+    private func copyDisplayedText(_ text: String, revealed: Set<Int> = []) {
+        copyTask?.cancel()
+        copyTask = Task { @MainActor in
+            await MessageTextClipboard.copy(text, revealed: revealed, strings: interfaceText)
+        }
+    }
+
+    @ViewBuilder
+    private var replyQuote: some View {
+        if let id = message.replyToId, !id.isEmpty {
+            CappedBubbleLayout(allowInline: false, direction: layoutDirection, maximumBodyWidth: maximumMessageBodyWidth) {
+                Button { onQuotedClick(id) } label: {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text(replyAuthor).font(.caption.weight(.semibold)).foregroundStyle(Color.accentColor)
+                        MessageSummaryText(text: quoteExcerpt).font(.caption2).foregroundStyle(.secondary)
+                    }
+                    .lineLimit(1)
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.13))
+                    .overlay(alignment: .leading) { Rectangle().fill(Color.accentColor).frame(width: 2) }
+                    .clipShape(RoundedRectangle(cornerRadius: 5))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(interfaceText("quote_jump"))
+                .accessibilityHint(interfaceText("quote_jump"))
             }
         }
     }
 
-    private func attributedMessage(_ text: String) -> AttributedString {
-        var attributed = AttributedString(text)
-        guard let detector = try? NSRegularExpression(pattern: "(?<!\\S)https?://\\S*") else { return attributed }
-        let matches = detector.matches(in: text, options: [], range: NSRange(location: 0, length: text.utf16.count))
-        for match in matches {
-            if let range = Range(match.range, in: text),
-               let attributedRange = Range(range, in: attributed) {
-                attributed[attributedRange].underlineStyle = .single
-                attributed[attributedRange].foregroundColor = isMe ? Color.white : Color.blue
-            }
-        }
-        return attributed
-    }
-
-    private func openFirstMessageLink() {
-        guard let detector = try? NSRegularExpression(pattern: "(?<!\\S)https?://\\S*"),
-              let match = detector.firstMatch(in: message.content, range: NSRange(location: 0, length: message.content.utf16.count)),
-              let range = Range(match.range, in: message.content) else { return }
-        guard let url = URL(string: String(message.content[range])), let host = url.host, !host.isEmpty,
-              NSWorkspace.shared.open(url) else { NoticeCenter.shared.show("Invalid URL"); return }
-    }
-
-    private func loadThumbnail() {
-        guard message.ext != "txt" else { return }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let fileUrl = MediaStorageManager.shared.getOrExtractMediaFile(
-                msgId: self.message.messageId,
-                ext: self.message.ext,
-                content: self.message.content
-            )
-            guard let url = fileUrl else { return }
-
-            if ["jpg", "jpeg", "png", "webp"].contains(self.message.ext.lowercased()) {
-                let img = MediaStorageManager.shared.generateImageThumbnail(fileUrl: url, maxDimension: 400)
-                DispatchQueue.main.async { self.thumbnail = img }
-            } else {
-                let img = MediaStorageManager.shared.generateVideoThumbnail(fileUrl: url)
-                DispatchQueue.main.async { self.thumbnail = img }
-            }
+    private var quoteExcerpt: String {
+        switch message.replyToContent ?? "" {
+        case "[Message revoked]": return interfaceText("quote_revoked")
+        case "[Media]", "[Attachment]", "[ATTACHMENT]": return interfaceText("quote_attachment")
+        case let excerpt where !excerpt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty: return excerpt
+        default: return interfaceText("quote_no_preview")
         }
     }
 
-    private func saveMediaToGallery() {
-        guard let url = MediaStorageManager.shared.getOrExtractMediaFile(msgId: message.messageId, ext: message.ext, content: message.content) else { NoticeCenter.shared.show("Failed to save"); return }
-        do {
-            let folder: FileManager.SearchPathDirectory = message.ext == "mp4" ? .moviesDirectory : message.ext == "m4a" ? .musicDirectory : .picturesDirectory
-            let directory = try FileManager.default.url(for: folder, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("MsgAT", isDirectory: true)
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            var destination = directory.appendingPathComponent("\(message.messageId).\(message.ext)")
-            if FileManager.default.fileExists(atPath: destination.path) { destination = directory.appendingPathComponent("\(message.messageId)_\(UUID().uuidString).\(message.ext)") }
-            try FileManager.default.copyItem(at: url, to: destination); NoticeCenter.shared.show("Saved to Gallery")
-        } catch { NoticeCenter.shared.show("Failed to save") }
+
+    private var messageMetadata: some View {
+        ChatMessageMetadata(message: message, onRetry: retryingSend ? nil : onRetrySend)
+    }
+
+    private func bubbleColor(isMe: Bool) -> Color {
+        if colorScheme == .dark {
+            return isMe ? MsgATTheme.myBubbleDarkColor : MsgATTheme.peerBubbleDarkColor
+        }
+        return isMe ? MsgATTheme.myBubbleColor : MsgATTheme.peerBubbleColor
+    }
+
+    @ViewBuilder
+    private func timelineAvatar(path: String?, name: String) -> some View {
+        if joinsNewer {
+            Color.clear.frame(width: 34, height: 1).accessibilityHidden(true)
+        } else {
+            AvatarView(avatarPath: path, fallbackText: name, size: 34, cornerRadius: 17)
+                .accessibilityHidden(true)
+        }
     }
 }
 
-private struct CappedBubbleLayout: Layout {
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        guard let content = subviews.first else { return .zero }
-        let width = min(250, min(proposal.width ?? 250, content.sizeThatFits(.unspecified).width))
-        return content.sizeThatFits(ProposedViewSize(width: width, height: nil))
+private func messageExpirationLabel(_ message: ChatMessage, format: String) -> String? {
+    guard message.isRevoked == 0, let expiresAt = message.expiresAt else { return nil }
+    let date = Date(timeIntervalSince1970: Double(expiresAt) / 1000)
+    return String(format: format, date.formatted(date: .abbreviated, time: .shortened))
+}
+
+struct ChatMessageMetadata: View {
+    let message: ChatMessage
+    var overMedia = false
+    var onRetry: (() -> Void)? = nil
+    @State private var showStatus = false
+    @Environment(\.interfaceStrings) private var interfaceText
+
+    var body: some View {
+        let timeString = Date(timeIntervalSince1970: Double(message.timestamp) / 1000)
+            .formatted(date: .omitted, time: .shortened)
+        HStack(spacing: 4) {
+            if let deadline = messageExpirationLabel(message, format: interfaceText("message_expiration_deadline")) {
+                Image(systemName: "timer")
+                    .font(.system(size: 10))
+                    .foregroundStyle(overMedia ? Color.white : Color.secondary)
+                    .help(deadline)
+                    .accessibilityLabel(deadline)
+            }
+            Text(message.isEdited == 1 ? String(format: interfaceText("message_time_edited"), timeString) : timeString)
+                .font(.system(size: 10))
+                .foregroundStyle(overMedia ? Color.white : Color.secondary)
+
+            if message.isMine {
+                if message.status == -1 || message.status == 0 && onRetry != nil {
+                    Button { showStatus = true } label: {
+                        MessageReceiptMark(status: message.status, overMedia: overMedia)
+                    }
+                    .buttonStyle(.plain)
+                    .popover(isPresented: $showStatus) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(interfaceText(message.status == -1 ? "receipt_failed" : "receipt_sending"))
+                            if let onRetry {
+                                Button(interfaceText("send_retry")) { showStatus = false; onRetry() }
+                            }
+                        }.padding(12)
+                    }
+                    .onChange(of: message.status) { _ in showStatus = false }
+                } else {
+                    MessageReceiptMark(status: message.status, overMedia: overMedia)
+                }
+            }
+        }
     }
+}
+
+struct MessageReceiptMark: View {
+    let status: Int
+    var overMedia = false
+    @Environment(\.interfaceStrings) private var interfaceText
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        if let label = receiptLabel {
+            ZStack {
+                receiptMark
+                    .id(status)
+                    .transition(.opacity.combined(with: .scale(scale: 0.55)))
+            }
+            .frame(width: 16, height: 12)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: status)
+            .help(label)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(label)
+        }
+    }
+
+    private var receiptLabel: String? {
+        switch status {
+        case -1: return interfaceText("receipt_failed")
+        case 0: return interfaceText("receipt_sending")
+        case 1: return interfaceText("receipt_sent")
+        case 2: return interfaceText("receipt_delivered")
+        case 3: return interfaceText("receipt_read")
+        default: return nil
+        }
+    }
+
+    @ViewBuilder private var receiptMark: some View {
+        let neutral = overMedia ? Color(red: 0.77, green: 0.79, blue: 0.80) : .gray
+        let delivered = overMedia ? Color(red: 0.41, green: 0.85, blue: 0.69) : MsgATTheme.primaryColor
+        switch status {
+        case -1:
+            Image(systemName:"exclamationmark.circle").font(.system(size:11))
+                .foregroundStyle(overMedia ? Color(red: 1, green: 0.62, blue: 0.64) : Color.red)
+        case 0:
+            Image(systemName:"clock").font(.system(size:10)).foregroundStyle(neutral)
+        case 1,2:
+            Image(systemName:"checkmark")
+                .font(.system(size:9,weight:.semibold))
+                .foregroundStyle(status == 1 ? neutral : delivered)
+        case 3:
+            HStack(spacing:-4) {
+                Image(systemName:"checkmark")
+                Image(systemName:"checkmark")
+            }
+            .font(.system(size:9,weight:.semibold))
+            .foregroundStyle(delivered)
+        default:
+            EmptyView()
+        }
+    }
+
+}
+
+private struct CappedBubbleLayout: Layout {
+    let allowInline: Bool
+    let direction: LayoutDirection
+    var maximumBodyWidth: CGFloat = 408
+
+    private func measure(_ subviews: Subviews, width: CGFloat) -> (text: CGSize, footer: CGSize, size: CGSize) {
+        guard let body = subviews.first else { return (.zero, .zero, .zero) }
+        let available = max(0, min(maximumBodyWidth, width))
+        let natural = body.sizeThatFits(.unspecified)
+        let text = body.sizeThatFits(ProposedViewSize(width: min(natural.width, available), height: nil))
+        let metadata = subviews.dropFirst().first
+        let footer = metadata?.sizeThatFits(ProposedViewSize(width: available, height: nil)) ?? .zero
+        var lastLineWidth: CGFloat?
+        if allowInline {
+            lastLineWidth = text.width
+        } else if let lastLine = body[LastPlainMessageLine.self],
+                  text.height <= natural.height, footer.height <= lastLine.height {
+            lastLineWidth = lastLine.width
+        }
+        let inlineWidth = lastLineWidth.map { max(text.width, $0 + 8 + footer.width) }
+        let inline = metadata != nil && direction == .leftToRight && natural.width <= available &&
+            inlineWidth.map { $0 <= available } == true
+        let bodyWidth = inline ? (inlineWidth ?? text.width) : max(text.width, footer.width)
+        let result = CGSize(width: min(available, bodyWidth),
+                            height: inline ? max(text.height, footer.height) : text.height + (metadata == nil ? 0 : 3 + footer.height))
+        return (text, footer, result)
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        measure(subviews, width: proposal.width ?? maximumBodyWidth).size
+    }
+
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        subviews.first?.place(at: bounds.origin, proposal: ProposedViewSize(width: bounds.width, height: bounds.height))
+        let layout = measure(subviews, width: bounds.width)
+        let textX = direction == .rightToLeft ? bounds.maxX - layout.text.width : bounds.minX
+        let footerX = direction == .rightToLeft ? bounds.minX : bounds.maxX - layout.footer.width
+        let topLeft = UnitPoint(x: 0, y: 0)
+        subviews.first?.place(at: CGPoint(x: textX, y: bounds.minY), anchor: topLeft,
+                              proposal: ProposedViewSize(layout.text))
+        subviews.dropFirst().first?.place(at: CGPoint(x: footerX, y: bounds.maxY - layout.footer.height), anchor: topLeft,
+                                          proposal: ProposedViewSize(layout.footer))
     }
 }

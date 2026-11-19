@@ -1,7 +1,12 @@
 import CoreAudio
 import Foundation
 
-/// Temporarily selects the built-in speakers; the call audio device follows the system route.
+struct CallAudioEndpoint: Identifiable, Sendable, Equatable {
+    let id: AudioDeviceID
+    let name: String
+}
+
+/// Core Audio inventory and recovery of any system override left by an older version.
 final class CallAudioOutput {
     private let recoveryKey = "org.msgat.call.audioOutputOverride"
     private var originalOutputUID: String?
@@ -13,23 +18,6 @@ final class CallAudioOutput {
         speakerOutputUID = saved?["speakerUID"] as? String
         do { try restore() }
         catch { print("[MsgAT-Call] Previous audio output restoration failed: \(error.localizedDescription)") }
-    }
-
-    func enableSpeaker() throws {
-        if originalOutputUID != nil { try restore() }
-        let original = try defaultOutput()
-        let speaker = try builtInSpeaker()
-        let originalUID = try deviceUID(original)
-        let speakerUID = try deviceUID(speaker)
-        originalOutputUID = originalUID
-        speakerOutputUID = speakerUID
-        UserDefaults.standard.set(["originalUID": originalUID, "speakerUID": speakerUID], forKey: recoveryKey)
-        do {
-            try setDefaultOutput(speaker)
-        } catch {
-            try? restore()
-            throw error
-        }
     }
 
     func restore() throws {
@@ -48,12 +36,18 @@ final class CallAudioOutput {
         UserDefaults.standard.removeObject(forKey: recoveryKey)
     }
 
-    func isSpeakerOverrideActive() throws -> Bool {
-        guard let speakerOutputUID else { return false }
-        return try deviceUID(defaultOutput()) == speakerOutputUID
+    func endpoints(input: Bool) -> [CallAudioEndpoint] {
+        let devices = (try? objectList(AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDevices)) ?? []
+        let scope = input ? kAudioObjectPropertyScopeInput : kAudioObjectPropertyScopeOutput
+        return devices.compactMap { device in
+            guard isAlive(device),
+                  let streams = try? objectList(device, selector: kAudioDevicePropertyStreams, scope: scope), !streams.isEmpty,
+                  let name = try? string(device, selector: kAudioObjectPropertyName) else { return nil }
+            return CallAudioEndpoint(id: device, name: name)
+        }.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private func builtInSpeaker() throws -> AudioDeviceID {
+    func builtInSpeaker() throws -> AudioDeviceID {
         for device in try objectList(AudioObjectID(kAudioObjectSystemObject), selector: kAudioHardwarePropertyDevices) {
             guard isAlive(device),
                   (try? scalar(device, selector: kAudioDevicePropertyTransportType)) == kAudioDeviceTransportTypeBuiltIn,
@@ -91,11 +85,15 @@ final class CallAudioOutput {
     }
 
     private func deviceUID(_ device: AudioDeviceID) throws -> String {
-        var address = address(kAudioDevicePropertyDeviceUID)
+        try string(device, selector: kAudioDevicePropertyDeviceUID)
+    }
+
+    private func string(_ device: AudioDeviceID, selector: AudioObjectPropertySelector) throws -> String {
+        var address = address(selector)
         var value: Unmanaged<CFString>?
         var size = UInt32(MemoryLayout.size(ofValue: value))
-        try check(AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value), "Read output UID")
-        guard let value else { throw OutputError.operation("Read output UID", kAudioHardwareBadDeviceError) }
+        try check(AudioObjectGetPropertyData(device, &address, 0, nil, &size, &value), "Read device name or UID")
+        guard let value else { throw OutputError.operation("Read device name or UID", kAudioHardwareBadDeviceError) }
         return value.takeRetainedValue() as String
     }
 

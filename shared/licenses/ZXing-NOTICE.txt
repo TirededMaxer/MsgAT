@@ -1,0 +1,8 @@
+ZXing Core 3.5.4 — Copyright ZXing authors.
+https://github.com/zxing/zxing
+
+ZXing.Net 0.16.11 — Copyright ZXing.Net authors.
+https://github.com/micjahn/ZXing.Net
+
+Both components are used under the Apache License, Version 2.0.
+The unmodified license text accompanies this notice.

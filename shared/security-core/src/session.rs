@@ -303,10 +303,14 @@ pub fn describe(wire: WireMessage, expected_sender: String, expected_recipient: 
     }
 }
 
-pub fn decrypt(local: LocalIdentity, peer: PeerState, wire: WireMessage, keys: ReceiveKeys) -> Result<Value,String> {
+pub fn decrypt(local: LocalIdentity, peer: PeerState, wire: WireMessage, keys: ReceiveKeys, expected_event_id: Option<&str>) -> Result<Value,String> {
     if wire.recipient_uuid!=local.uuid { return Err("Ciphertext is addressed to another identity".into()); }
+    if local.uuid==peer.uuid && expected_event_id.is_some() { return Ok(json!({"disposition":"retry"})); }
     let (mut identities,mut sessions,local_address)=context(&local,&peer)?;
-    if verify_certificate(&wire.sender_certificate,&peer.uuid)?!=identities.trusted { return Err("Untrusted sender certificate".into()); }
+    if verify_certificate(&wire.sender_certificate,&peer.uuid)?!=identities.trusted {
+        if expected_event_id.is_some() { return Ok(json!({"disposition":"retry"})); }
+        return Err("Untrusted sender certificate".into());
+    }
     let message=parse_wire(&wire)?;
     if let signal::CiphertextMessage::PreKeySignalMessage(message)=&message {
         if message.kyber_pre_key_id().is_none() || message.identity_key()!=&identities.trusted { return Err("Invalid authenticated prekey message".into()); }
@@ -315,8 +319,26 @@ pub fn decrypt(local: LocalIdentity, peer: PeerState, wire: WireMessage, keys: R
     let signed=SignedSlot {record:keys.signed_prekey.as_ref().map(|s|decode(s,2048).and_then(|s|SignedPreKeyRecord::deserialize(&s).map_err(|e|e.to_string()))).transpose()?};
     let mut pq=PqSlot {record:keys.pq_prekey.as_ref().map(|s|decode(s,16384).and_then(|s|KyberPreKeyRecord::deserialize(&s).map_err(|e|e.to_string()))).transpose()?,
         last_resort:keys.pq_last_resort,already_used:keys.pq_already_used,consumed:false,key_use:None};
-    let plaintext=Zeroizing::new(futures_executor::block_on(signal::message_decrypt(&message,&sessions.address.clone(),&local_address,
-        &mut sessions,&mut identities,&mut prekeys,&signed,&mut pq,&mut rand::rng())).map_err(|e|e.to_string())?);
-    Ok(json!({"plaintext":STANDARD.encode(plaintext.as_slice()),"peer_state":save_peer(peer,&sessions,&identities)?,
-        "consumed_prekey_id":prekeys.consumed,"consumed_pq_prekey":pq.consumed,"pq_key_use":pq.key_use}))
+    let plaintext = match futures_executor::block_on(signal::message_decrypt(&message,&sessions.address.clone(),&local_address,
+        &mut sessions,&mut identities,&mut prekeys,&signed,&mut pq,&mut rand::rng())) {
+        Ok(bytes) => Zeroizing::new(bytes),
+        Err(_) if expected_event_id.is_some() => return Ok(json!({"disposition":"retry"})),
+        Err(error) => return Err(error.to_string()),
+    };
+    let mut result = match expected_event_id {
+        Some(id) => match crate::events::inspect_incoming(&plaintext, id) {
+            crate::events::IncomingEvent::Apply(event) => json!({
+                "disposition":"apply","event":event,
+                "payload_hash":Sha256::digest(plaintext.as_slice()).iter().map(|byte| format!("{byte:02x}")).collect::<String>(),
+            }),
+            crate::events::IncomingEvent::Reject => json!({"disposition":"reject"}),
+            crate::events::IncomingEvent::Retry => return Ok(json!({"disposition":"retry"})),
+        },
+        None => json!({"plaintext":STANDARD.encode(plaintext.as_slice())}),
+    };
+    result["peer_state"] = json!(save_peer(peer,&sessions,&identities)?);
+    result["consumed_prekey_id"] = json!(prekeys.consumed);
+    result["consumed_pq_prekey"] = json!(pq.consumed);
+    result["pq_key_use"] = json!(pq.key_use);
+    Ok(result)
 }

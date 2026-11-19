@@ -5,6 +5,9 @@ import MsgATNativeSecurity
 #endif
 
 enum SecurityCore {
+    static func messageSummary(_ text:String,limit:Int=240)->String {
+        (try? call(["operation":"summarize_message_text","text":text,"limit":limit])["text"] as? String) ?? "Message"
+    }
     enum Failure: LocalizedError {
         case unsupportedABI, invalidResponse, operation(String)
         var errorDescription: String? {

@@ -2,13 +2,14 @@ package org.msgat.ui.sessionlist
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.SharingStarted
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import org.msgat.core.network.NettyClient
 import org.msgat.core.crypto.securestorage.SecurePrefs
 import org.msgat.data.db.Conversation
@@ -42,24 +43,60 @@ class SessionListViewModel(
     private val _currentNickname = kotlinx.coroutines.flow.MutableStateFlow(securePrefs.myNickname)
     val currentNickname: StateFlow<String?> = _currentNickname
 
-    val isIdentityMissing: Boolean get() = securePrefs.myNickname.isNullOrBlank() || securePrefs.myAvatarPath.isNullOrBlank()
+    val isIdentityMissing: Boolean get() = securePrefs.myNickname.isNullOrBlank()
 
     val connectionState = nettyClient.connectionState
+    private var resettingIdentity = false
 
-    val conversations: StateFlow<List<ConversationUIModel>> = msgDao.getAllConversationsWithUnread()
-        .map { list -> list.map { ConversationUIModel(it.conversation.uuid, it.conversation.alias, it.conversation.avatarPath, it.unreadCount) } }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val folders: StateFlow<List<org.msgat.data.db.ConversationFolder>?> =
+        msgDao.observeFolders().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val allConversations:StateFlow<List<ConversationUIModel>> = msgDao.getAllConversationsWithUnread().map{list->list.map{row->
+        val pins = org.json.JSONObject(row.folderPinOrders)
+        val ranks = pins.keys().asSequence().associateWith { pins.getLong(it) }
+        ConversationUIModel(row.conversation.uuid,row.conversation.alias,row.conversation.avatarPath,row.unreadCount,row.pinOrder,row.archived,row.muteUntil,row.manualUnread,row.summary,row.draftText,row.lastAt,row.firstUnreadID,row.folderIDs,row.hasDraft,row.activityAt,ranks,
+            lastReceiptStatus = row.lastReceiptStatus, summaryKind = row.summaryKind, lastMessageId = row.lastID)
+    }}.stateIn(viewModelScope,SharingStarted.WhileSubscribed(5000),emptyList())
+    fun conversationAction(peer: String, action: String, until: Long? = null, folderId: String? = null) {
+        viewModelScope.launch {
+            try {
+                if (action == "read") nettyClient.secureMessaging.markAllRead(peer)
+                else nettyClient.conversationIndex.change(peer, action, until, folderId)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(org.msgat.MsgATApp.instance, "Conversation could not be updated", android.widget.Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+    suspend fun setArchived(peer: String, expected: Boolean, archived: Boolean): Boolean =
+        nettyClient.conversationIndex.setArchived(peer, expected, archived)
+    fun movePin(scope: String, peer: String, target: String, before: Boolean) {
+        viewModelScope.launch {
+            val moved = try {
+                nettyClient.conversationIndex.movePin(scope, peer, target, before)
+            } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                false
+            }
+            if (!moved) android.widget.Toast.makeText(
+                org.msgat.MsgATApp.instance, "Pinned chats could not be reordered", android.widget.Toast.LENGTH_SHORT
+            ).show()
+        }
+    }
+
+    suspend fun saveFolder(value:org.msgat.data.db.ConversationFolder,peers:Collection<String>):Boolean=try{nettyClient.conversationIndex.save(value,peers);true}catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}catch(_:Exception){false}
+    suspend fun deleteFolder(id:String):Boolean=try{nettyClient.conversationIndex.delete(id);true}catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}catch(_:Exception){false}
+    suspend fun moveFolder(id:String,targetId:String,before:Boolean):Boolean=try{nettyClient.conversationIndex.move(id,targetId,before)}catch(cancelled:kotlinx.coroutines.CancellationException){throw cancelled}catch(_:Exception){false}
 
     val friendRequests: StateFlow<List<org.msgat.data.db.FriendRequest>> = msgDao.getAllFriendRequests()
         .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
 
-    fun acceptFriendRequest(senderUuid: String, nickname: String, avatarPath: String) {
-        viewModelScope.launch { nettyClient.secureMessaging.acceptContact(senderUuid,nickname,avatarPath) }
-    }
+    suspend fun acceptFriendRequest(senderUuid: String): Boolean =
+        nettyClient.secureMessaging.acceptContact(senderUuid)
 
-    fun declineFriendRequest(senderUuid: String) {
-        viewModelScope.launch { nettyClient.secureMessaging.declineContact(senderUuid) }
-    }
+    suspend fun declineFriendRequest(senderUuid: String): Boolean =
+        nettyClient.secureMessaging.declineContact(senderUuid)
 
     fun addConversation(rawUuid: String, initialDisplayName: String = "Unknown") {
         val uuid=rawUuid.trim().lowercase()
@@ -69,100 +106,81 @@ class SessionListViewModel(
         }
     }
 
-    fun deleteConversation(uuid: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val messages=msgDao.getMessageListByConversation(uuid)
-            if (nettyClient.secureMessaging.deleteContact(uuid)) {
-                val context=org.msgat.MsgATApp.instance.applicationContext
-                for (message in messages) if (message.ext!="txt") {
-                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context,message.messageId,message.ext)
+    fun deleteConversation(uuid: String, onFailure: () -> Unit) {
+        viewModelScope.launch {
+            val deleted = withContext(Dispatchers.IO) {
+                val messages = try {
+                    msgDao.getMessageListByConversation(uuid)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    emptyList()
                 }
+                val committed = nettyClient.secureMessaging.deleteContact(uuid)
+                if (committed) {
+                    val context = org.msgat.MsgATApp.instance.applicationContext
+                    for (message in messages) if (message.ext != "txt") {
+                        org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, message.messageId, message.ext)
+                    }
+                }
+                committed
             }
+            if (!deleted) onFailure()
         }
     }
 
     // Wipes all chat history for a specific conversation without deleting the thread.
-    fun clearMessages(uuid: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val msgs = msgDao.getMessageListByConversation(uuid)
-            val context = org.msgat.MsgATApp.instance.applicationContext
-            for (m in msgs) {
-                if (m.ext != "txt") {
-                    org.msgat.core.media.MediaStorageManager.deleteMediaFile(context, m.messageId, m.ext)
-                }
-            }
-            msgDao.clearMessages(uuid)
+    fun clearMessages(uuid: String, onFailure: () -> Unit) {
+        viewModelScope.launch {
+            if (!nettyClient.secureMessaging.clearMessages(uuid)) onFailure()
         }
     }
 
-    // Triggers a complete cryptographic wipe of the user's local identity.
+    // The committed marker moves erasure to the next process, before any vault opens.
+    @androidx.annotation.MainThread
     fun resetIdentity(onFail: () -> Unit) {
-        if (nettyClient.connectionState.value != org.msgat.ui.chat.SyncState.SYNCED) {
-            onFail()
-            return
-        }
-
-        viewModelScope.launch(Dispatchers.IO) {
-            val friends = msgDao.getConversationList()
-            for (friend in friends) {
-                val peerPublicKeyBase64 = friend.peerPublicKey
-                if (peerPublicKeyBase64.isNotEmpty()) {
-                    val iv = ByteArray(16)
-                    java.security.SecureRandom().nextBytes(iv)
-                    val targetMailboxId = org.msgat.core.crypto.CryptoManager.calculateMailboxId(friend.uuid)
-                    val myPrivateKey = securePrefs.getX25519PrivateKey()
-                    val payloadJson = """{"senderUuid":"${securePrefs.myUuid}"}"""
-                    val (cipherText, authTag) = org.msgat.core.crypto.CryptoManager.encryptPayloadECDH(myPrivateKey, peerPublicKeyBase64, iv, payloadJson.toByteArray(Charsets.UTF_8))
-                    val packet = org.msgat.model.GhostPacket(org.msgat.model.GhostPacket.TYPE_ACCOUNT_RESET, targetMailboxId, iv, cipherText, authTag)
-                    nettyClient.sendPacket(packet)
+        if (resettingIdentity) return
+        resettingIdentity = true
+        viewModelScope.launch(start = kotlinx.coroutines.CoroutineStart.UNDISPATCHED) {
+            kotlinx.coroutines.withContext(Dispatchers.IO + kotlinx.coroutines.NonCancellable) {
+                val app = org.msgat.MsgATApp.instance
+                val context = app.applicationContext
+                val lifecycle = org.msgat.core.crypto.securestorage.IdentityLifecycle
+                try {
+                    lifecycle.prepare(context, securePrefs)
+                } catch (_: Exception) {
+                    if (!lifecycle.hasPendingReset(context)) {
+                        kotlinx.coroutines.withContext(Dispatchers.Main) {
+                            resettingIdentity = false
+                            onFail()
+                        }
+                        return@withContext
+                    }
                 }
-            }
-
-            if (!nettyClient.deleteAccount()) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onFail() }
-                return@launch
-            }
-            nettyClient.disconnect()
-
-            msgDao.clearAllMessages()
-            msgDao.clearAllConversations()
-            msgDao.clearAllFriendRequests()
-            org.msgat.core.media.MediaStorageManager.deleteAllMedia(org.msgat.MsgATApp.instance.applicationContext)
-
-            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                securePrefs.myNickname = ""
-                securePrefs.myAvatarPath = ""
-                securePrefs.burnIdentityAndGenerateNew()
-                android.os.Process.killProcess(android.os.Process.myPid())
-                kotlin.system.exitProcess(0)
+                try {
+                    app.shutdownForIdentityReset()
+                } catch (error: Exception) {
+                    android.util.Log.w("MsgAT_Identity", "Reset shutdown interrupted: ${error.javaClass.simpleName}")
+                } finally {
+                    android.os.Process.killProcess(android.os.Process.myPid())
+                    kotlin.system.exitProcess(0)
+                }
             }
         }
     }
 
-    // Persists the user's nickname and avatar choice to the secure preferences.
-    fun saveIdentity(nickname: String, avatarUri: String, onSaved: () -> Unit) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val context = org.msgat.MsgATApp.instance.applicationContext
+    // Own the selected in-memory crop before launching so dialog disposal cannot clear it mid-import.
+    fun saveIdentity(nickname: String,avatarBytes: ByteArray?,removeAvatar: Boolean,onSaved: (Boolean)->Unit) {
+        val owned=avatarBytes?.clone()
+        viewModelScope.launch(Dispatchers.IO){
+            var saved=false
             try {
-                val target = java.io.File(org.msgat.core.media.MediaStorageManager.getMediaDir(context), "avatar_self.jpg")
-                val source = android.net.Uri.parse(avatarUri)
-                context.contentResolver.openInputStream(source)?.use { input ->
-                    val atomic = android.util.AtomicFile(target)
-                    val output = atomic.startWrite()
-                    try { input.copyTo(output); atomic.finishWrite(output) }
-                    catch (e: Exception) { atomic.failWrite(output); throw e }
-                } ?: throw java.io.IOException("Cannot open avatar")
-                securePrefs.myNickname = nickname
-                securePrefs.myAvatarPath = target.absolutePath
-                _currentNickname.value = nickname
-                _currentAvatarPath.value = target.absolutePath
-                nettyClient.sendProfile()
-                kotlinx.coroutines.withContext(Dispatchers.Main) { onSaved() }
-            } catch (e: Exception) {
-                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                    android.widget.Toast.makeText(context, "Failed to save", android.widget.Toast.LENGTH_SHORT).show()
-                }
-            }
+                val bytes=owned?.let {org.msgat.core.media.ProfileImages.jpeg(it)}
+                try {saved=nettyClient.secureMessaging.updateProfile(nickname,bytes,removeAvatar)}finally {bytes?.fill(0)}
+                if(saved){_currentNickname.value=securePrefs.myNickname;_currentAvatarPath.value=securePrefs.myAvatarPath}
+            }catch(cancelled: kotlinx.coroutines.CancellationException){throw cancelled}
+            catch(_: Exception){saved=false}
+            finally {owned?.fill(0);kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable+Dispatchers.Main){onSaved(saved)}}
         }
     }
 
@@ -179,6 +197,5 @@ class SessionListViewModel(
         securePrefs.turnUseTls = settings.turnUseTls
 
         nettyClient.disconnect()
-        nettyClient.connect()
     }
 }

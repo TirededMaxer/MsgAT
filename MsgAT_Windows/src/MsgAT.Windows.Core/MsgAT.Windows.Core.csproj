@@ -6,6 +6,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../../shared/storage/message-search.sql" LogicalName="MsgAT.MessageSearch.sql" />
     <PackageReference Include="BouncyCastle.Cryptography" />
     <PackageReference Include="Microsoft.Data.Sqlite.Core" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlcipher" />

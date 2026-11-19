@@ -22,13 +22,25 @@ public struct AvatarView: View {
         self.fallbackSymbol = fallbackSymbol
     }
 
-    private var image: NSImage? {
-        guard let path = avatarPath, !path.isEmpty else { return nil }
-        let url = URL(fileURLWithPath: path)
-        if FileManager.default.fileExists(atPath: url.path) {
-            return NSImage(contentsOf: url)
-        }
-        return nil
+    @State private var image: NSImage?
+    @State private var retry=0
+    private struct LoadKey: Equatable {let path: String?;let retry: Int}
+    @MainActor private func load() async {
+        image=nil
+        let path=avatarPath
+        let decoded: NSImage?
+        do {
+            decoded=try await EncryptedMediaWork.run {
+                guard let path,!path.isEmpty else {return nil}
+                if path.hasPrefix(EncryptedObjectStore.referencePrefix) {
+                    guard let media=try EncryptedObjectStore.shared.metadata(path,messageID:"avatar"),media.available,
+                          media.size>0,media.size<=512*1024 else {return nil}
+                    return try EncryptedObjectStore.shared.image(media,maximumDimension:512)
+                }
+                return MediaStorageManager.shared.generateImageThumbnail(fileUrl:URL(fileURLWithPath:path),maxDimension:512)
+            }
+        } catch {decoded=nil}
+        if !Task.isCancelled {image=decoded}
     }
 
     public var body: some View {
@@ -53,6 +65,10 @@ public struct AvatarView: View {
                         }
                     }
             }
+        }
+        .task(id:LoadKey(path:avatarPath,retry:retry)) {await load()}
+        .onReceive(NotificationCenter.default.publisher(for:MsgDao.didChangeNotification)) {_ in
+            if image==nil,avatarPath?.hasPrefix(EncryptedObjectStore.referencePrefix)==true {retry &+= 1}
         }
     }
 }

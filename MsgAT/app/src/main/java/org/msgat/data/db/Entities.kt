@@ -18,7 +18,9 @@ data class Conversation(
     tableName = "messages",
     indices = [
         Index(value = ["conversationUuid", "timestamp"]),
-        Index(value = ["isRead"])
+        Index(value = ["isRead"]),
+        Index(value=["conversationUuid","timestamp","messageId"]),
+        Index(value=["conversationUuid","isMine","isRead","timestamp","messageId"])
     ]
 )
 @Keep

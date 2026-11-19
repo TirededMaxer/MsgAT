@@ -19,7 +19,8 @@ public sealed record ChatMessage(
     string? ReplyToContent = null,
     int Status = 1,
     bool IsRevoked = false,
-    bool IsEdited = false);
+    bool IsEdited = false,
+    long? ExpiresAt = null);
 
 public sealed record FriendRequest(
     string SenderUuid,
@@ -28,7 +29,7 @@ public sealed record FriendRequest(
     string PeerPublicKey,
     long Timestamp);
 
-public sealed record ConversationWithUnread(Conversation Conversation, int UnreadCount);
+public sealed record ConversationWithUnread(Conversation Conversation,int UnreadCount,long PinOrder=0,bool Archived=false,long MuteUntil=0,bool ManualUnread=false,string Summary="",string DraftText="",long LastAt=0,string LastID="",string FirstUnreadID="",string FolderIDs="",bool HasDraft=false,long ActivityAt=0,string FolderPinOrders="{}",int? LastReceiptStatus=null,string SummaryKind="");
 
 public sealed record MessagePayload(
     string SenderUuid,

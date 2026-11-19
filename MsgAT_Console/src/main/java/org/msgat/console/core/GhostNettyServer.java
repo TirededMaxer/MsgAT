@@ -9,18 +9,38 @@ import io.netty.channel.socket.nio.NioServerSocketChannel;
 import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
+import io.netty.handler.timeout.ReadTimeoutHandler;
+import io.netty.handler.timeout.WriteTimeoutHandler;
 import org.msgat.console.routing.BlindRoutingTable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.io.File;
 
-public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
-
+public final class GhostNettyServer {
+    private final ServerConfiguration configuration;
+    private final BlindRoutingTable routingTable;
+    private final org.msgat.console.db.AttachmentStore attachments;
+    private final RelayAdmission admission;
+    private final AndroidPushRelay androidPush;
+    private final Runnable wakeRevocationCleanup;
+    private volatile Channel listener;
+    private volatile boolean stopRequested;
+    public GhostNettyServer(ServerConfiguration configuration, BlindRoutingTable routingTable,
+                            org.msgat.console.db.AttachmentStore attachments, AndroidPushRelay androidPush,
+                            Runnable wakeRevocationCleanup) {
+        this.configuration = configuration;
+        this.routingTable = routingTable;
+        this.attachments = attachments;
+        admission = new RelayAdmission(configuration.connectionLimits(), configuration.connectionTimeouts().authenticationSeconds());
+        this.androidPush = androidPush;
+        this.wakeRevocationCleanup = wakeRevocationCleanup;
+    }
+    public void requestStop() { stopRequested=true; var channel=listener; if(channel!=null) channel.close(); }
     private static final Logger log = LoggerFactory.getLogger(GhostNettyServer.class);
 
     // Starts the Netty server, sets up dynamic TLS, configures the channel pipeline, and binds to the specified port.
     @SuppressWarnings("deprecation") // Netty 4.2 retains ordered per-channel executor groups; keep DB work off I/O threads.
     public void start() throws Exception {
+        if(stopRequested) return;
         final SslContext sslCtx = createSslContext();
 
         EventLoopGroup bossGroup = new MultiThreadIoEventLoopGroup(1, NioIoHandler.newFactory());
@@ -30,6 +50,10 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
                 Math.max(2, Math.min(4, Runtime.getRuntime().availableProcessors())),
                 new io.netty.util.concurrent.DefaultThreadFactory("msgat-application"), 64,
                 io.netty.util.concurrent.RejectedExecutionHandlers.reject());
+        var transferGroup = new io.netty.util.concurrent.DefaultEventExecutorGroup(2,
+                new io.netty.util.concurrent.DefaultThreadFactory("msgat-attachments"),16,
+                io.netty.util.concurrent.RejectedExecutionHandlers.reject());
+        var clients=new io.netty.channel.group.DefaultChannelGroup(io.netty.util.concurrent.GlobalEventExecutor.INSTANCE, true);
 
         try {
             ServerBootstrap b = new ServerBootstrap();
@@ -42,47 +66,56 @@ public record GhostNettyServer(int port, BlindRoutingTable routingTable) {
                     .childHandler(new ChannelInitializer<SocketChannel>() {
                         @Override
                         public void initChannel(SocketChannel ch) {
+                            RelayAdmission.Lease lease = stopRequested ? null : admission.acquire(ch);
+                            if (lease == null) { ch.close(); return; }
+                            clients.add(ch);
                             ChannelPipeline p = ch.pipeline();
 
-                            // 5 minutes (300 seconds) read timeout to reap zombie connections.
-                            p.addLast(new io.netty.handler.timeout.ReadTimeoutHandler(300));
+                            var timeouts = configuration.connectionTimeouts();
+                            p.addLast(new ReadTimeoutHandler(timeouts.readSeconds()));
+                            p.addLast(new WriteTimeoutHandler(timeouts.writeSeconds()));
                             p.addLast(sslCtx.newHandler(ch.alloc()));
-                            p.addLast(new GhostPacketCodec());
+                            p.addLast(new GhostPacketCodec(configuration.maxInboundFrameBytes()));
                             p.addLast(new ApplicationQueueGuard());
                             // Both handlers share the same ordered application executor for this channel.
-                            p.addLast(applicationGroup, "authentication", new AuthChallengeHandler(routingTable));
-                            p.addLast(applicationGroup, "relay", new RelayHandler(routingTable));
+                            p.addLast(applicationGroup, "authentication", new AuthChallengeHandler(routingTable, lease, androidPush != null, wakeRevocationCleanup, channel -> {
+                                channel.pipeline().addLast(transferGroup,"attachments",new AttachmentHandler(attachments));
+                                channel.pipeline().remove("relay");
+                            }));
+                            p.addLast(applicationGroup, "relay", new RelayHandler(routingTable, androidPush));
                         }
                     });
 
-            ChannelFuture f = b.bind(port).sync();
-            log.info("Server started on port: {}", port);
+            ChannelFuture f = b.bind(configuration.listener());
+            listener = f.channel();
+            if(stopRequested) listener.close();
+            f.sync();
+            log.info("Server listening on {}", f.channel().localAddress());
             f.channel().closeFuture().sync();
         } finally {
-            applicationGroup.shutdownGracefully();
-            workerGroup.shutdownGracefully();
-            bossGroup.shutdownGracefully();
+            if (listener != null) listener.close().awaitUninterruptibly();
+            clients.close().awaitUninterruptibly();
+            transferGroup.shutdownGracefully(0,5,java.util.concurrent.TimeUnit.SECONDS).syncUninterruptibly();
+            applicationGroup.shutdownGracefully(0,5,java.util.concurrent.TimeUnit.SECONDS).syncUninterruptibly();
+            workerGroup.shutdownGracefully(0,5,java.util.concurrent.TimeUnit.SECONDS).syncUninterruptibly();
+            bossGroup.shutdownGracefully(0,5,java.util.concurrent.TimeUnit.SECONDS).syncUninterruptibly();
         }
     }
 
     @SuppressWarnings("deprecation") // Netty retains this helper only for explicit local-development certificates.
     private SslContext createSslContext() throws Exception {
-        String certificatePath = System.getenv("MSGAT_TLS_CERT");
-        String privateKeyPath = System.getenv("MSGAT_TLS_KEY");
-        if (certificatePath != null && !certificatePath.isBlank()
-                && privateKeyPath != null && !privateKeyPath.isBlank()) {
-            return SslContextBuilder.forServer(new File(certificatePath), new File(privateKeyPath)).build();
+        var tlsFiles = configuration.tlsFiles();
+        if (tlsFiles != null) {
+            return SslContextBuilder.forServer(tlsFiles.certificate().toFile(), tlsFiles.privateKey().toFile())
+                    .protocols("TLSv1.3", "TLSv1.2").build();
         }
-        if ((certificatePath == null || certificatePath.isBlank())
-                != (privateKeyPath == null || privateKeyPath.isBlank())) {
-            throw new IllegalStateException("MSGAT_TLS_CERT and MSGAT_TLS_KEY must be configured together");
-        }
-        log.warn("Using an ephemeral self-signed certificate. Configure MSGAT_TLS_CERT and MSGAT_TLS_KEY for deployment.");
+        log.warn("Using an ephemeral self-signed certificate. Set tlsCertificatePath and tlsPrivateKeyPath for deployment.");
         SelfSignedCertificate certificate = SelfSignedCertificate.builder()
                 .fqdn("ghost-node.local")
                 .build();
         try {
-            return SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey()).build();
+            return SslContextBuilder.forServer(certificate.certificate(), certificate.privateKey())
+                    .protocols("TLSv1.3", "TLSv1.2").build();
         } finally {
             certificate.delete();
         }

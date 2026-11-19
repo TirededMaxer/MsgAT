@@ -4,18 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import org.msgat.MsgATApp
-import org.msgat.core.network.MsgATService
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context,intent: Intent) {
-        if (intent.action!=Intent.ACTION_BOOT_COMPLETED) return
+        if (intent.action!=Intent.ACTION_BOOT_COMPLETED && intent.action!=Intent.ACTION_MY_PACKAGE_REPLACED) return
         if (MsgATApp.instance.startupState.value==MsgATApp.StartupState.FAILED) return
-        // Target-35+ apps cannot launch a dataSync foreground service from boot
-        // on Android 15+. Background push support must use its proper OS/vendor path.
-        if (android.os.Build.VERSION.SDK_INT>=35) return
-        try { context.startForegroundService(Intent(context,MsgATService::class.java)) }
-        catch (error: RuntimeException) {
-            android.util.Log.w("MsgAT_Service","Boot start refused: ${error.javaClass.simpleName}")
-        }
+        // This is continuous IM reception, not a finite dataSync transfer. The
+        // OS can still refuse background launch; the foreground settings expose it.
+        org.msgat.core.network.BackgroundReception.start(context)
     }
 }

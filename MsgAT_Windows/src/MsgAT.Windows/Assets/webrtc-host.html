@@ -1,34 +1,281 @@
 <!doctype html>
 <html lang="en">
-<head><meta charset="utf-8"><title>MsgAT WebRTC Host</title></head>
+<head><meta charset="utf-8"><title>MsgAT WebRTC Host</title>
+<style>
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #101216; }
+  video { display: none; background: #101216; }
+  video.visible { display: block; }
+  #remoteVideo { width: 100%; height: 100%; object-fit: contain; }
+  #localVideo { position: absolute; bottom: 12px; right: 12px; width: 24%; max-width: 180px;
+                aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; transform: scaleX(-1); }
+</style></head>
 <body>
 <audio id="remoteAudio" autoplay></audio>
+<video id="remoteVideo" autoplay playsinline muted></video>
+<video id="localVideo" autoplay playsinline muted></video>
 <script>
 (() => {
   'use strict';
   let pc = null;
   let stream = null;
+  let pendingMicrophone = null;
+  let pendingOutput = null;
+  let microphoneSender = null;
+  let openingMicrophone = null;
+  let microphoneMuted = false;
+  let inputDevice = 'default';
+  let capturedDefaultInput = null;
+  let deviceRefreshTimer = null;
+  let pendingCamera = null;
+  let cameraTrack = null;
+  let openingCameraTrack = null;
+  let cameraSender = null;
+  let cameraRevision = 0;
+  let remoteTrack = null;
+  let stopWatchingRemoteFrame = null;
   let pendingIce = [];
   let localIce = [];
   let descriptionSent = false;
   let commandQueue = Promise.resolve();
   let generation = 0;
   const remoteAudio = document.getElementById("remoteAudio");
+  const remoteVideo = document.getElementById("remoteVideo");
+  const localVideo = document.getElementById("localVideo");
   const post = (value, owner = generation) => {
     if (owner === generation) chrome.webview.postMessage({ ...value, generation: owner });
   };
 
   async function close() {
+    clearTimeout(deviceRefreshTimer);
+    deviceRefreshTimer = null;
     pendingIce = [];
     localIce = [];
     descriptionSent = false;
     remoteAudio.srcObject = null;
+    remoteTrack = null;
+    showRemoteVideo(null, generation);
+    releaseCamera();
+    cameraSender = null;
+    microphoneSender = null;
+    openingMicrophone?.stop();
+    openingMicrophone = null;
+    microphoneMuted = false;
+    inputDevice = 'default';
+    capturedDefaultInput = null;
     if (pc) { pc.ontrack = null; pc.onicecandidate = null; pc.onconnectionstatechange = null; pc.close(); pc = null; }
     if (stream) { stream.getTracks().forEach(track => track.stop()); stream = null; }
+    if (pendingOutput) await pendingOutput.catch(() => {});
     if (remoteAudio.setSinkId) await remoteAudio.setSinkId('default').catch(() => {});
   }
 
-  async function create(iceServers, owner) {
+  function microphoneConstraints(id) {
+    return {
+      deviceId: { exact: id }, echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+      channelCount: 1, sampleRate: 48000
+    };
+  }
+
+  function captureNotice(kind, error, fallback) {
+    switch (error?.name) {
+      case 'NotAllowedError':
+      case 'SecurityError':
+        return kind + '-permission';
+      case 'NotFoundError':
+      case 'OverconstrainedError':
+        return kind + '-unavailable';
+      default:
+        return fallback;
+    }
+  }
+
+  function defaultInputGroup(devices) {
+    return devices.find(device => device.kind === 'audioinput' && device.deviceId === 'default')?.groupId || null;
+  }
+
+  async function audioDevices(owner, notice, captureChanged = false) {
+    if (!pc || owner !== generation) return;
+    const devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    if (!pc || owner !== generation) return;
+    if (captureChanged) capturedDefaultInput = inputDevice === 'default' ? defaultInputGroup(devices) : null;
+    const named = kind => devices.filter(device => device.kind === kind && device.deviceId &&
+      device.deviceId !== 'default' && device.deviceId !== 'communications').slice(0, 32)
+      .map((device, index) => ({ id: device.deviceId, name: device.label.slice(0, 160) || `Device ${index + 1}` }));
+    post({ type: 'audio-devices', inputDevice, outputDevice: remoteAudio.sinkId || 'default',
+      inputs: named('audioinput'), outputs: remoteAudio.setSinkId ? named('audiooutput') : [],
+      canSelectOutput: typeof remoteAudio.setSinkId === 'function', notice }, owner);
+  }
+
+  function watchMicrophone(track, owner) {
+    track.onended = () => {
+      commandQueue = commandQueue.then(async () => {
+        if (owner !== generation || microphoneSender?.track !== track || track.readyState !== 'ended') return;
+        await switchMicrophone('default', owner, 'microphone-fallback');
+      }).catch(() => {});
+    };
+  }
+
+  async function switchMicrophone(id, owner, notice) {
+    const connection = pc, sender = microphoneSender;
+    if (!sender || !connection || owner !== generation) return;
+    if (id !== 'default' && id === inputDevice && sender.track?.readyState === 'live') return;
+    const current = () => owner === generation && pc === connection;
+    let changed = false;
+    const request = navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints(id), video: false })
+      .then(async captured => {
+        const [track] = captured.getAudioTracks();
+        if (!current()) { captured.getTracks().forEach(item => item.stop()); return; }
+        if (!track) throw new DOMException('No microphone track', 'NotFoundError');
+        const previous = sender.track;
+        track.enabled = false;
+        openingMicrophone = track;
+        try { await sender.replaceTrack(track); }
+        catch (error) { track.stop(); throw error; }
+        finally { if (openingMicrophone === track) openingMicrophone = null; }
+        if (!current()) { track.stop(); return; }
+        if (previous) { stream.removeTrack(previous); previous.stop(); }
+        stream.addTrack(track);
+        track.enabled = !microphoneMuted;
+        inputDevice = id;
+        changed = true;
+        watchMicrophone(track, owner);
+      });
+    pendingMicrophone = request;
+    try { await request; }
+    catch (error) { notice = captureNotice('microphone', error, 'microphone-switch-failed'); }
+    finally { if (pendingMicrophone === request) pendingMicrophone = null; }
+    if (current()) await audioDevices(owner, notice, changed);
+  }
+
+  async function switchOutput(id, owner, notice) {
+    if (!pc || owner !== generation) return;
+    if (!remoteAudio.setSinkId) { await audioDevices(owner, 'output-selection-unavailable'); return; }
+    const request = remoteAudio.setSinkId(id);
+    pendingOutput = request;
+    try { await request; }
+    catch { notice = 'output-switch-failed'; }
+    finally { if (pendingOutput === request) pendingOutput = null; }
+    await audioDevices(owner, notice);
+  }
+
+  navigator.mediaDevices?.addEventListener('devicechange', () => {
+    if (!pc || !microphoneSender || deviceRefreshTimer !== null) return;
+    const owner = generation;
+    deviceRefreshTimer = setTimeout(() => {
+      deviceRefreshTimer = null;
+      commandQueue = commandQueue.then(async () => {
+        if (!pc || owner !== generation) return;
+        const devices = await navigator.mediaDevices.enumerateDevices().catch(() => null);
+        if (!devices || owner !== generation) return;
+        const inputLost = microphoneSender?.track?.readyState === 'ended' ||
+          (inputDevice !== 'default' &&
+            !devices.some(device => device.kind === 'audioinput' && device.deviceId === inputDevice));
+        const systemInput = defaultInputGroup(devices);
+        const defaultChanged = inputDevice === 'default' && capturedDefaultInput &&
+          systemInput && systemInput !== capturedDefaultInput;
+        if (inputLost) await switchMicrophone('default', owner, 'microphone-fallback');
+        else if (defaultChanged) await switchMicrophone('default', owner);
+        else if (inputDevice === 'default' && !capturedDefaultInput) capturedDefaultInput = systemInput;
+        if (!pc || owner !== generation) return;
+        const output = remoteAudio.sinkId;
+        if (output && output !== 'default' && output !== 'communications' &&
+            !devices.some(device => device.kind === 'audiooutput' && device.deviceId === output)) {
+          await switchOutput('default', owner, 'output-fallback');
+        } else if (!inputLost && !defaultChanged) await audioDevices(owner);
+      }).catch(() => {});
+    }, 150);
+  });
+
+  function showVideo(element, track) {
+    element.srcObject = track ? new MediaStream([track]) : null;
+    element.classList.toggle('visible', !!track);
+    if (track) element.play().catch(() => {});
+  }
+
+  function showRemoteVideo(track, owner) {
+    stopWatchingRemoteFrame?.();
+    stopWatchingRemoteFrame = null;
+    showVideo(remoteVideo, track);
+    post({ type: 'remote-video', visible: false }, owner);
+    if (!track) return;
+
+    const source = remoteVideo.srcObject;
+    const showFrame = () => {
+      if (owner !== generation || remoteTrack !== track || remoteVideo.srcObject !== source) return;
+      stopWatchingRemoteFrame = null;
+      post({ type: 'remote-video', visible: true }, owner);
+    };
+    if (typeof remoteVideo.requestVideoFrameCallback === 'function') {
+      const frame = remoteVideo.requestVideoFrameCallback(showFrame);
+      stopWatchingRemoteFrame = () => remoteVideo.cancelVideoFrameCallback(frame);
+    } else {
+      remoteVideo.addEventListener('playing', showFrame, { once: true });
+      stopWatchingRemoteFrame = () => remoteVideo.removeEventListener('playing', showFrame);
+    }
+  }
+
+  function releaseCamera() {
+    cameraRevision++;
+    if (cameraTrack) cameraTrack.stop();
+    if (openingCameraTrack) openingCameraTrack.stop();
+    cameraTrack = null;
+    openingCameraTrack = null;
+    showVideo(localVideo, null);
+  }
+
+  async function cameraOff(owner) {
+    releaseCamera();
+    const revision = cameraRevision;
+    const sender = cameraSender;
+    if (sender?.track) await sender.replaceTrack(null).catch(() => {});
+    if (revision === cameraRevision) post({ type: 'camera', enabled: false }, owner);
+  }
+
+  async function cameraOn(owner, switchDevice, revision) {
+    const connection = pc, sender = cameraSender;
+    const current = () => owner === generation && revision === cameraRevision && pc === connection;
+    if (!current()) return;
+    if (!sender) { post({ type: 'camera', enabled: false, notice: 'video-unavailable' }, owner); return; }
+    let deviceId;
+    try {
+      if (switchDevice) {
+        const devices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'videoinput' && device.deviceId);
+        if (!current()) return;
+        if (devices.length < 2) {
+          post({ type: 'camera', enabled: !!cameraTrack, notice: 'no-other-camera' }, owner);
+          return;
+        }
+        const index = devices.findIndex(device => device.deviceId === cameraTrack?.getSettings().deviceId);
+        deviceId = devices[(index + 1) % devices.length].deviceId;
+      }
+      const request = navigator.mediaDevices.getUserMedia({ audio: false, video: {
+        ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
+        width: { ideal: 640 }, height: { ideal: 480 }, frameRate: { ideal: 24, max: 30 }
+      }}).then(async captured => {
+        const [track] = captured.getVideoTracks();
+        if (!track || !current()) { captured.getTracks().forEach(item => item.stop()); return; }
+        track.enabled = false;
+        openingCameraTrack = track;
+        try { await sender.replaceTrack(track); }
+        catch (error) { track.stop(); throw error; }
+        finally { if (openingCameraTrack === track) openingCameraTrack = null; }
+        if (!current()) { track.stop(); return; }
+        cameraTrack?.stop();
+        cameraTrack = track;
+        track.enabled = true;
+        showVideo(localVideo, track);
+        track.onended = () => { if (cameraTrack === track) void cameraOff(owner); };
+        post({ type: 'camera', enabled: true }, owner);
+      });
+      pendingCamera = request;
+      try { await request; }
+      finally { if (pendingCamera === request) pendingCamera = null; }
+    } catch (error) {
+      if (current()) post({ type: 'camera', enabled: !!cameraTrack,
+        notice: captureNotice('camera', error, 'camera-open-failed') }, owner);
+    }
+  }
+
+  async function create(iceServers, owner, video, outgoing) {
     await close();
     if (owner !== generation) throw new Error('Call ended');
     const configuration = { iceServers, sdpSemantics: "unified-plan", bundlePolicy: "max-bundle", rtcpMuxPolicy: "require" };
@@ -36,8 +283,23 @@
     const connection = pc;
     pc.ontrack = event => {
       if (pc !== connection || owner !== generation) return;
-      remoteAudio.srcObject = event.streams[0] || new MediaStream([event.track]);
-      remoteAudio.play().catch(error => post({ type: 'state', state: 'failed', detail: String(error) }, owner));
+      const track = event.track;
+      if (track.kind === 'audio') {
+        remoteAudio.srcObject = new MediaStream([track]);
+        remoteAudio.play().catch(error => post({ type: 'state', state: 'failed', detail: String(error) }, owner));
+      } else if (track.kind === 'video' && video) {
+        remoteTrack = track;
+        const current = () => pc === connection && owner === generation && remoteTrack === track;
+        const update = () => { if (current()) showRemoteVideo(track.muted ? null : track, owner); };
+        track.onmute = update;
+        track.onunmute = update;
+        track.onended = () => {
+          if (!current()) return;
+          remoteTrack = null;
+          showRemoteVideo(null, owner);
+        };
+        update();
+      }
     };
     pc.onicecandidate = event => {
       if (pc !== connection || !event.candidate) return;
@@ -47,16 +309,30 @@
       else localIce.push(candidate);
     };
     pc.onconnectionstatechange = () => { if (pc === connection) post({ type: 'state', state: connection.connectionState }, owner); };
-    const captured = await navigator.mediaDevices.getUserMedia({ audio: {
-      echoCancellation: true, noiseSuppression: true, autoGainControl: true,
-      channelCount: 1, sampleRate: 48000
-    }, video: false });
-    if (owner !== generation || pc !== connection) {
-      captured.getTracks().forEach(track => track.stop());
-      throw new Error('Call ended');
+    const request = navigator.mediaDevices.getUserMedia({ audio: microphoneConstraints('default'), video: false })
+      .catch(error => {
+        throw Object.assign(new Error(error.name), {
+          msgatReason: captureNotice('microphone', error, 'microphone-open-failed')
+        });
+      }).then(captured => {
+      if (owner !== generation || pc !== connection) {
+        captured.getTracks().forEach(track => track.stop());
+        throw new Error('Call ended');
+      }
+      stream = captured;
+      const [microphone] = stream.getAudioTracks();
+      microphoneSender = connection.addTrack(microphone, stream);
+      microphone.enabled = !microphoneMuted;
+      watchMicrophone(microphone, owner);
+      if (video && outgoing) cameraSender = connection.addTransceiver('video', { direction: 'sendrecv' }).sender;
+    });
+    pendingMicrophone = request;
+    try {
+      await request;
+    } finally {
+      if (pendingMicrophone === request) pendingMicrophone = null;
     }
-    stream = captured;
-    stream.getTracks().forEach(track => connection.addTrack(track, stream));
+    await audioDevices(owner, undefined, true);
   }
 
   async function publishDescription(type, owner) {
@@ -118,7 +394,7 @@
       try {
         current();
         if (command.type === 'offer') {
-          await create(p.iceServers, owner);
+          await create(p.iceServers, owner, p.video, true);
           current();
           const offer = await pc.createOffer({ offerToReceiveAudio: true });
           current();
@@ -126,10 +402,16 @@
           current();
           await publishDescription('offer', owner);
         } else if (command.type === 'accept') {
-          await create(p.iceServers, owner);
+          await create(p.iceServers, owner, p.video, false);
           current();
           await pc.setRemoteDescription({ type: 'offer', sdp: optimizeOpus(p.sdp) });
           current();
+          if (p.video) {
+            const video = pc.getTransceivers().find(item => item.mid !== null && item.receiver.track.kind === 'video');
+            if (!video) throw new Error('Video could not be negotiated');
+            video.direction = 'sendrecv';
+            cameraSender = video.sender;
+          }
           await flushIce();
           current();
           const answer = await pc.createAnswer();
@@ -146,14 +428,14 @@
           if (pc && pc.remoteDescription) await addIce(candidate);
           else if (pendingIce.length < 256) pendingIce.push(candidate);
         } else if (command.type === 'mute') {
-          if (stream) stream.getAudioTracks().forEach(track => track.enabled = !p.muted);
-        } else if (command.type === 'speaker') {
-          try {
-            await remoteAudio.setSinkId(p.enabled ? 'default' : 'communications');
-            post({ type: 'speaker', enabled: p.enabled }, owner);
-          } catch (error) {
-            post({ type: 'speaker', enabled: remoteAudio.sinkId !== 'communications' }, owner);
-          }
+          microphoneMuted = p.muted;
+          if (stream) stream.getAudioTracks().forEach(track => track.enabled = !microphoneMuted);
+        } else if (command.type === 'audio-input') {
+          await switchMicrophone(p.id, owner);
+        } else if (command.type === 'audio-output') {
+          await switchOutput(p.id, owner);
+        } else if (command.type === 'camera') {
+          await cameraOn(owner, p.switchDevice, command.cameraRevision);
         } else if (command.type === 'stats') {
           let value = null;
           if (pc) {
@@ -174,17 +456,24 @@
           await close();
         }
       } catch (error) {
-        const reason = (command.type === 'offer' || command.type === 'accept') &&
-          (error.name === 'NotAllowedError' || error.name === 'SecurityError') ? 'microphone-permission' : null;
+        const reason = error.msgatReason ?? null;
         post({ type: 'state', state: 'failed', reason, detail: String(error) }, owner);
       }
   }
   window.msgat = {
     command: command => {
+      if (command.generation < generation) return;
       if (command.type === 'close') {
-        generation = command.generation;
+        const owner = generation = command.generation;
+        const pending = [pendingMicrophone, pendingCamera].filter(Boolean);
         commandQueue = Promise.resolve();
-        return close();
+        return close().then(() => Promise.allSettled(pending))
+          .then(() => post({ type: 'media-released' }, owner));
+      }
+      if (command.type === 'camera') {
+        if (command.generation !== generation) return;
+        if (!command.payload.enabled) return cameraOff(generation);
+        command.cameraRevision = ++cameraRevision;
       }
       if (command.type === 'offer' || command.type === 'accept') generation = command.generation;
       commandQueue = commandQueue.then(() => execute(command));

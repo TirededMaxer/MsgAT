@@ -63,4 +63,17 @@ public struct GhostPacket: Sendable {
     public static let typeV2Received: UInt8 = 0x47
     public static let typeV2Sync: UInt8 = 0x48
     public static let typeV2SyncEnd: UInt8 = 0x49
+    public static let typeV2Revoke: UInt8 = 0x4A
+    public static let typeV2Revoked: UInt8 = 0x4B
+    public static let typeV2Rejected: UInt8 = 0x4C
+    public static let typeV2Deferred: UInt8 = 0x4F
+    public static let typeObjectBegin: UInt8 = 0x50
+    public static let typeObjectStatus: UInt8 = 0x51
+    public static let typeObjectPut: UInt8 = 0x52
+    public static let typeObjectFinish: UInt8 = 0x53
+    public static let typeObjectGet: UInt8 = 0x54
+    public static let typeObjectData: UInt8 = 0x55
+    public static let typeObjectDelete: UInt8 = 0x56
+    public static let typeObjectDeleted: UInt8 = 0x57
+    public static let typeObjectError: UInt8 = 0x58
 }

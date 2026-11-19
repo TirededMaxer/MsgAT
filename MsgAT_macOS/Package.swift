@@ -22,6 +22,8 @@ let package = Package(
     ],
     targets: [
         .systemLibrary(name: "MsgATNativeSecurity", path: "NativeSecurity"),
+        .target(name:"MsgATNativeImports",path:"NativeImports",publicHeadersPath:"include",linkerSettings:[.linkedLibrary("z")]),
+        .target(name:"MsgATPreviewHTTP",path:"NativePreview",publicHeadersPath:"include",linkerSettings:[.linkedLibrary("curl")]),
         .target(
             name: "CBlake2",
             publicHeadersPath: "include"
@@ -39,6 +41,8 @@ let package = Package(
                 "CBlake2",
                 "MsgATNativeAudio",
                 "MsgATNativeSecurity",
+                "MsgATPreviewHTTP",
+                "MsgATNativeImports",
                 .product(name: "SQLCipher", package: "SQLCipher.swift"),
                 .product(name: "WebRTC", package: "WebRTC")
             ],
@@ -50,7 +54,7 @@ let package = Package(
                 "App/MsgAT-Bridging-Header.h",
                 "App/MsgAT.entitlements"
             ],
-            resources: [.copy("App/ThirdParty")],
+            resources: [.copy("App/ThirdParty"), .process("UI/Localization")],
             cSettings: [.define("SQLITE_HAS_CODEC")],
             swiftSettings: [.define("SQLITE_HAS_CODEC")],
             linkerSettings: [

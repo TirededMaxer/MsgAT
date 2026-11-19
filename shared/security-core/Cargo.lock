@@ -1094,17 +1094,20 @@ checksum = "68354c5c6bd36d73ff3feceb05efa59b6acb7626617f4962be322a825e61f79a"
 name = "msgat-security-core"
 version = "2.0.0"
 dependencies = [
+ "aes-gcm-siv",
  "async-trait",
  "base64",
  "ed25519-dalek",
  "futures-executor",
  "hkdf 0.12.4",
+ "libc",
  "libsignal-protocol",
  "prost",
  "rand 0.9.5",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "windows-sys",
  "zeroize",
 ]
 

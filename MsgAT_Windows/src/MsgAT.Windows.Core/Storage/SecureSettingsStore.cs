@@ -33,6 +33,7 @@ public sealed record SecureSettings
     public bool AllowDevelopmentCertificate { get; init; }
     public bool RelayTlsCompatibilityV1 { get; init; }
     public bool RelayTlsSecurityV2 { get; init; }
+    public string? AttachmentExportFolder { get; init; }
     public override string ToString() => $"MsgAT settings (format {FormatVersion}; secrets redacted)";
 }
 
@@ -58,6 +59,7 @@ public sealed class SecureSettingsStore
         _vaultPath = Path.Combine(dataDirectory,"msgat_vault.sec");
         _identityMarkerPath = Path.Combine(dataDirectory,"identity.initialized");
         _hardwareMarkerPath = Path.Combine(dataDirectory,"identity.hardware-v2");
+        IdentityLifecycle.ResumePendingReset(dataDirectory);
         _protector = new TpmSecretProtector(dataDirectory);
         LoadOrCreate(dataDirectory);
         WriteMarker(_identityMarkerPath,"MsgAT identity initialized v2"u8);
@@ -101,26 +103,6 @@ public sealed class SecureSettingsStore
             if (!string.IsNullOrWhiteSpace(_settings.Nickname)) throw new InvalidOperationException("Identity profile is already initialized.");
             var settings=_settings with { Nickname=nickname.Trim(),AvatarPath=avatarPath };
             OpenIdentity((seed,envelope) => { Save(settings,seed,envelope); return true; });
-        }
-        Changed?.Invoke(this,EventArgs.Empty);
-    }
-
-    public void RotateIdentity()
-    {
-        lock (_gate)
-        {
-            var seed=RandomNumberGenerator.GetBytes(32);
-            var key=RandomNumberGenerator.GetBytes(32);
-            try
-            {
-                var settings=_settings with { Nickname=null,AvatarPath=null };
-                var envelope=RootKeyHierarchy.Wrap(seed,"database",key);
-                _protector.DestroyKey();
-                _protector.EnsureAvailable(requireExistingKey:false);
-                Save(settings,seed,envelope);
-                Volatile.Write(ref _uuid,CryptoService.CalculateUuid(seed));
-            }
-            finally { CryptographicOperations.ZeroMemory(seed); CryptographicOperations.ZeroMemory(key); }
         }
         Changed?.Invoke(this,EventArgs.Empty);
     }

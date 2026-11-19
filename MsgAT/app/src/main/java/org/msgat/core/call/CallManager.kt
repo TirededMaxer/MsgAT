@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import org.msgat.MsgATApp
+import org.msgat.core.media.MicrophoneOwnership
 import org.webrtc.*
 import org.webrtc.audio.JavaAudioDeviceModule
 import java.util.Locale
@@ -33,11 +34,24 @@ class CallManager private constructor(private val context: Context) {
 
     private val _rttMs = MutableStateFlow(0L)
     val rttMs: StateFlow<Long> = _rttMs.asStateFlow()
+    private val _recoveringConnection = MutableStateFlow(false)
+    internal val recoveringConnection = _recoveringConnection.asStateFlow()
+    internal var endedOutcome = CallOutcome.Completed
+        private set
 
     private var factory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
     private var localAudioSource: AudioSource? = null
+    private var microphone: MicrophoneOwnership.CallLease? = null
+    private var egl: EglBase? = null
+    private val _isVideoCall = MutableStateFlow(false)
+    internal val isVideoCall = _isVideoCall.asStateFlow()
+    private val _videoSession = MutableStateFlow<CallVideoSession?>(null)
+    internal val videoSession = _videoSession.asStateFlow()
+    private var videoRelease: Job? = null
+    internal val supportsVideo: Boolean get() = egl != null &&
+        context.packageManager.hasSystemFeature(android.content.pm.PackageManager.FEATURE_CAMERA_ANY)
 
     private var signalingHandler: CallSignalingHandler? = null
     private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
@@ -48,6 +62,12 @@ class CallManager private constructor(private val context: Context) {
 
     var currentPeerUuid: String? = null
         private set
+
+    var currentCallId: String? = null
+        private set
+    fun isCurrentCall(peer: String,id: String) = isCurrentPeer(peer) && currentCallId==id
+    fun isOutgoingCall(peer: String,id: String) = isCurrentCall(peer,id) && isCaller &&
+        _callState.value in listOf(CallState.OUTGOING_RINGING,CallState.CONNECTING)
 
     fun isCurrentPeer(peerUuid: String): Boolean = currentPeerUuid == peerUuid && _callState.value != CallState.IDLE && _callState.value != CallState.ENDED
 
@@ -96,10 +116,15 @@ class CallManager private constructor(private val context: Context) {
             .setUseHardwareNoiseSuppressor(JavaAudioDeviceModule.isBuiltInNoiseSuppressorSupported())
             .createAudioDeviceModule()
 
-        factory = PeerConnectionFactory.builder()
+        val builder = PeerConnectionFactory.builder()
             .setOptions(options)
             .setAudioDeviceModule(audioDeviceModule)
-            .createPeerConnectionFactory()
+        egl = runCatching { EglBase.create() }.getOrNull()
+        egl?.eglBaseContext?.let { shared ->
+            builder.setVideoEncoderFactory(DefaultVideoEncoderFactory(shared, true, true))
+            builder.setVideoDecoderFactory(DefaultVideoDecoderFactory(shared))
+        }
+        factory = builder.createPeerConnectionFactory()
 
         audioDeviceModule.release()
     }
@@ -170,6 +195,7 @@ class CallManager private constructor(private val context: Context) {
                     PeerConnection.IceConnectionState.COMPLETED -> {
                         disconnectGraceJob?.cancel()
                         disconnectGraceJob = null
+                        _recoveringConnection.value = false
                         if (_callState.value != CallState.CONNECTED) {
                             _callState.value = CallState.CONNECTED
                             startCallTimers()
@@ -190,6 +216,10 @@ class CallManager private constructor(private val context: Context) {
                         }
                     }
                     PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        if (_callState.value == CallState.CONNECTED) {
+                            _recoveringConnection.value = true
+                            _rttMs.value = 0
+                        }
                         // Long-distance links can transiently drop ICE; give a 10s recovery
                         // window before treating the call as dead (prevents instant hang-up).
                         if (disconnectGraceJob == null) {
@@ -199,12 +229,12 @@ class CallManager private constructor(private val context: Context) {
                                 val st = peerConnection?.iceConnectionState()
                                 if (st != PeerConnection.IceConnectionState.CONNECTED &&
                                     st != PeerConnection.IceConnectionState.COMPLETED) {
-                                    endCall()
+                                    endCall(CallOutcome.Failed)
                                 }
                             }
                         }
                     }
-                    PeerConnection.IceConnectionState.FAILED -> endCall()
+                    PeerConnection.IceConnectionState.FAILED -> endCall(CallOutcome.Failed)
                     else -> {}
                 }
                 }
@@ -235,6 +265,14 @@ class CallManager private constructor(private val context: Context) {
             override fun onRenegotiationNeeded() {}
 
             override fun onAddTrack(receiver: RtpReceiver?, mediaStreams: Array<out MediaStream>?) {}
+
+            override fun onTrack(transceiver: RtpTransceiver?) {
+                scope.launch {
+                    if (generation != peerGeneration || !_isVideoCall.value) return@launch
+                    val track = transceiver?.receiver?.track() as? VideoTrack ?: return@launch
+                    _videoSession.value?.attachRemote(track)
+                }
+            }
         })
 
         // Create Local Audio Track
@@ -250,79 +288,140 @@ class CallManager private constructor(private val context: Context) {
         localAudioTrack = factory?.createAudioTrack("ARDAMSa0", localAudioSource)
 
         peerConnection?.addTrack(localAudioTrack, listOf("ARDAMS"))
+        if (_isVideoCall.value && peerConnection != null) {
+            try {
+                val video = CallVideoSession(context, scope, checkNotNull(factory), checkNotNull(egl).eglBaseContext)
+                _videoSession.value = video
+                checkNotNull(peerConnection?.addTrack(video.track, listOf("ARDAMS")))
+                setCameraEnabled(true)
+            } catch (_: Exception) {
+                android.widget.Toast.makeText(context, "Video could not be started.", android.widget.Toast.LENGTH_SHORT).show()
+                endCall(CallOutcome.Failed)
+            }
+        }
     }
 
-    fun startOutgoingCall(peerUuid: String) {
+    fun startOutgoingCall(peerUuid: String, video: Boolean = false) {
         if (_callState.value != CallState.IDLE) return
+        if (!hasMicrophonePermission()) return
+        if (video && (!supportsVideo || !videoWindowVisible || !hasVideoPermissions())) {
+            android.widget.Toast.makeText(context, "Camera and microphone access are required for video calls.", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        _isVideoCall.value = video
         _callState.value = CallState.CONNECTING // Lock state immediately to prevent double clicks
+        val generation = peerGeneration
 
         scope.launch {
-            val db = org.msgat.data.db.AppDatabase.getInstance(context).msgDao()
-            val conv = db.getConversationByUuid(peerUuid)
-            if (conv == null || conv.peerPublicKey.isEmpty()) {
+            val callable = try { MsgATApp.instance.nettyClient.secureMessaging.requireCallable(peerUuid) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { false }
+            if (peerGeneration != generation || _callState.value != CallState.CONNECTING) return@launch
+            if (!callable) {
                 withContext(Dispatchers.Main) {
                     android.widget.Toast.makeText(context, "Cannot call a non-friend.", android.widget.Toast.LENGTH_SHORT).show()
                     _callState.value = CallState.IDLE
+                    _isVideoCall.value = false
                 }
                 return@launch
             }
 
             withContext(Dispatchers.Main) {
-                if (_callState.value == CallState.CONNECTING) {
+                if (peerGeneration == generation && _callState.value == CallState.CONNECTING && prepareMicrophone(generation)) {
                     isCaller = true
                     currentPeerUuid = peerUuid
+                    currentCallId = java.util.UUID.randomUUID().toString()
                     _callState.value = CallState.OUTGOING_RINGING
                     startTimeoutTimer()
-                    AudioDeviceManager.getInstance().startCallMode()
+                    AudioDeviceManager.getInstance().startCallMode(video)
 
                     createPeerConnection()
 
-                    val connection = peerConnection ?: run { endCall(); return@withContext }
+                    val connection = peerConnection ?: run { endCall(CallOutcome.Failed); return@withContext }
+                    if (video) startCallService()
                     connection.createOffer(object : SdpObserver {
                         override fun onCreateSuccess(desc: SessionDescription?) = onCurrentConnection(connection) {
-                            if (desc == null) { endCall(); return@onCurrentConnection }
+                            if (desc == null) { endCall(CallOutcome.Failed); return@onCurrentConnection }
                             val finalOffer = SessionDescription(desc.type, OpusCodecHelper.modifySdpForOpus(desc.description, maxBitrateKbps = 32))
                             connection.setLocalDescription(object : SdpObserver {
                                 override fun onCreateSuccess(desc: SessionDescription?) {}
                                 override fun onSetSuccess() = onCurrentConnection(connection) { signalLocalDescription(finalOffer, peerUuid, true) }
-                                override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-                                override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                                override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+                                override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
                             }, finalOffer)
                         }
                         override fun onSetSuccess() {}
-                        override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-                        override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                        override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+                        override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
                     }, MediaConstraints())
                 }
             }
         }
     }
 
-    fun handleIncomingOffer(offer: SessionDescription, peerUuid: String) {
-        if (_callState.value != CallState.IDLE) {
-            signalingHandler?.sendBusy(peerUuid)
-            return
-        }
+    fun handleIncomingOffer(peerUuid: String, callId: String, video: Boolean = false) {
+        if (_callState.value != CallState.IDLE) return
         isCaller = false
+        currentCallId = callId
         currentPeerUuid = peerUuid
+        _isVideoCall.value = video
         _callState.value = CallState.INCOMING_RINGING
         startTimeoutTimer()
 
-        if (!org.msgat.MsgATApp.instance.isAppInForeground) {
-            org.msgat.NotificationHelper.showPrivateMessageNotification(context,peerUuid)
+        if (androidx.core.app.NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            runCatching {
+                val notice = org.msgat.NotificationHelper.createCallNotification(context,
+                    isIncoming = true, isOngoing = false, video = video, callToken = callId,
+                    showFullScreen = !MsgATApp.instance.isAppInForeground)
+                context.getSystemService(android.app.NotificationManager::class.java)
+                    ?.notify(org.msgat.NotificationHelper.CALL_NOTIFICATION_ID, notice)
+            }
         }
     }
 
     fun acceptCall() {
         val rawOffer = signalingHandler?.pendingOffer
         if (_callState.value != CallState.INCOMING_RINGING || rawOffer == null) return
+        if (!hasMicrophonePermission()) return
+        if (_isVideoCall.value && (!videoWindowVisible || !hasVideoPermissions())) return
+        val generation = peerGeneration
         _callState.value = CallState.CONNECTING
+        clearCallNotification()
         startTimeoutTimer()
-        AudioDeviceManager.getInstance().startCallMode()
+        scope.launch {
+            if (prepareMicrophone(generation)) connectIncoming(rawOffer)
+        }
+    }
 
+    private suspend fun prepareMicrophone(generation: Int): Boolean {
+        if (peerGeneration != generation || _callState.value != CallState.CONNECTING) return false
+        return try {
+            val lease = MicrophoneOwnership.reserveCall()
+            microphone = lease
+            lease.drainRecording()
+            if (_isVideoCall.value) videoRelease?.join()
+            peerGeneration == generation && microphone === lease && _callState.value == CallState.CONNECTING
+        } catch (cancelled: CancellationException) {
+            if (peerGeneration == generation) endCall(CallOutcome.Failed)
+            throw cancelled
+        } catch (_: Exception) {
+            if (peerGeneration == generation) {
+                android.widget.Toast.makeText(context, "Could not switch the microphone to the call.", android.widget.Toast.LENGTH_SHORT).show()
+                endCall(CallOutcome.Failed)
+            }
+            false
+        }
+    }
+
+    private fun connectIncoming(rawOffer: SessionDescription) {
+        AudioDeviceManager.getInstance().startCallMode(_isVideoCall.value)
+        startCallService()
+        applyIncomingOffer(rawOffer)
+    }
+
+    private fun startCallService() {
         val intent = android.content.Intent(context, org.msgat.core.network.CallService::class.java).apply {
-            putExtra("peerUuid", currentPeerUuid)
-            putExtra("isIncoming", true)
+            putExtra("callToken", currentCallId)
         }
         try {
             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
@@ -334,13 +433,31 @@ class CallManager private constructor(private val context: Context) {
             e.printStackTrace()
         }
 
-        createPeerConnection()
+    }
 
+    internal fun missingCallPermissions(video: Boolean): List<String> =
+        buildList {
+            add(android.Manifest.permission.RECORD_AUDIO)
+            if (video) add(android.Manifest.permission.CAMERA)
+        }.filter {
+            androidx.core.content.ContextCompat.checkSelfPermission(context, it) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+    private fun hasMicrophonePermission(): Boolean = missingCallPermissions(video = false).isEmpty()
+    internal fun hasVideoPermissions(): Boolean = missingCallPermissions(video = true).isEmpty()
+
+    internal fun setCameraEnabled(enabled: Boolean) {
+        if (enabled && (!videoWindowVisible || !hasVideoPermissions())) return
+        _videoSession.value?.enable(enabled)
+    }
+
+    private fun applyIncomingOffer(rawOffer: SessionDescription) {
+        createPeerConnection()
         val optimizedOfferSdp = OpusCodecHelper.modifySdpForOpus(rawOffer.description, maxBitrateKbps = 32)
         val offer = SessionDescription(rawOffer.type, optimizedOfferSdp)
 
-        val connection = peerConnection ?: run { endCall(); return }
-        val peer = currentPeerUuid ?: run { endCall(); return }
+        val connection = peerConnection ?: run { endCall(CallOutcome.Failed); return }
+        val peer = currentPeerUuid ?: run { endCall(CallOutcome.Failed); return }
         connection.setRemoteDescription(object : SdpObserver {
             override fun onCreateSuccess(desc: SessionDescription?) {}
             override fun onSetSuccess() = onCurrentConnection(connection) {
@@ -348,36 +465,40 @@ class CallManager private constructor(private val context: Context) {
                 pendingIceCandidates.clear()
                 connection.createAnswer(object : SdpObserver {
                     override fun onCreateSuccess(answer: SessionDescription?) = onCurrentConnection(connection) {
-                        if (answer == null) { endCall(); return@onCurrentConnection }
+                        if (answer == null) { endCall(CallOutcome.Failed); return@onCurrentConnection }
                         val finalAnswer = SessionDescription(answer.type, OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32))
                         connection.setLocalDescription(object : SdpObserver {
                             override fun onCreateSuccess(desc: SessionDescription?) {}
                             override fun onSetSuccess() = onCurrentConnection(connection) { signalLocalDescription(finalAnswer, peer, false) }
-                            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-                            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+                            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
                         }, finalAnswer)
                     }
                     override fun onSetSuccess() {}
-                    override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-                    override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+                    override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+                    override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
                 }, MediaConstraints())
             }
-            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
         }, offer)
     }
 
-    fun rejectCall() {
+    fun rejectCall() = rejectCall(CallOutcome.Declined)
+
+    private fun rejectCall(outcome: CallOutcome) {
         if (_callState.value != CallState.INCOMING_RINGING) return
         currentPeerUuid?.let { signalingHandler?.sendReject(it) }
-        resetState()
+        resetState(outcome)
     }
 
     fun handleRemoteAnswer(answer: SessionDescription) {
         if (!isCaller || _callState.value != CallState.OUTGOING_RINGING) return
+        val video = answer.description.lineSequence().any { it.startsWith("m=video ") }
+        if (video != _isVideoCall.value) { endCall(CallOutcome.Failed); return }
         val optimizedAnswerSdp = OpusCodecHelper.modifySdpForOpus(answer.description, maxBitrateKbps = 32)
         val finalAnswer = SessionDescription(answer.type, optimizedAnswerSdp)
-        val connection = peerConnection ?: run { endCall(); return }
+        val connection = peerConnection ?: run { endCall(CallOutcome.Failed); return }
         _callState.value = CallState.CONNECTING
         startTimeoutTimer()
         connection.setRemoteDescription(object : SdpObserver {
@@ -386,8 +507,8 @@ class CallManager private constructor(private val context: Context) {
                 pendingIceCandidates.forEach { connection.addIceCandidate(it) }
                 pendingIceCandidates.clear()
             }
-            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall() }
-            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall() }
+            override fun onCreateFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
+            override fun onSetFailure(s: String?) = onCurrentConnection(connection) { endCall(CallOutcome.Failed) }
         }, finalAnswer)
     }
 
@@ -400,60 +521,70 @@ class CallManager private constructor(private val context: Context) {
         }
     }
 
-    fun endCall() {
-        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
+    fun endCall() = endCall(CallOutcome.Canceled)
 
-        val finalDuration = _callDurationSeconds.value
-        // Save Call Record
-        saveCallRecord(durationOverride = finalDuration)
-
-        currentPeerUuid?.let { signalingHandler?.sendEnd(it, finalDuration) }
-        resetState()
+    internal suspend fun endCallAndDrainVideo() {
+        endCall()
+        videoRelease?.join()
     }
 
-    fun remoteEndedCall(remoteDuration: Long) {
+    private fun endCall(outcome: CallOutcome) {
         if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
 
-        saveCallRecord(durationOverride = if (remoteDuration >= 0) remoteDuration else null)
-        resetState()
+        currentPeerUuid?.let { signalingHandler?.sendEnd(it) }
+        resetState(outcome)
     }
 
-    fun remoteSyncReceived(remoteDuration: Long) {
-        // Obsolete: We rely on local elapsedRealtime now to prevent jitter.
+    fun remoteEndedCall() {
+        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
+
+        resetState(if (_callState.value == CallState.INCOMING_RINGING) CallOutcome.Missed else CallOutcome.Failed)
+    }
+
+    fun signalingFailed() {
+        if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
+        resetState(CallOutcome.Failed)
+        android.widget.Toast.makeText(context,"Call signaling unavailable",android.widget.Toast.LENGTH_SHORT).show()
     }
 
     fun remoteRejectedCall() {
         if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
-        saveCallRecord(rejected = true)
-        resetState()
+        resetState(CallOutcome.Declined)
     }
 
     fun remoteBusyCall() {
         if (_callState.value == CallState.IDLE || _callState.value == CallState.ENDED) return
-        saveCallRecord(busy = true)
-        resetState()
+        resetState(CallOutcome.Busy)
     }
 
-    private fun saveCallRecord(rejected: Boolean = false, busy: Boolean = false, durationOverride: Long? = null) {
-        if (!isCaller) return // Only the Caller manages and sends the call record
-
-        val duration = durationOverride ?: _callDurationSeconds.value
-        val recordText = when {
-            busy -> "[Voice Call: Busy]"
-            rejected -> "[Voice Call: Declined]"
-            duration == 0L -> "[Voice Call: Missed]"
-            else -> {
-                val minutes = duration / 60
-                val seconds = duration % 60
-                String.format(Locale.ROOT, "[Voice Call: %02d:%02d]", minutes, seconds)
-            }
+    private fun sendCallRecord(peer: String, outcome: CallOutcome, duration: Long) {
+        val kind = if (_isVideoCall.value) "Video Call" else "Voice Call"
+        val result = when (outcome) {
+            CallOutcome.Completed -> String.format(Locale.ROOT, "%02d:%02d", duration / 60, duration % 60)
+            CallOutcome.Missed -> "Missed"
+            CallOutcome.Declined -> "Declined"
+            CallOutcome.Busy -> "Busy"
+            CallOutcome.Canceled -> "Canceled"
+            CallOutcome.Failed -> "Failed"
         }
-        currentPeerUuid?.let { signalingHandler?.sendCallRecordMessage(it, recordText) }
+        signalingHandler?.sendCallRecordMessage(peer, "[$kind: $result]")
     }
 
-    private fun resetState() {
+    private fun resetState(outcome: CallOutcome) {
+        val peer = currentPeerUuid
+        val id = currentCallId
+        val duration = _callDurationSeconds.value
+        endedOutcome = if (_callState.value == CallState.CONNECTED || duration > 0) CallOutcome.Completed else outcome
+        if (peer != null && id != null) {
+            signalingHandler?.recordHistory(peer,id,isCaller,_isVideoCall.value,
+                endedOutcome,duration,System.currentTimeMillis())
+            if (isCaller) sendCallRecord(peer, endedOutcome, duration)
+        }
         peerGeneration++
         _callState.value = CallState.ENDED
+        _recoveringConnection.value = false
+        currentCallId = null
+        signalingHandler?.clearOffer()
 
         durationJob?.cancel()
         rttJob?.cancel()
@@ -461,9 +592,14 @@ class CallManager private constructor(private val context: Context) {
         disconnectGraceJob?.cancel()
         disconnectGraceJob = null
 
+        val video = _videoSession.value
+        _videoSession.value = null
+        video?.detachTracks()
         peerConnection?.close()
         peerConnection?.dispose()
         peerConnection = null
+        if (video != null) videoRelease = video.releaseCamera()
+        clearCallNotification()
 
         localAudioTrack?.dispose()
         localAudioTrack = null
@@ -472,6 +608,8 @@ class CallManager private constructor(private val context: Context) {
         localAudioSource = null
 
         AudioDeviceManager.getInstance().endCallMode()
+        microphone?.close()
+        microphone = null
 
         pendingIceCandidates.clear()
         pendingLocalIceCandidates.clear()
@@ -482,9 +620,15 @@ class CallManager private constructor(private val context: Context) {
             currentPeerUuid = null
             isMinimized.value = false
             _callState.value = CallState.IDLE
+            _isVideoCall.value = false
             _callDurationSeconds.value = 0
             _rttMs.value = 0
         }
+    }
+
+    private fun clearCallNotification() {
+        context.getSystemService(android.app.NotificationManager::class.java)
+            ?.cancel(org.msgat.NotificationHelper.CALL_NOTIFICATION_ID)
     }
 
     private fun startCallTimers() {
@@ -525,7 +669,10 @@ class CallManager private constructor(private val context: Context) {
                         }
                     }
                     if (minRtt != Long.MAX_VALUE) {
-                        scope.launch { if (generation == peerGeneration && _callState.value == CallState.CONNECTED) _rttMs.value = minRtt }
+                        scope.launch {
+                            if (generation == peerGeneration && _callState.value == CallState.CONNECTED &&
+                                !_recoveringConnection.value) _rttMs.value = minRtt
+                        }
                     }
                 }
             }
@@ -545,9 +692,9 @@ class CallManager private constructor(private val context: Context) {
                     android.widget.Toast.makeText(context, "Time out", android.widget.Toast.LENGTH_SHORT).show()
                 }
                 if (_callState.value == CallState.INCOMING_RINGING) {
-                    rejectCall()
+                    rejectCall(CallOutcome.Missed)
                 } else {
-                    endCall()
+                    endCall(if (_callState.value == CallState.OUTGOING_RINGING) CallOutcome.Missed else CallOutcome.Failed)
                 }
             }
         }
@@ -557,6 +704,13 @@ class CallManager private constructor(private val context: Context) {
         @SuppressLint("StaticFieldLeak")
         @Volatile
         private var INSTANCE: CallManager? = null
+
+        internal fun endUnavailablePeer(peer: String) { INSTANCE?.takeIf { it.isCurrentPeer(peer) }?.remoteEndedCall() }
+        private var videoWindowVisible = false
+        internal fun setVideoWindowVisible(visible: Boolean) {
+            videoWindowVisible = visible
+            if (!visible) INSTANCE?.setCameraEnabled(false)
+        }
 
         fun getInstance(): CallManager {
             return INSTANCE ?: synchronized(this) {

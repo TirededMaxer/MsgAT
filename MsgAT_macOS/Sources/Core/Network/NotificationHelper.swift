@@ -6,6 +6,13 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
     public static let shared = NotificationHelper()
     @MainActor public static var openMainWindow: (() -> Void)?
     @MainActor public static weak var mainWindow: NSWindow?
+    static let messageTargetChanged = Notification.Name("MsgAT.notificationMessageTargetChanged")
+    static let callAnswerRequested = Notification.Name("MsgAT.notificationCallAnswerRequested")
+    static let callFocusRequested = Notification.Name("MsgAT.notificationCallFocusRequested")
+    @MainActor private static var pendingMessageToken: String?
+    @MainActor private static var pendingCallAnswer: String?
+    private static let callIdentifier = "msgat.call"
+    private static let answerAction = "msgat.call.answer"
 
     private override init() {
         super.init()
@@ -24,65 +31,95 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         }
     }
 
-    public func showMessageNotification(senderUuid: String, senderAlias: String, ext: String, content: String) {
-        let title = (!senderAlias.isEmpty && senderAlias != "Unknown") ? senderAlias : String(senderUuid.prefix(8))
-        let body = ext == "txt" ? content : "[Media]"
-
-        let notificationContent = UNMutableNotificationContent()
-        notificationContent.title = title
-        notificationContent.body = body
-        notificationContent.sound = .default
-        notificationContent.userInfo = ["senderUuid": senderUuid, "action": "open_chat"]
-
-        let request = UNNotificationRequest(
-            identifier: "msg_\(senderUuid)",
-            content: notificationContent,
-            trigger: nil
-        )
-        UNUserNotificationCenter.current().add(request)
-
-        DispatchQueue.main.async {
-            NSApp.dockTile.badgeLabel = nil
+    func showPrivateMessageNotification(senderUuid: String, messageID: String, silent: Bool, pinned: Bool = false) {
+        Task { @MainActor in
+            guard !NSApp.isActive else { return }
+            let center = UNUserNotificationCenter.current()
+            let settings = await center.notificationSettings()
+            guard !NSApp.isActive,
+                  let notice = try? MessageNotificationStore.prepare(
+                    peer: senderUuid, messageID: messageID,
+                    allowPreview: settings.showPreviewsSetting == .whenAuthenticated, pinned: pinned
+                  ) else { return }
+            let content = UNMutableNotificationContent()
+            content.title = notice.title
+            content.body = notice.body ?? InterfaceStrings.current()(pinned ? "message_pinned" : "new_message")
+            content.sound = silent || !notice.playSound ? nil : .default
+            content.userInfo = ["target": notice.token]
+            if let replaced = notice.replacedToken { dismissMessageNotifications(tokens: [replaced]) }
+            center.add(UNNotificationRequest(identifier: "msg_\(notice.token)", content: content, trigger: nil))
         }
     }
 
-    public func showIncomingCallNotification(peerUuid: String, alias: String) {
-        let title = (!alias.isEmpty && alias != "Unknown") ? alias : String(peerUuid.prefix(8))
-
+    func showIncomingCallNotification(id: String, video: Bool) {
+        let strings = InterfaceStrings.current()
+        let center = UNUserNotificationCenter.current()
+        let answer = UNNotificationAction(identifier: Self.answerAction, title: strings("accept_call"),
+                                          options: [.foreground, .authenticationRequired])
+        center.setNotificationCategories([UNNotificationCategory(identifier: Self.callIdentifier,
+            actions: [answer], intentIdentifiers: [], options: [])])
         let notificationContent = UNMutableNotificationContent()
-        notificationContent.title = title
-        notificationContent.body = "Incoming call"
+        notificationContent.title = "MsgAT"
+        notificationContent.body = strings(video ? "incoming_video_call" : "incoming_voice_call")
         notificationContent.sound = .default
-        notificationContent.userInfo = ["peerUuid": peerUuid, "action": "show_call"]
+        notificationContent.categoryIdentifier = Self.callIdentifier
+        notificationContent.userInfo = ["call": id]
 
         let request = UNNotificationRequest(
-            identifier: "call_\(peerUuid)",
+            identifier: Self.callIdentifier,
             content: notificationContent,
             trigger: nil
         )
-        UNUserNotificationCenter.current().add(request)
+        center.add(request)
     }
 
-    public func clearCallNotification(peerUuid: String) {
-        UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["call_\(peerUuid)"])
+    func clearCallNotification() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [Self.callIdentifier])
+        center.removeDeliveredNotifications(withIdentifiers: [Self.callIdentifier])
     }
 
-    public func clearMessageNotifications() {
+    func dismissMessageNotifications(tokens: [String]) {
+        guard !tokens.isEmpty else { return }
+        let identifiers = tokens.map { "msg_\($0)" }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: identifiers)
+        center.removeDeliveredNotifications(withIdentifiers: identifiers)
+    }
+
+    public func clearMessageNotifications(onlyWhenActive: Bool = true) {
         let center = UNUserNotificationCenter.current()
         center.getDeliveredNotifications { notifications in
             let identifiers = notifications.map { $0.request.identifier }.filter { $0.hasPrefix("msg_") }
             Task { @MainActor in
-                guard NSApp.isActive else { return }
+                guard !onlyWhenActive || NSApp.isActive else { return }
                 center.removeDeliveredNotifications(withIdentifiers: identifiers)
             }
         }
         center.getPendingNotificationRequests { requests in
             let identifiers = requests.map(\.identifier).filter { $0.hasPrefix("msg_") }
             Task { @MainActor in
-                guard NSApp.isActive else { return }
+                guard !onlyWhenActive || NSApp.isActive else { return }
                 center.removePendingNotificationRequests(withIdentifiers: identifiers)
             }
         }
+    }
+
+    @MainActor static func messageToken() -> String? {
+        guard AppLockSession.shared.canShowContent else { return nil }
+        return pendingMessageToken
+    }
+
+    @MainActor static func consumeMessageToken(_ token: String) -> Bool {
+        guard AppLockSession.shared.canShowContent, pendingMessageToken == token else { return false }
+        pendingMessageToken = nil
+        return true
+    }
+
+    @MainActor static func takeCallAnswer() -> String? {
+        guard AppLockSession.shared.canShowContent else { return nil }
+        defer { pendingCallAnswer = nil }
+        return pendingCallAnswer
     }
 
     // MARK: - UNUserNotificationCenterDelegate
@@ -101,9 +138,26 @@ public final class NotificationHelper: NSObject, UNUserNotificationCenterDelegat
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let request = response.notification.request
+        let token = request.content.userInfo["target"] as? String
+        let call = request.identifier == Self.callIdentifier ? request.content.userInfo["call"] as? String : nil
+        let answersCall = response.actionIdentifier == Self.answerAction
         DispatchQueue.main.async {
-            Self.openMainWindow?()
+            if let call {
+                let manager = CallManager.shared
+                guard manager.currentCallId == call, manager.callState == .incomingRinging else { return }
+                manager.isMinimized = false
+                if answersCall { Self.pendingCallAnswer = call }
+                NSApp.activate(ignoringOtherApps: true)
+                Self.openMainWindow?()
+                if answersCall { NotificationCenter.default.post(name: Self.callAnswerRequested, object: nil) }
+                else { NotificationCenter.default.post(name: Self.callFocusRequested, object: call) }
+                return
+            }
+            Self.pendingMessageToken = token
             NSApp.activate(ignoringOtherApps: true)
+            Self.openMainWindow?()
+            if token != nil { NotificationCenter.default.post(name: Self.messageTargetChanged, object: nil) }
             NSApp.dockTile.badgeLabel = nil
             self.clearMessageNotifications()
         }

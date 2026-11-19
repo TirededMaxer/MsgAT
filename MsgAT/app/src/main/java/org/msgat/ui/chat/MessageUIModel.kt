@@ -13,5 +13,9 @@ data class MessageUIModel(
     val replyToContent: String? = null,
     val status: Int = 1,
     val isRevoked: Boolean = false,
-    val isEdited: Boolean = false
+    val isEdited: Boolean = false,
+    val attachment: org.msgat.core.media.AttachmentMetadata? = null,
+    val forwardInfo: org.msgat.data.db.ForwardedMessageInfo? = null,
+    val contactAccount: String? = null,
+    val expiresAt: Long? = null
 )

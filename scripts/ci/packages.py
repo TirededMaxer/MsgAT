@@ -16,6 +16,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'dist'
 SIGNER = '4a4f2fa7a3564906000c4daf577c03c61cc4876e5d29c0c8e723f9f297c42ce0'
+COMPONENTS = ('android', 'windows', 'macos', 'relay')
+LICENSE_FILES = ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md')
 
 
 def run(*args, capture=False):
@@ -37,8 +39,8 @@ def versions():
             'relay': relay}
 
 
-def filename(component):
-    v = versions()
+def filename(component, package_versions=None):
+    v = versions() if package_versions is None else package_versions
     return {'android': f'MsgAT-Android-{v["android"]}.apk',
             'windows': f'MsgAT-Windows-{v["windows"].removesuffix(".0")}-x64.exe',
             'macos': f'MsgAT-macOS-{v["macos"]}-arm64.dmg',
@@ -55,13 +57,41 @@ def preflight():
     missing = [name for name in required if not os.environ.get(name)]
     if missing:
         raise RuntimeError('Configure GitHub Actions Secrets: ' + ', '.join(missing))
-    if os.environ.get('PUBLISH') == 'true':
-        tag = os.environ.get('RELEASE_TAG', '')
-        if not re.fullmatch(r'release-[A-Za-z0-9][A-Za-z0-9._-]*', tag):
-            raise RuntimeError('Publishing requires a release-* tag')
-        if os.environ.get('GITHUB_REF') != 'refs/heads/main':
-            raise RuntimeError('Publish from the main branch')
     print('Cloud package inputs and signing secrets are configured.')
+
+
+def preflight_publish():
+    if os.environ['GITHUB_REF'] != 'refs/heads/main':
+        raise RuntimeError('Publish from the main branch')
+    tag = os.environ.get('RELEASE_TAG', '')
+    build_run_id = os.environ.get('ACCEPTED_RUN_ID', '')
+    manifest_sha256 = os.environ.get('ACCEPTED_MANIFEST_SHA256', '')
+    if not re.fullmatch(r'release-[A-Za-z0-9][A-Za-z0-9._-]*', tag):
+        raise RuntimeError('Publishing requires a release-* tag')
+    if not re.fullmatch(r'[1-9][0-9]*', build_run_id) or not re.fullmatch(r'[A-Fa-f0-9]{64}', manifest_sha256):
+        raise RuntimeError('Publishing requires the accepted build run ID and manifest SHA-256')
+
+    repo = os.environ['GITHUB_REPOSITORY']
+    build = json.loads(run('gh', 'api', f'repos/{repo}/actions/runs/{build_run_id}', capture=True))
+    workflow = json.loads(run('gh', 'api', f'repos/{repo}/actions/workflows/packages.yml', capture=True))
+    commit = build.get('head_sha', '')
+    if (build.get('workflow_id') != workflow['id'] or build.get('event') != 'workflow_dispatch' or
+            build.get('conclusion') != 'success' or (build.get('head_repository') or {}).get('full_name') != repo or
+            not re.fullmatch(r'[0-9a-f]{40}', commit)):
+        raise RuntimeError('The build must be a successful manual Cloud packages run in this repository')
+    try:
+        run('git', 'merge-base', '--is-ancestor', commit, os.environ['GITHUB_SHA'])
+    except subprocess.CalledProcessError as error:
+        raise RuntimeError('The accepted build commit must be in the main branch history') from error
+
+    tag_ref = f'refs/tags/{tag}'
+    existing_tag = subprocess.run(['git', 'rev-parse', '--verify', '--quiet', tag_ref],
+                                  cwd=ROOT, stdout=subprocess.PIPE, check=False, text=True)
+    if existing_tag.returncode not in (0, 1) or (existing_tag.returncode == 0 and
+            run('git', 'rev-parse', '--verify', f'{tag_ref}^{{commit}}', capture=True).strip() != commit):
+        raise RuntimeError('The release tag must identify the accepted build commit')
+    with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+        output.write(f'commit={commit}\n')
 
 
 def restore_signing():
@@ -182,11 +212,11 @@ def digest(path):
 
 
 def bundle():
-    for component in ('android', 'windows', 'macos', 'relay'):
+    for component in COMPONENTS:
         path = DIST / filename(component)
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError(f'Missing package: {path.name}')
-    for name in ('LICENSE', 'LICENSE-AGPL-3.0', 'THIRD_PARTY_NOTICES.md'):
+    for name in LICENSE_FILES:
         copy(ROOT / name, name)
     manifest = {'commit': os.environ['GITHUB_SHA'], 'versions': versions(),
                 'buildOrigin': 'GitHub-hosted runners, no restored dependency/build caches',
@@ -197,6 +227,7 @@ def bundle():
     paths = sorted(p for p in DIST.iterdir() if p.name != 'SHA256SUMS.txt')
     (DIST / 'SHA256SUMS.txt').write_text(''.join(f'{digest(p)}  {p.name}\n' for p in paths))
     print('All four cloud-built packages assembled with SHA-256 checksums.')
+    print(f"release-manifest.json SHA-256: {digest(DIST / 'release-manifest.json')}")
 
 
 def releases():
@@ -205,19 +236,49 @@ def releases():
     return [release for page in pages for release in page]
 
 
+def verify_accepted_packages(commit):
+    manifest_file = DIST / 'release-manifest.json'
+    manifest_sha256 = os.environ['ACCEPTED_MANIFEST_SHA256'].lower()
+    if not manifest_file.is_file() or digest(manifest_file) != manifest_sha256:
+        raise RuntimeError('The release manifest does not match the accepted SHA-256')
+
+    manifest = json.loads(manifest_file.read_text())
+    build_url = (f"{os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}"
+                 f"/actions/runs/{os.environ['ACCEPTED_RUN_ID']}")
+    if (manifest['commit'] != commit or manifest['workflow'] != build_url or
+            manifest.get('androidSignerCertificateSha256') != SIGNER):
+        raise RuntimeError('The manifest does not match the accepted run, commit or Android signer')
+
+    assets = {asset['file']: {'size': asset['bytes'], 'digest': 'sha256:' + asset['sha256']}
+              for asset in manifest['assets']}
+    required = {filename(component, manifest['versions']) for component in COMPONENTS}
+    required.update((*LICENSE_FILES, 'server-config.json', 'SERVER-README.txt'))
+    if len(assets) != len(manifest['assets']) or not required.issubset(assets):
+        raise RuntimeError('The accepted manifest must list all packages and supporting files without duplicates')
+    paths = list(DIST.iterdir())
+    if any(path.is_symlink() or not path.is_file() for path in paths):
+        raise RuntimeError('The accepted artifact must contain only release files')
+    expected = {path.name: {'size': path.stat().st_size, 'digest': 'sha256:' + digest(path)} for path in paths}
+    if set(expected) != set(assets) | {'release-manifest.json', 'SHA256SUMS.txt'} or any(
+            expected[name] != metadata or metadata['size'] <= 0 for name, metadata in assets.items()):
+        raise RuntimeError('The accepted artifact files differ from the manifest')
+    checksums = ''.join(f"{expected[name]['digest'].removeprefix('sha256:')}  {name}\n"
+                        for name in sorted(expected) if name != 'SHA256SUMS.txt')
+    if (DIST / 'SHA256SUMS.txt').read_text() != checksums:
+        raise RuntimeError('The checksum list does not match the accepted artifact files')
+    return manifest, expected
+
+
 def publish():
-    repo, tag, commit = (os.environ[name] for name in ('GITHUB_REPOSITORY', 'RELEASE_TAG', 'GITHUB_SHA'))
-    manifest = json.loads((DIST / 'release-manifest.json').read_text())
-    if manifest['commit'] != commit:
-        raise RuntimeError('Packages must come from the current workflow commit')
-    expected = {p.name: {'size': p.stat().st_size, 'digest': 'sha256:' + digest(p)} for p in DIST.iterdir()}
+    repo, tag, commit = (os.environ[name] for name in ('GITHUB_REPOSITORY', 'RELEASE_TAG', 'ACCEPTED_COMMIT'))
+    manifest, expected = verify_accepted_packages(commit)
     existing = next((r for r in releases() if r['tag_name'] == tag), None)
     if existing and existing['target_commitish'] != commit:
         raise RuntimeError('Use a new tag: existing release targets another commit')
     files = [DIST / name for name in sorted(expected)]
     if not existing:
-        v = versions()
-        title = f'MsgAT — Android {v["android"]} · Windows/macOS {v["macos"]} · Console {v["relay"]}'
+        v = manifest['versions']
+        title = f'MsgAT — Android {v["android"]} · Windows {v["windows"]} · macOS {v["macos"]} · Console {v["relay"]}'
         notes = Path(os.environ['RUNNER_TEMP']) / 'msgat-release-notes.md'
         notes.write_text(f'全部安装包由 [GitHub Actions]({manifest["workflow"]}) 从提交 `{commit}` 构建。\n\n'
                          '包含正式签名 Android APK、Windows 自包含 EXE、macOS arm64 DMG、服务端 JAR 和 JSON 配置。\n\n'
@@ -243,7 +304,7 @@ def publish():
 
 
 if __name__ == '__main__':
-    commands = {'preflight': preflight, 'restore-signing': restore_signing,
+    commands = {'preflight': preflight, 'preflight-publish': preflight_publish, 'restore-signing': restore_signing,
                 'restore-development-signing': restore_development_signing, 'development-android': development_android,
                 'development-macos': development_macos, 'android': android,
                 'windows': windows, 'macos': macos, 'relay': relay, 'bundle': bundle, 'publish': publish}

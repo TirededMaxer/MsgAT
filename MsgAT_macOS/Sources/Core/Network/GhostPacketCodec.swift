@@ -121,8 +121,10 @@ public enum GhostPacketCodec {
             let type = ptr.load(fromByteOffset: 4, as: UInt8.self)
 
             let mailboxData = Data(bytes: ptr.advanced(by: 5), count: 64)
-            let mailboxId = String(data: mailboxData, encoding: .utf8)?
+            let rawMailboxId = String(data: mailboxData, encoding: .utf8)?
                 .trimmingCharacters(in: CharacterSet(charactersIn: "\0"))
+
+            let mailboxId = rawMailboxId?.isEmpty == false ? rawMailboxId : nil
 
             let nonceOrIv = Data(bytes: ptr.advanced(by: 69), count: 16)
 

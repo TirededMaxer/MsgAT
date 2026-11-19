@@ -1,7 +1,7 @@
 import Foundation
 
 // MARK: - Conversation Model
-public struct Conversation: Codable, Identifiable, Sendable {
+public struct Conversation: Codable, Identifiable, Equatable, Sendable {
     public var id: String { uuid }
     public let uuid: String
     public var alias: String
@@ -33,6 +33,15 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
     public var status: Int // 0: Sending, 1: Sent, 2: Delivered, 3: Read
     public var isRevoked: Int
     public var isEdited: Int
+    public let expiresAt: Int64?
+
+    var quoteSummary: String {
+        switch ext {
+        case "txt", "location": return content
+        case "contact": return "Contact: \(content)"
+        default: return "[\(ext)]"
+        }
+    }
 
     public init(
         messageId: String,
@@ -47,7 +56,8 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         replyToContent: String? = nil,
         status: Int = 1,
         isRevoked: Int = 0,
-        isEdited: Int = 0
+        isEdited: Int = 0,
+        expiresAt: Int64? = nil
     ) {
         self.messageId = messageId
         self.conversationUuid = conversationUuid
@@ -62,6 +72,7 @@ public struct ChatMessage: Codable, Identifiable, Equatable, Sendable {
         self.status = status
         self.isRevoked = isRevoked
         self.isEdited = isEdited
+        self.expiresAt = expiresAt
     }
 
 }
@@ -92,14 +103,27 @@ public struct FriendRequest: Codable, Identifiable, Sendable {
 }
 
 // MARK: - Conversation with unread count
-public struct ConversationWithUnread: Sendable {
-    public let conversation: Conversation
-    public let unreadCount: Int
-
-    public init(conversation: Conversation, unreadCount: Int) {
-        self.conversation = conversation
-        self.unreadCount = unreadCount
-    }
+public struct ConversationWithUnread: Sendable, Equatable {
+    public let conversation:Conversation
+    public internal(set) var unreadCount: Int
+    public var pinOrder:Int64=0
+    public var archived=false
+    public var muteUntil:Int64=0
+    public var manualUnread=false
+    public var summary=""
+    public var draftText=""
+    public var lastAt:Int64=0
+    public var lastID=""
+    var lastReceiptStatus: Int?
+    var summaryKind = ""
+    public var firstUnreadID=""
+    public var folderIDs=""
+    public var hasDraft=false
+    public var activityAt:Int64=0
+    public var folderPinOrders: [String: Int64] = [:]
+    public var muted:Bool {muteUntil>Int64(Date().timeIntervalSince1970*1000)}
+    public var hasUnread:Bool {unreadCount>0 || manualUnread}
+    public init(conversation:Conversation,unreadCount:Int){self.conversation=conversation;self.unreadCount=unreadCount}
 }
 
 // MARK: - Wire MessagePayload Model

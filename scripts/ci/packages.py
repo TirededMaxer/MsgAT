@@ -121,15 +121,14 @@ def restore_development_signing():
 
 
 def development_android():
-    sdk = Path(os.environ['ANDROID_HOME'])
-    candidates = [p for p in (sdk / 'build-tools').iterdir() if re.fullmatch(r'\d+\.\d+\.\d+', p.name)]
-    tools = max(candidates, key=lambda p: tuple(map(int, p.name.split('.'))))
+    tools = Path(os.environ['ANDROID_HOME']) / 'build-tools/36.1.0'
     apk = ROOT / 'MsgAT/app/build/outputs/apk/debug/app-debug.apk'
     output = run(tools / 'apksigner', 'verify', '--verbose', '--print-certs', apk, capture=True)
     if os.environ.get('MSGAT_FIXED_DEVELOPMENT_SIGNING') == 'true':
         configuration = json.loads((ROOT / 'scripts/ci/development-signing.json').read_text())
         expected = configuration['certificateSha256']
-        signers = re.findall(r'^Signer #\d+ certificate SHA-256 digest:\s*([A-Fa-f0-9:]+)\s*$', output, re.MULTILINE)
+        signers = re.findall(r'^\s*Signer #\d+[^\r\n]*? certificate SHA-256 digest:[ \t]*([A-Fa-f0-9:]+)[ \t\r]*$',
+                             output, re.MULTILINE)
         fingerprints = [fingerprint.replace(':', '').lower() for fingerprint in signers]
         if fingerprints != [expected]:
             certificate = subprocess.check_output([

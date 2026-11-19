@@ -21,6 +21,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           cache-disabled: true
+      - name: Install Android verification tools
+        run: '"$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "build-tools;36.1.0"'
       - uses: ./.github/actions/native-security
         with:
           android: 'true'

@@ -1,5 +1,5 @@
 <resources>
-    <string name="app_name">MsgAT</string>
+    <string name="app_name" translatable="false">MsgAT</string>
     <string name="ui_language">Language</string>
     <string name="ui_follow_system">Follow system</string>
     <string name="ui_english">English</string>

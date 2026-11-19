@@ -139,18 +139,18 @@ internal class EncryptedObjectStore(
                 compressed?.fill(0)
             }
         }
-        var staged: JSONObject?=null
+        var staged: JSONObject? = null
         try {
-        val manifest = resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-            if (descriptor.statSize < 0) return@use null
-            require(descriptor.statSize <= MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
-            val metadata = create(descriptor.statSize, filename, mime)
-            staged=metadata
-            SecurityCore.call(JSONObject().put("operation", "import_object_file").put("manifest", metadata)
-                .put("source", "/proc/self/fd/${descriptor.fd}").put("directory", directory.absolutePath)
-                .put("maximum_size", MAXIMUM_SIZE).put("work_id",preparation?.workID()?:JSONObject.NULL)).getJSONObject("manifest")
-        } ?: importStream(uri, filename, mime,preparation)
-            manifest
+            resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+                if (descriptor.statSize < 0) return@use null
+                require(descriptor.statSize <= MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
+                val metadata = create(descriptor.statSize, filename, mime)
+                staged = metadata
+                SecurityCore.call(JSONObject().put("operation", "import_object_file").put("manifest", metadata)
+                    .put("source", "/proc/self/fd/${descriptor.fd}").put("directory", directory.absolutePath)
+                    .put("maximum_size", MAXIMUM_SIZE).put("work_id", preparation?.workID() ?: JSONObject.NULL))
+                    .getJSONObject("manifest")
+            } ?: importStream(uri, filename, mime, preparation)
         } catch (error: Exception) {
             staged?.let(::discardCopy)
             throw error

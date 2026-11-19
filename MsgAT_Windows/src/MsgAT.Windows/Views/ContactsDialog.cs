@@ -251,7 +251,7 @@ public sealed class ContactsDialog : DialogWindow
                         if (!hasMore) break;
                     }
                 }
-                var current = peerId is null ? null : _services.Contacts.List(exactPeer: peerId).FirstOrDefault();
+                var current = peerId is null ? null : FindContact(peerId);
                 return (entries, hasMore, current);
             }, token);
             if (_closed || generation != _generation) return;
@@ -598,10 +598,16 @@ public sealed class ContactsDialog : DialogWindow
     {
         var token = _lifetime.Token;
         await _services.Messaging.AddFriendAsync(id, token);
-        _selected = await Task.Run(() => _services.Contacts.List(exactPeer: id).FirstOrDefault(), token);
+        _selected = await Task.Run(() => FindContact(id), token);
         _safety = null;
         _comparison = "";
         _profile.ScrollToTop();
+    }
+
+    private ContactEntry? FindContact(string id)
+    {
+        var matches = _services.Contacts.List(exactPeer: id);
+        return matches.Count == 0 ? null : matches[0];
     }
 
     private void OpenMenu()

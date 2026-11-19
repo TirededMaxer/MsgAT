@@ -13,6 +13,7 @@ using ClipboardData = global::Windows.ApplicationModel.DataTransfer;
 
 namespace MsgAT.Windows.Infrastructure;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "The WPF Unloaded event cancels and disposes the current parse.")]
 public sealed class MessageTextBlock:TextBlock
 {
     private sealed record Part(string Text,int Style,int Spoiler,string? Url);
@@ -132,7 +133,7 @@ public sealed class MessageTextBlock:TextBlock
     }
     private void Reset(){++_generation;_parseCancellation?.Cancel();_parseCancellation?.Dispose();_parseCancellation=null;_parsing=false;_document=null;_revealed.Clear();_expandedCodeBlocks.Clear();_expandedQuotes.Clear();RefreshQuote();Refresh();}
 
-    private static Brush CreateQuoteBrush()
+    private static SolidColorBrush CreateQuoteBrush()
     {
         var brush = new SolidColorBrush(Color.FromArgb(88, 234, 173, 50));
         brush.Freeze();
@@ -166,7 +167,7 @@ public sealed class MessageTextBlock:TextBlock
         catch (Exception error) when (error is System.Security.Cryptography.CryptographicException or
             InvalidOperationException or IOException or JsonException or KeyNotFoundException or ArgumentException) { }
     }
-    private static IReadOnlyList<Block> Parse(string text,bool summary)
+    private static Block[] Parse(string text,bool summary)
     {
         if(summary){var value=SecurityCore.Call(new{operation="summarize_message_text",text=text,limit=240});return [new Block("paragraph","",[new Part(value.GetProperty("text").GetString()!,0,0,null)])];}
         var result=SecurityCore.Call(new {operation="render_message_text",text=text});
@@ -222,7 +223,15 @@ public sealed class MessageTextBlock:TextBlock
                 if((part.Style&1)!=0)run.FontWeight=FontWeights.Bold;
                 if((part.Style&2)!=0)run.FontStyle=FontStyles.Italic;
                 if((part.Style&16)!=0){run.FontFamily=new FontFamily("Consolas");run.Background=new SolidColorBrush(Color.FromArgb(25,128,128,128));}
-                if((part.Style&12)!=0){var decorations=new TextDecorationCollection();if((part.Style&4)!=0)foreach(var decoration in TextDecorations.Underline)decorations.Add(decoration);if((part.Style&8)!=0)foreach(var decoration in TextDecorations.Strikethrough)decorations.Add(decoration);run.TextDecorations=decorations;}
+                if ((part.Style & 12) != 0)
+                {
+                    var decorations = new TextDecorationCollection();
+                    if ((part.Style & 4) != 0)
+                        foreach (var decoration in System.Windows.TextDecorations.Underline) decorations.Add(decoration);
+                    if ((part.Style & 8) != 0)
+                        foreach (var decoration in System.Windows.TextDecorations.Strikethrough) decorations.Add(decoration);
+                    run.TextDecorations = decorations;
+                }
                 Inline[] runs = [run];
                 if (part.Spoiler == 0 && _quoteRanges.TryGetValue((blockIndex, partIndex), out var range) &&
                     range.Start >= 0 && range.End > range.Start && range.End <= part.Text.Length)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 using Microsoft.Win32;
 using MsgAT.Windows.Infrastructure;
+using MsgAT.Windows.Views;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Threading;

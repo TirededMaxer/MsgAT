@@ -15,6 +15,7 @@ using MsgAT.Windows.ViewModels;
 
 namespace MsgAT.Windows.Views;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "The window Closed handler disposes the media preview.")]
 internal sealed class SharedMediaDialog : DialogWindow
 {
     public static readonly DependencyProperty GalleryTileExtentProperty = DependencyProperty.Register(

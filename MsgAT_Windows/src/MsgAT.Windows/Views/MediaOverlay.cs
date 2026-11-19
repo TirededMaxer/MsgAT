@@ -882,7 +882,7 @@ public sealed class MediaOverlay : UserControl, IDisposable
             root.Children.Add(feedback);
         }
     }
-    private static Brush CreatePreviewSurfaceBrush()
+    private static SolidColorBrush CreatePreviewSurfaceBrush()
     {
         var brush = new SolidColorBrush(Color.FromRgb(34, 43, 39));
         brush.Freeze();

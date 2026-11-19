@@ -143,7 +143,7 @@ internal static class PhotoCompression
         var selected = new CroppedBitmap(rotated, new Int32Rect(left, top, right - left, bottom - top));
         System.Windows.Media.Imaging.BitmapEncoder encoder = mime == "image/png"
             ? new PngBitmapEncoder() : new JpegBitmapEncoder { QualityLevel = 95 };
-        encoder.Frames.Add(BitmapFrame.Create(selected));
+        encoder.Frames.Add(System.Windows.Media.Imaging.BitmapFrame.Create(selected));
         using var output = new MemoryStream();
         try
         {

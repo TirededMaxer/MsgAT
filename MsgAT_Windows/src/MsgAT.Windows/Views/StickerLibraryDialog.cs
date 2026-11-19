@@ -98,7 +98,7 @@ internal sealed class StickerLibraryPanel : DockPanel
     private readonly Dictionary<Filter, ScrollPosition> _positions = [];
     private StickerSource? _source;
     private StickerItem? _previewItem;
-    private Button? _previewReturnButton;
+    private ButtonBase? _previewReturnButton;
     private double _previewReturnOffset;
     private Func<Task>? _retryLibraryRead;
     private int _pageCount = 1;

@@ -17,6 +17,7 @@ internal sealed class CapturedRecording(EncryptedCaptureFile file,IDisposable le
     private IDisposable? _lease=lease;
     public void Dispose()=>Interlocked.Exchange(ref _lease,null)?.Dispose();
 }
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "The async window-closing path disposes recording playback before closing.")]
 internal sealed class RecordingDialog:DialogWindow
 {
     private sealed record DeviceChoice(string Id,string Name);
@@ -91,7 +92,7 @@ internal sealed class RecordingDialog:DialogWindow
         _finish.Click+=async(_,_)=>await FinishAsync();_use.Click+=async(_,_)=>await CloseAsync(true);
         _timer.Tick+=(_,_)=>
         {
-            _duration.Text=_controller.Duration.ToString(@"mm\:ss");
+            _duration.Text=_controller.Duration.ToString(@"mm\:ss", AppStrings.InterfaceCulture);
             var level = _controller.TakeInputPeak();
             if (_controller.Phase == RecordingPhase.Recording && level >= 0)
             {
@@ -231,7 +232,7 @@ internal sealed class RecordingDialog:DialogWindow
             _ready = recording;
             _timer.Stop();
             _preview.Children.Clear();
-            _duration.Text = _controller.Duration.ToString(@"mm\:ss");
+            _duration.Text = _controller.Duration.ToString(@"mm\:ss", AppStrings.InterfaceCulture);
             _playback = new EncryptedMediaView(_ready.Mime, _ready.OpenRead, _ready.Size, () => { },
                 showClose: false, inlineAudio: true, autoplay: false);
             _preview.Children.Add(_playback);

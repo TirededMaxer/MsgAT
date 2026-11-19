@@ -92,7 +92,7 @@ internal sealed class ContactCardPickerDialog : DialogWindow
         _loadFailed = false;
         Filter();
         var local = new Choice(services.Settings.MyUuid,
-            NameForCard(services.Settings.Nickname ?? AppStrings.Get("UiContactPublicIdentity")), Local: true);
+            NameForCard(services.Settings.Snapshot.Nickname ?? AppStrings.Get("UiContactPublicIdentity")), Local: true);
         try
         {
             var contacts = await Task.Run(services.Database.GetForwardTargets);

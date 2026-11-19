@@ -154,6 +154,13 @@ public sealed class MessagingService : IAsyncDisposable
     public Task<bool> ManageSendAsync(string id, string action, long? sendAt = null, CancellationToken token = default,
         string? expectedPeer = null, long? expectedScheduledAt = null) =>
         _secure.ManageSendAsync(id, action, sendAt, token, expectedPeer, expectedScheduledAt);
+    public Task<ScheduledMessageDraft?> ScheduledMessageDraftAsync(string id, string peer, long at, CancellationToken token) =>
+        _secure.ScheduledMessageDraftAsync(id, peer, at, token);
+    public Task<bool> EditScheduledMessageAsync(string id, string peer, long at, ScheduledMessageDraft original,
+        string replacement, CancellationToken token) =>
+        _secure.EditScheduledMessageAsync(id, peer, at, original, replacement, token);
+    public Task<bool?> DeletionCanRevokeAsync(string peer, IReadOnlySet<string> ids, CancellationToken token = default) =>
+        _secure.DeletionCanRevokeAsync(peer, ids, token);
     public Task<bool> DeleteLocalMessagesAsync(string peer, IReadOnlyList<string> ids, CancellationToken token = default) =>
         _secure.DeleteLocalMessagesAsync(peer, ids, token);
 

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+using System.Collections.Concurrent;
 using System.Globalization;
+using System.Text;
 using System.Windows;
 
 namespace MsgAT.Windows.Infrastructure;
@@ -8,6 +10,7 @@ public enum AppLanguage { System, English, SimplifiedChinese }
 
 internal static class AppStrings
 {
+    private static readonly ConcurrentDictionary<string, CompositeFormat> Formats = new(StringComparer.Ordinal);
     private static ResourceDictionary? _strings;
     private static string? _locale;
     public static AppLanguage Language { get; private set; }
@@ -56,5 +59,5 @@ internal static class AppStrings
     }
 
     public static string Format(string key, params object[] arguments) =>
-        string.Format(CultureInfo.CurrentCulture, Get(key), arguments);
+        string.Format(CultureInfo.CurrentCulture, Formats.GetOrAdd(Get(key), CompositeFormat.Parse), arguments);
 }

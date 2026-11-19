@@ -297,7 +297,7 @@ public sealed class SendQueueDialog : DialogWindow
         }
         finally{_loading=false;if(_closed){if(!_busy)_lifetime.Dispose();}else{UpdateActions();if(_reload){_reload=false;_refresh.Start();}}}
     }
-    private void ApplyRows(IReadOnlyList<SendQueueEntry> rows, bool samePage)
+    private void ApplyRows(SendQueueEntry[] rows, bool samePage)
     {
         var selected = samePage ? _list.SelectedItem as ListBoxItem : null;
         var restoreFocus = samePage && _list.IsKeyboardFocusWithin;
@@ -309,7 +309,7 @@ public sealed class SendQueueDialog : DialogWindow
                 _list.Items.RemoveAt(i);
         }
         var existing = _list.Items.Cast<QueueRow>().ToDictionary(item => ((SendQueueEntry)item.Tag).Id, StringComparer.Ordinal);
-        for (var i = 0; i < rows.Count; i++)
+        for (var i = 0; i < rows.Length; i++)
         {
             var row = rows[i];
             if (!existing.TryGetValue(row.Id, out var item))

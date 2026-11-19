@@ -21,6 +21,7 @@ using TextBox = System.Windows.Controls.TextBox;
 
 namespace MsgAT.Windows.Views;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "The Closed handler disposes recording playback and the preview lifetime.")]
 public sealed class MediaSendDialog : DialogWindow
 {
     private sealed record PhotoEdit(EditedPhotoContent Content, ImageSource Preview, PhotoAdjustment Adjustment);
@@ -1165,7 +1166,7 @@ public sealed class MediaSendDialog : DialogWindow
         }
     }
 
-    private static ImageSource LoadPreview(Stream input)
+    private static System.Windows.Media.Imaging.BitmapSource LoadPreview(Stream input)
     {
         var image = ImageDecoder.Load(input, 512);
         if (image.CanFreeze) image.Freeze();

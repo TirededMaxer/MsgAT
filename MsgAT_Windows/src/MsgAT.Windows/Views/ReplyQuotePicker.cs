@@ -22,7 +22,7 @@ internal sealed class ReplyQuotePicker : StackPanel
             MaxHeight = 180,
             MinHeight = 32
         };
-        source.SetResourceReference(FontSizeProperty, "ChatMessageFontSize");
+        source.SetResourceReference(Control.FontSizeProperty, "ChatMessageFontSize");
         AutomationProperties.SetName(source, title);
         var error = new TextBlock { TextWrapping = TextWrapping.Wrap, Visibility = Visibility.Collapsed };
         var confirm = new Button { Content = title, IsEnabled = false, Margin = new Thickness(6, 0, 0, 0) };

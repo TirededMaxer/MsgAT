@@ -3268,7 +3268,9 @@ internal fun ChatBubble(
             horizontalAlignment = if (isMe) Alignment.End else Alignment.Start,
             modifier = Modifier.weight(1f, fill = albumTile)
         ) {
-            if (msg.ext != "txt") ForwardAttribution(msg.forwardInfo, MaterialTheme.colorScheme.primary, bubbleWidth)
+            if (msg.ext != "txt") {
+                ForwardAttribution(msg.forwardInfo, MaterialTheme.colorScheme.primary, bubbleWidth)
+            }
                 DropdownMenu(
                     expanded = showMenu,
                     onDismissRequest = { showMenu = false }

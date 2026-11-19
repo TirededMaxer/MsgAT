@@ -528,7 +528,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         {
             var local = _services.Settings.MyUuid;
             page = _services.Database.GetPinnedMessages(peer.Uuid, local, pageSize: 2, through: anchor);
-            if (anchor is not null && page.Items.FirstOrDefault()?.Id != anchor.Id)
+            if (anchor is not null && (page.Items.Count == 0 || page.Items[0].Id != anchor.Id))
             {
                 anchor = null;
                 page = _services.Database.GetPinnedMessages(peer.Uuid, local, pageSize: 2);
@@ -536,7 +536,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         }
         _pinnedPreviewAnchor = page is null ? null : anchor;
         _nextPinnedPreview = null;
-        var value = page?.Items.FirstOrDefault();
+        var value = page is { Items.Count: > 0 } ? page.Items[0] : null;
         if (page is not null && value is not null && page.Items.Count > 1)
         {
             var candidate = page.Items[1];
@@ -1359,7 +1359,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var saved = false;
         try
         {
-            saved = await _services.Messaging.EditMessageAsync(item.Source.ConversationUuid, item.MessageId, text);
+            await _services.Messaging.EditMessageAsync(item.Source.ConversationUuid, item.MessageId, text);
+            saved = true;
         }
         catch (OperationCanceledException) when (_disposed || _services.IsDisposed) { }
         catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException or ArgumentException)

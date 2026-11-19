@@ -49,7 +49,7 @@ internal static class VideoCompression
 
             var filename = trim is null ? Path.ChangeExtension(Path.GetFileName(path), ".mp4")
                 : string.Concat(Path.GetFileNameWithoutExtension(path).Take(160)) + (muteAudio ? "-muted.mp4" : "-trimmed.mp4");
-            var staged = await staging.OpenAsync(filename, "video/mp4", lifetime.StopAsync, outputLimit)
+            var staged = await staging.OpenAsync(filename, "video/mp4", lifetime.StopAsync, outputLimit, cancellationToken: token)
                 .ConfigureAwait(false);
             output = staged;
             var encoded = await lifetime.RunAsync(ct => EncodeAsync(input, staged, profile, trim, progress, ct)).ConfigureAwait(false);

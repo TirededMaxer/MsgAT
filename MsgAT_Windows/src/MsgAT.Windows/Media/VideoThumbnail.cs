@@ -11,6 +11,7 @@ using Windows.Media.Editing;
 using Windows.Media.Playback;
 using Windows.Storage;
 using Windows.Storage.Streams;
+using NativeBitmapEncoder = Windows.Graphics.Imaging.BitmapEncoder;
 
 namespace MsgAT.Windows.Media;
 
@@ -143,7 +144,7 @@ internal static class VideoThumbnail
                     .AsTask().ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
                 using var output = new InMemoryRandomAccessStream();
-                var encoder = await BitmapEncoder.CreateAsync(BitmapEncoder.PngEncoderId, output).AsTask().ConfigureAwait(false);
+                var encoder = await NativeBitmapEncoder.CreateAsync(NativeBitmapEncoder.PngEncoderId, output).AsTask().ConfigureAwait(false);
                 encoder.SetSoftwareBitmap(bitmap);
                 var scale = Math.Min(1d, (double)MaximumEdge / Math.Max(bitmap.PixelWidth, bitmap.PixelHeight));
                 encoder.BitmapTransform.ScaledWidth = Math.Max(1u, (uint)Math.Round(bitmap.PixelWidth * scale));

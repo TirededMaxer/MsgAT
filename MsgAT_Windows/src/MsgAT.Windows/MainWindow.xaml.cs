@@ -18,6 +18,9 @@ using MsgAT.Windows.Core.Storage;
 using MsgAT.Windows.ViewModels;
 using MsgAT.Windows.Views;
 using MsgAT.Windows.Infrastructure;
+using ScaleTransform = System.Windows.Media.ScaleTransform;
+using TranslateTransform = System.Windows.Media.TranslateTransform;
+using VisualTreeHelper = System.Windows.Media.VisualTreeHelper;
 
 namespace MsgAT.Windows;
 
@@ -1881,7 +1884,7 @@ public partial class MainWindow : Window
             var culture = System.Globalization.CultureInfo.CurrentCulture;
             var status = conversation.MuteUntil == ConversationIndexStore.PermanentMuteUntil
                 ? AppStrings.Get("UiConversationMuted")
-                : string.Format(culture, AppStrings.Get("UiConversationMutedUntil"),
+                : AppStrings.Format("UiConversationMutedUntil",
                     DateTimeOffset.FromUnixTimeMilliseconds(conversation.MuteUntil).LocalDateTime.ToString("g", culture));
             items.Add(new MenuItem { Header = status, IsEnabled = false });
             AddAction("UiUnmute", "unmute");
@@ -2190,7 +2193,7 @@ public partial class MainWindow : Window
         {
             var rows = await services.Messaging.SendQueueAsync(peer, messageId: item.MessageId);
             if (_exiting || _appLocked || _viewModel?.SelectedConversation?.Uuid != peer) return;
-            if (rows.FirstOrDefault()?.CanCancel != true)
+            if (rows.Count == 0 || !rows[0].CanCancel)
             {
                 TransientNotice.Show(this, unavailable);
                 return;
@@ -2562,8 +2565,12 @@ public partial class MainWindow : Window
             !model.HasMessageEdit && model.IsChatContentVisible;
         try
         {
-            var hit = await Task.Run(() => services.Search.Search(route.Input.Query, route.TargetPeer,
-                route.Anchor, route.Input.Kind, limit: 1, newer: newer, day: route.Input.Day).Hits.FirstOrDefault());
+            var hit = await Task.Run(() =>
+            {
+                var hits = services.Search.Search(route.Input.Query, route.TargetPeer,
+                    route.Anchor, route.Input.Kind, limit: 1, newer: newer, day: route.Input.Day).Hits;
+                return hits.Count == 0 ? null : hits[0];
+            });
             if (!CanApply()) return;
             if (hit is null)
             {
@@ -4138,12 +4145,12 @@ public partial class MainWindow : Window
         await ReviewExternalFilesAsync(paths, DropAsFile(e));
     }
 
-    private async Task ReviewExternalFilesAsync(IReadOnlyList<string> paths, bool asFile)
+    private async Task ReviewExternalFilesAsync(string[] paths, bool asFile)
     {
         if (_exiting || _appLocked || _pendingDrop is not null ||
             _viewModel is not { CanCompose: true, IsChatContentVisible: true, SelectedConversation: { } peer } model ||
             model.CaptureConfirmedMediaBatchSender() is not { } send) return;
-        if (paths.Count > 10)
+        if (paths.Length > 10)
         {
             TransientNotice.Show(this, AppStrings.Get("UiAttachmentLimit"));
             return;

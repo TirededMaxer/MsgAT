@@ -187,7 +187,7 @@ public sealed class AttachmentPreview : Border
         return true;
     }
 
-    private FrameworkElement CreateFileCard(MessageItem message)
+    private Border CreateFileCard(MessageItem message)
     {
         var icon = new TextBlock { Text = "\uE8A5", FontFamily = new FontFamily("Segoe MDL2 Assets"),
             FontSize = 24, Margin = new Thickness(0, 3, 10, 0) };

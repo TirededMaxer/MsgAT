@@ -214,7 +214,7 @@ public sealed class MessageSearchDialog : DialogWindow
         _previousResult.IsEnabled = hasResults && index > 0 && !_opening;
         _nextResult.IsEnabled = hasResults && !_opening && (index < count - 1 || (!_loading && _cursor is not null));
         _position.Text = hasResults
-            ? string.Format(CultureInfo.CurrentCulture, AppStrings.Get("UiSearchResultPosition"), index + 1, count)
+            ? AppStrings.Format("UiSearchResultPosition", index + 1, count)
             : "";
     }
 
@@ -301,7 +301,7 @@ public sealed class MessageSearchDialog : DialogWindow
                     SelectResultAt(_results.SelectedIndex + 1, advance.Focus);
             }
             _status.Text = _results.Items.Count == 0 ? AppStrings.Get("UiSearchNoResults") :
-                string.Format(CultureInfo.CurrentCulture, AppStrings.Get("UiSearchResultsCount"), _results.Items.Count);
+                AppStrings.Format("UiSearchResultsCount", _results.Items.Count);
         }
         catch (Exception error) when (error is InvalidOperationException or ArgumentException or IOException or Microsoft.Data.Sqlite.SqliteException)
         {

@@ -188,7 +188,7 @@ internal sealed class CallHistoryDialog : DialogWindow
         }
     }
 
-    private FrameworkElement BuildRow(CallHistoryEntry entry)
+    private DockPanel BuildRow(CallHistoryEntry entry)
     {
         var panel = new DockPanel { Margin = new Thickness(0, 3, 0, 3) };
         var call = IdentitySetupDialog.ActionButton(entry.Video ? "\uE714" : "\uE717", () => Select(entry,true), Brushes.Gray);

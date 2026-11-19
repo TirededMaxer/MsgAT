@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using Windows.Media;
 using Windows.Media.Capture;
 using Windows.Media.Capture.Frames;
+using Windows.Media.Devices;
 using Windows.Media.MediaProperties;
 using Windows.Storage.Streams;
 using MsgAT.Windows.Core.Storage;

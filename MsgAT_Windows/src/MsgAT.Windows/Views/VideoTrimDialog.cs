@@ -12,6 +12,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using MsgAT.Windows.Core.Network;
 using MsgAT.Windows.Media;
+using Path = System.IO.Path;
 
 namespace MsgAT.Windows.Views;
 

@@ -180,7 +180,7 @@ public sealed class SavedMessagesDialog : DialogWindow
         };
     }
 
-    private string SourceName(SavedMessageSource source) => source.Alias ?? AppStrings.Format("UiSavedRemovedChat", source.Peer[..Math.Min(8, source.Peer.Length)]);
+    private static string SourceName(SavedMessageSource source) => source.Alias ?? AppStrings.Format("UiSavedRemovedChat", source.Peer[..Math.Min(8, source.Peer.Length)]);
 
     private void ChangeScope(SavedMessageSource? source, bool byChat)
     {
@@ -329,7 +329,7 @@ public sealed class SavedMessagesDialog : DialogWindow
         else if(row.Media is { IsAvailable: true } media)
         {
             if(!media.IsImage && !media.IsVideo && !media.IsAudio){Export();return;}
-            var preview = new SavedPreviewDialog(media, () => CanExport(media), async window =>
+            var preview = new SavedPreviewDialog(media, () => CanExport(media), _services.Settings.Snapshot.AttachmentExportFolder, async window =>
             {
                 if (!await HasOriginalAsync(row.Item))
                 {
@@ -428,7 +428,7 @@ public sealed class SavedMessagesDialog : DialogWindow
     }
     private sealed class SavedPreviewDialog : DialogWindow
     {
-        public SavedPreviewDialog(MessageItem media, Func<bool> canSave, Func<Window, Task> showOriginal)
+        public SavedPreviewDialog(MessageItem media, Func<bool> canSave, string? preferredFolder, Func<Window, Task> showOriginal)
         {
             Title = AppStrings.Get("UiSavedMedia");
             Width = Math.Min(900, SystemParameters.WorkArea.Width * .95);
@@ -442,7 +442,7 @@ public sealed class SavedMessagesDialog : DialogWindow
                 try { await showOriginal(this); }
                 finally { jumping = false; }
             }, save: () => AttachmentExporter.ExportAsync(this, media, canSave,
-                preferredFolder: _services.Settings.Snapshot.AttachmentExportFolder), canSave: canSave);
+                preferredFolder: preferredFolder), canSave: canSave);
         }
     }
     private sealed class SavedTextDialog : DialogWindow

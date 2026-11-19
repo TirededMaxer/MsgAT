@@ -64,7 +64,12 @@ fn url_end(text:&str,index:usize,open:u8)->Option<(usize,bool)>{
 }
 fn emit(runs:&mut Vec<Run>,text:&str,style:u8,spoiler:u32,url:Option<String>){
     if text.is_empty(){return}
-    if let Some(last)=runs.last_mut(),last.style==style && last.spoiler==spoiler && last.url==url {last.text.push_str(text);return}
+    if let Some(last) = runs.last_mut()
+        && last.style == style && last.spoiler == spoiler && last.url == url
+    {
+        last.text.push_str(text);
+        return;
+    }
     runs.push(Run{text:text.into(),style,spoiler,url});
 }
 fn inline(text:&str,base:u32)->Vec<Run>{
@@ -119,7 +124,9 @@ fn blocks(text:&str)->Result<Vec<Block>,String>{
     let mut blocks=Vec::new();let mut index=0;let mut base=0u32;
     while index<lines.len(){
         let line=lines[index];
-        if let Some(language)=line.strip_prefix("```"),language.len()<=32 && language.bytes().all(|b|b.is_ascii_alphanumeric() || b"_+-".contains(&b)){
+        if let Some(language) = line.strip_prefix("```")
+            && language.len() <= 32 && language.bytes().all(|b| b.is_ascii_alphanumeric() || b"_+-".contains(&b))
+        {
             let mut content=String::new();index+=1;let start=index;
             while index<lines.len() && lines[index].trim()!="```"{if index>start{content.push('\n');}content.push_str(lines[index]);index+=1;}
             if index<lines.len(){index+=1;}

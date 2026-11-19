@@ -103,6 +103,8 @@
                 </Canvas>
             </Viewbox>
         </DataTemplate>
+        <infra:GeometryIconTemplateSelector x:Key="IconTemplateSelector"
+                                            GeometryTemplate="{StaticResource IconTemplate}" />
 
         <Style TargetType="ScrollBar">
             <Setter Property="Width" Value="12" />
@@ -193,7 +195,7 @@
                                 <Setter TargetName="Chrome" Property="Opacity" Value="0.68" />
                             </Trigger>
                             <Trigger Property="IsKeyboardFocused" Value="True">
-                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
+                                <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentTextBrush}" />
                             </Trigger>
                             <Trigger Property="IsEnabled" Value="False">
                                 <Setter TargetName="Chrome" Property="Opacity" Value="0.42" />
@@ -216,7 +218,7 @@
             <Setter Property="BorderBrush" Value="#66FF6B78" />
         </Style>
         <Style x:Key="IconButtonStyle" TargetType="Button" BasedOn="{StaticResource ButtonStyle}">
-            <Setter Property="ContentTemplate" Value="{StaticResource IconTemplate}" />
+            <Setter Property="ContentTemplateSelector" Value="{StaticResource IconTemplateSelector}" />
             <Setter Property="Width" Value="36" />
             <Setter Property="Height" Value="36" />
             <Setter Property="MinHeight" Value="36" />

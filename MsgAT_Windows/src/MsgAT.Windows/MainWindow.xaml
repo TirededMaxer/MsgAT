@@ -10,6 +10,19 @@
         WindowStartupLocation="CenterScreen"
         Loaded="Window_Loaded" Closing="Window_Closing" Closed="Window_Closed">
     <Window.Resources>
+        <Style x:Key="ChatToolbarButtonStyle" TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+            <Setter Property="Width" Value="32" />
+            <Setter Property="Height" Value="32" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Margin" Value="2,0" />
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderBrush" Value="Transparent" />
+            <Style.Triggers>
+                <Trigger Property="IsMouseOver" Value="True">
+                    <Setter Property="Background" Value="{StaticResource MessagingSelectionBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style x:Key="ChatAttachmentFocusVisual">
             <Setter Property="Control.Template">
                 <Setter.Value>
@@ -766,19 +779,18 @@
                         </StackPanel.Style>
                         <Button Content="{StaticResource CallIcon}" Click="VoiceCall_Click"
                                 ToolTip="{DynamicResource UiVoiceCall}" AutomationProperties.Name="{DynamicResource UiVoiceCall}" IsEnabled="{Binding CanCompose}"
-                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32" />
+                                Style="{StaticResource ChatToolbarButtonStyle}" />
                         <Button Content="{StaticResource VideoCallIcon}" Click="VideoCall_Click"
                                 ToolTip="{DynamicResource UiVideoCall}" AutomationProperties.Name="{DynamicResource UiVideoCall}" IsEnabled="{Binding CanCompose}"
-                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32" />
+                                Style="{StaticResource ChatToolbarButtonStyle}" />
                         <Button Click="SearchChat_Click" ToolTip="{DynamicResource UiSearchMessages}" AutomationProperties.Name="{DynamicResource UiSearchMessages}"
-                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M 15.5,10 A 5.5,5.5 0 1 1 4.5,10 A 5.5,5.5 0 1 1 15.5,10 M 14,14 L 20,20"
                                   Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
                         </Button>
-                        <Button Click="ConversationMute_Click" AutomationProperties.Name="{DynamicResource UiConversationNotifications}"
-                                Width="32" Height="32">
+                        <Button Click="ConversationMute_Click" AutomationProperties.Name="{DynamicResource UiConversationNotifications}">
                             <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource IconButtonStyle}">
+                                <Style TargetType="Button" BasedOn="{StaticResource ChatToolbarButtonStyle}">
                                     <Setter Property="ToolTip" Value="{DynamicResource UiConversationNotifications}" />
                                     <Style.Triggers>
                                         <DataTrigger Binding="{Binding SelectedConversation.IsMuted}" Value="True">
@@ -796,12 +808,12 @@
                             </Grid>
                         </Button>
                         <Button Click="NavigateHistory_Click" ToolTip="{DynamicResource UiHistoryNavigation}" AutomationProperties.Name="{DynamicResource UiHistoryNavigation}"
-                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M3,5 L21,5 L21,22 L3,22 Z M3,10 L21,10 M7,2 L7,7 M17,2 L17,7 M7,14 L11,14 M14,14 L17,14 M7,18 L11,18"
                                   Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
                         </Button>
                         <Button Click="ChatSendQueue_Click" ToolTip="{DynamicResource UiSendingQueue}" AutomationProperties.Name="{DynamicResource UiSendingQueue}"
-                                Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 M12,7 L12,12 L16,14"
                                   Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="17" Height="17" Stretch="Uniform" />
                         </Button>
@@ -810,29 +822,29 @@
                                 Visibility="{Binding IsSelecting, Converter={StaticResource BooleanVisibilityConverter}}">
                         <Button Click="ForwardSelected_Click" ToolTip="{DynamicResource UiForwardSelectedMessages}"
                                 AutomationProperties.Name="{DynamicResource UiForwardSelectedMessages}"
-                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M2,10 L9,3 M9,3 L9,8 C15,8 19,12 20,20 C17,15 14,13 9,13 L9,18 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="20" Height="20" Stretch="Uniform" />
                         </Button>
                         <Button Click="SaveSelected_Click" ToolTip="{DynamicResource UiSaveSelectedMessages}"
                                 AutomationProperties.Name="{DynamicResource UiSaveSelectedMessages}"
-                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M4,2 L18,2 L18,22 L11,17 L4,22 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="20" Stretch="Uniform" />
                         </Button>
                         <Button Click="CopySelected_Click" ToolTip="{DynamicResource UiCopySelectedMessages}"
                                 AutomationProperties.Name="{DynamicResource UiCopySelectedMessages}"
-                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M8,6 H18 V20 H8 Z M14,3 H5 V16"
                                   Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
                         </Button>
                         <Button Click="DeleteSelected_Click" ToolTip="{DynamicResource UiDeleteMessages}"
                                 AutomationProperties.Name="{DynamicResource UiDeleteMessages}"
-                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M3,5 H17 M7,5 V3 H13 V5 M5,5 L6,17 H14 L15,5 M8,8 V14 M12,8 V14"
                                   Stroke="{StaticResource DangerBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
                         </Button>
                         <Button Click="ClearSelection_Click" ToolTip="{DynamicResource UiCancelMessageSelection}"
                                 AutomationProperties.Name="{DynamicResource UiCancelMessageSelection}"
-                                IsEnabled="{Binding CanChangeSelection}" Style="{StaticResource IconButtonStyle}" Width="32" Height="32">
+                                IsEnabled="{Binding CanChangeSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
                             <Path Data="M2,2 L18,18 M18,2 L2,18" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="16" Stretch="Uniform" />
                         </Button>
                     </StackPanel>
@@ -888,7 +900,8 @@
                     <TextBlock Text="{Binding LiveLocationShareStatus}" VerticalAlignment="Center" />
                 </DockPanel>
             </Border>
-            <Border Background="{StaticResource PanelBrush}" Padding="12,4"
+            <Border Background="{StaticResource MessagingChromeBrush}" BorderBrush="{StaticResource MessagingDividerBrush}"
+                    BorderThickness="0,0,0,1" Padding="12,4"
                     Visibility="{Binding HasPinnedMessage,Converter={StaticResource BooleanVisibilityConverter}}">
                 <DockPanel>
                     <Button DockPanel.Dock="Right" Click="PinnedMessages_Click" ToolTip="{DynamicResource UiPinnedMessages}"
@@ -909,9 +922,9 @@
                               StrokeLineJoin="Round" Width="14" Height="12" Stretch="Uniform" />
                     </Button>
                     <Button Click="PinnedMessage_Click" HorizontalContentAlignment="Left" Background="Transparent" BorderThickness="0">
-                        <Border BorderBrush="{DynamicResource AccentBrush}" BorderThickness="3,0,0,0" Padding="8,0,0,0">
+                        <Border BorderBrush="{DynamicResource MessagingSelectionMarkBrush}" BorderThickness="3,0,0,0" Padding="8,0,0,0">
                             <StackPanel>
-                                <TextBlock Text="{DynamicResource UiPinnedMessage}" FontSize="11" Foreground="{DynamicResource AccentBrush}" />
+                                <TextBlock Text="{DynamicResource UiPinnedMessage}" FontSize="11" Foreground="{DynamicResource MessagingSelectionMarkBrush}" />
                                 <infra:MessageTextBlock MessageText="{Binding PinnedMessage.Summary}" IsSummary="True" TextTrimming="CharacterEllipsis" MaxHeight="22" />
                             </StackPanel>
                         </Border>

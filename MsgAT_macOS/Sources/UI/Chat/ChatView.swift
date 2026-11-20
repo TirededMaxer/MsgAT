@@ -136,6 +136,8 @@ public struct ChatView: View {
     @State private var openingHistoryQuote = false
     @State private var historyJumpGeneration=0
     @State private var historyPositionRevision = 0
+    @State private var visibleTimelineRow: String?
+    @State private var timelineRowAnchor = UnitPoint.center
     @State private var quoteReturnAnchors: [QuoteReturnAnchor] = []
     @State private var retryingLatestJump = false
     @State private var historyPageToRetry: HistoryPage?
@@ -422,7 +424,7 @@ public struct ChatView: View {
 
                                 let albums = viewModel.displayedAlbums
                                 let unreadRowID = unreadTimelineAnchor.map { albums[$0]?.first?.messageId ?? $0 }
-                                ForEach(timelineEntries(albums: albums, unreadRowID: unreadRowID)) { entry in
+                                ForEach(timelineEntries(albums: albums, unreadRowID: unreadRowID), id: \.scrollTargetID) { entry in
                                     VStack(spacing: 0) {
                                         if let day = entry.day {
                                             timelineDateButton(day)
@@ -451,7 +453,7 @@ public struct ChatView: View {
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding(.bottom, entry.joinsNewer ? 2 : 7)
-                                    .id("timeline-row/" + entry.id)
+                                    .id(entry.scrollTargetID)
                                 }
 
                                 Color.clear
@@ -462,6 +464,7 @@ public struct ChatView: View {
                                     })
                                     .id("BOTTOM_ANCHOR")
                             }
+                            .timelineScrollTargets()
                             .padding(.horizontal, 16 + chatColumnInset)
                             .padding(.vertical, 8)
                         }
@@ -529,7 +532,8 @@ public struct ChatView: View {
                         .onChange(of: viewModel.historyLoadFailed) { failed in
                             if !failed { historyPageToRetry = nil }
                         }
-                        .applyTimelineScrollAnchor(followingLatest: viewModel.isViewingLatest && !restoringHistory)
+                        .applyTimelineScrollAnchor(followingLatest: viewModel.isViewingLatest && !restoringHistory,
+                                                   row: $visibleTimelineRow, anchor: timelineRowAnchor)
                         .task(id: initialHistoryRevision) {
                             guard !initializedTimeline else { return }
                             guard let position = await viewModel.loadInitialHistory(target: initialMessageId,
@@ -1561,6 +1565,7 @@ public struct ChatView: View {
         let joinsOlder: Bool
         let joinsNewer: Bool
         var id: String { message.messageId }
+        var scrollTargetID: String { "timeline-row/" + id }
     }
 
     private func timelineEntries(albums: [String: [ChatMessage]], unreadRowID: String?) -> [TimelineEntry] {
@@ -2341,7 +2346,12 @@ public struct ChatView: View {
     private func scrollToMessage(_ id: String, proxy: ScrollViewProxy, anchor: UnitPoint = .center,
                                  positioningRevision: Int? = nil) {
         let lead = viewModel.displayedAlbums[id]?.first?.messageId ?? id
-        proxy.scrollTo("timeline-row/" + lead, anchor: anchor)
+        let row = "timeline-row/" + lead
+        if #available(macOS 14.0, *) {
+            timelineRowAnchor = anchor
+            visibleTimelineRow = row
+        }
+        proxy.scrollTo(row, anchor: anchor)
         if lead != id {
             DispatchQueue.main.async {
                 guard positioningRevision == nil || positioningRevision == historyPositionRevision,
@@ -2856,13 +2866,20 @@ public struct ChatView: View {
 
 fileprivate extension View {
     @ViewBuilder
-    func applyTimelineScrollAnchor(followingLatest: Bool) -> some View {
+    func timelineScrollTargets() -> some View {
+        if #available(macOS 14.0, *) { self.scrollTargetLayout() } else { self }
+    }
+
+    @ViewBuilder
+    func applyTimelineScrollAnchor(followingLatest: Bool, row: Binding<String?>, anchor: UnitPoint) -> some View {
         if #available(macOS 15.0, *) {
-            self.defaultScrollAnchor(.bottom, for: .initialOffset)
+            self.scrollPosition(id: row, anchor: anchor)
+                .defaultScrollAnchor(followingLatest ? .bottom : nil, for: .initialOffset)
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 .defaultScrollAnchor(followingLatest ? .bottom : nil, for: .sizeChanges)
         } else if #available(macOS 14.0, *) {
-            self.defaultScrollAnchor(followingLatest ? .bottom : nil)
+            self.scrollPosition(id: row, anchor: anchor)
+                .defaultScrollAnchor(followingLatest ? .bottom : nil)
         } else {
             self
         }

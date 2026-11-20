@@ -453,7 +453,9 @@
                                             <Path DockPanel.Dock="Right" Data="M0,0 L4,4 L8,0" Stroke="{StaticResource MutedBrush}"
                                                   StrokeThickness="1.5" Margin="10,0,1,0" VerticalAlignment="Center" />
                                             <ContentPresenter VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}"
-                                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                                ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
+                                                ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
                                         </DockPanel>
                                     </Border>
                                     <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False">

@@ -34,7 +34,8 @@ internal static class NativeMenu
                     ? new ToggleMenuFlyoutItem { IsChecked = command.IsChecked } : new MenuFlyoutItem();
                 item.Text = title;
                 item.IsEnabled = command.IsEnabled;
-                item.Click += (_, _) => command.RaiseEvent(new System.Windows.RoutedEventArgs(Wpf.MenuItem.ClickEvent, command));
+                item.Click += (_, _) => command.Dispatcher.BeginInvoke(() =>
+                    command.RaiseEvent(new System.Windows.RoutedEventArgs(Wpf.MenuItem.ClickEvent, command)));
                 output.Add(item);
             }
         }

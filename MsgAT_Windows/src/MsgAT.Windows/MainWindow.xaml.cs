@@ -240,7 +240,7 @@ public partial class MainWindow : Window
         InitializeComponent();
         ConversationList.Choose = SelectConversationRow;
         ConversationList.MenuFor = CreateConversationMenu;
-        ChatHeader.InvokeAction = PerformHeaderAction;
+        ChatHeader.InvokeAction = action => Dispatcher.BeginInvoke(() => PerformHeaderAction(action));
         ChatHeader.NotificationMenu = CreateNotificationMenu;
         _jumpHighlightTimer.Tick += (_, _) => ClearJumpHighlight();
         _timelineDateTimer.Tick += (_, _) =>

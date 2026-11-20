@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+using System.Collections.Specialized;
 using System.ComponentModel;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
@@ -18,6 +19,10 @@ public sealed class ConversationListHost : WorkspaceHost
     private readonly HashSet<ConversationRow> _active = [];
     private (string Scope, string Peer)? _drag;
     private bool _updating;
+    private bool _refreshQueued;
+    private MainViewModel? _subscribed;
+    private readonly Dictionary<string, ConversationItem> _items = new(StringComparer.Ordinal);
+    private ConversationItem? Item(object? key) => key is string id ? _items.GetValueOrDefault(id) : null;
     internal Action<ConversationItem>? Choose { get; set; }
     internal Func<ConversationItem, System.Windows.Controls.ContextMenu?>? MenuFor { get; set; }
 
@@ -27,14 +32,14 @@ public sealed class ConversationListHost : WorkspaceHost
             IsItemClickEnabled = true, CanDragItems = true, AllowDrop = true, Padding = new Thickness(2, 2, 2, 8) };
         _list = list;
         list.ContainerContentChanging += ContainerChanged;
-        list.ItemClick += (_, args) => { if (args.ClickedItem is ConversationItem target) ChooseItem(target); };
+        list.ItemClick += (_, args) => { if (Item(args.ClickedItem) is { } target) ChooseItem(target); };
         list.SelectionChanged += (_, args) =>
         {
-            if (!_updating && args.AddedItems.FirstOrDefault() is ConversationItem item) ChooseItem(item);
+            if (!_updating && Item(args.AddedItems.FirstOrDefault()) is { } item) ChooseItem(item);
         };
         list.DragItemsStarting += (_, args) =>
         {
-            if (Model is not { } model || args.Items.FirstOrDefault() is not ConversationItem { IsPinned: true } item ||
+            if (Model is not { } model || Item(args.Items.FirstOrDefault()) is not { IsPinned: true } item ||
                 model.VisibleConversations.Count(candidate => candidate.IsPinned) < 2)
             { args.Cancel = true; return; }
             _drag = (model.FolderKey, item.Uuid);
@@ -71,11 +76,11 @@ public sealed class ConversationListHost : WorkspaceHost
     {
         if (_list is not { } list) return;
         _updating = true;
-        try { list.SelectedItem = Model?.SelectedConversation; }
+        try { list.SelectedItem = Model?.SelectedConversation?.Uuid; }
         finally { _updating = false; }
     }
 
-    internal void ScrollIntoView(ConversationItem item) => _list?.ScrollIntoView(item);
+    internal void ScrollIntoView(ConversationItem item) => _list?.ScrollIntoView(item.Uuid);
 
     private void ContainerChanged(ListViewBase sender, ContainerContentChangingEventArgs args)
     {
@@ -87,7 +92,7 @@ public sealed class ConversationListHost : WorkspaceHost
             container.HorizontalContentAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Stretch;
             container.Padding = new Thickness(8, 0, 8, 0);
         }
-        if (args.InRecycleQueue || args.Item is not ConversationItem item)
+        if (args.InRecycleQueue || Item(args.Item) is not { } item)
         {
             row.Present(null);
             _active.Remove(row);
@@ -110,7 +115,7 @@ public sealed class ConversationListHost : WorkspaceHost
     private (ConversationItem Item, ListViewItem View)? DropRow(DragEventArgs args)
     {
         if (_drag is not { } drag || Model?.FolderKey != drag.Scope || FindRow(args.OriginalSource) is not { } row ||
-            _list?.ItemFromContainer(row) is not ConversationItem { IsPinned: true } item || item.Uuid == drag.Peer) return null;
+            Item(_list?.ItemFromContainer(row)) is not { IsPinned: true } item || item.Uuid == drag.Peer) return null;
         return (item, row);
     }
 
@@ -118,7 +123,7 @@ public sealed class ConversationListHost : WorkspaceHost
     {
         if (_list is not { } list) return;
         var row = FindRow(args.OriginalSource) ?? list.ContainerFromItem(list.SelectedItem) as ListViewItem;
-        if (row is null || list.ItemFromContainer(row) is not ConversationItem item || MenuFor?.Invoke(item) is not { } source) return;
+        if (row is null || Item(list.ItemFromContainer(row)) is not { } item || MenuFor?.Invoke(item) is not { } source) return;
         var menu = NativeMenu.From(source.Items);
         if (args.TryGetPosition(row, out var point)) menu.ShowAt(row, point);
         else menu.ShowAt(row);
@@ -127,13 +132,48 @@ public sealed class ConversationListHost : WorkspaceHost
 
     protected override void BindWorkspace()
     {
-        if (_list is null) return;
+        if (_subscribed is not null) _subscribed.VisibleConversations.CollectionChanged -= ConversationsChanged;
+        _subscribed = Model;
+        if (_subscribed is not null) _subscribed.VisibleConversations.CollectionChanged += ConversationsChanged;
+        _drag = null;
+        RefreshList();
+    }
+
+    private void ConversationsChanged(object? sender, NotifyCollectionChangedEventArgs args)
+    {
+        if (_refreshQueued) return;
+        _refreshQueued = true;
+        Dispatcher.BeginInvoke(() => { _refreshQueued = false; RefreshList(); });
+    }
+
+    private void RefreshList()
+    {
+        if (_list is not { } list) return;
+        var visible = Model?.VisibleConversations.ToArray() ?? [];
         _updating = true;
         try
         {
-            _drag = null;
-            _list.ItemsSource = Model?.VisibleConversations;
-            _list.SelectedItem = Model?.SelectedConversation;
+            _items.Clear();
+            foreach (var item in visible) _items.Add(item.Uuid, item);
+            for (var index = list.Items.Count - 1; index >= 0; index--)
+                if (Item(list.Items[index]) is null) list.Items.RemoveAt(index);
+
+            for (var index = 0; index < visible.Length; index++)
+            {
+                var item = visible[index];
+                if (index >= list.Items.Count || !Equals(list.Items[index], item.Uuid))
+                {
+                    var existing = list.Items.IndexOf(item.Uuid);
+                    if (existing >= 0) list.Items.RemoveAt(existing);
+                    list.Items.Insert(index, item.Uuid);
+                }
+                if (list.ContainerFromIndex(index) is ListViewItem { Tag: ConversationRow row } container)
+                {
+                    row.Present(item);
+                    AutomationProperties.SetName(container, item.Alias);
+                }
+            }
+            list.SelectedItem = Model?.SelectedConversation?.Uuid;
         }
         finally { _updating = false; }
     }

@@ -238,11 +238,21 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
         if let sinkNode { inputEngine.detach(sinkNode); self.sinkNode = nil }
         let device = try resolvedDevice(input: true)
         if node.auAudioUnit.deviceID != device { try node.auAudioUnit.setDeviceID(device) }
-        let format = node.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, format.channelCount > 0, format.commonFormat == .pcmFormatFloat32,
+        for _ in 0..<2 {
+            let hardware = node.inputFormat(forBus: 0)
+            guard hardware.sampleRate.isFinite, hardware.sampleRate > 0, hardware.channelCount > 0,
+                  let format = AVAudioFormat(standardFormatWithSampleRate: hardware.sampleRate, channels: hardware.channelCount)
+            else { throw AudioError.invalidFormat }
+            if try attachInputSink(node, format: format, delegate: delegate) { return }
+        }
+        throw AudioError.invalidFormat
+    }
+
+    private func attachInputSink(_ node: AVAudioInputNode, format: AVAudioFormat,
+                                 delegate: RTCAudioDeviceDelegate) throws -> Bool {
+        guard
               let pcm = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: format.sampleRate, channels: 1, interleaved: true),
               let storage = AVAudioPCMBuffer(pcmFormat: pcm, frameCapacity: capacity) else { throw AudioError.invalidFormat }
-        inputRate = format.sampleRate
         let deliver = delegate.deliverRecordedData
         let sink = AVAudioSinkNode { timestamp, frames, data in
             guard frames <= storage.frameCapacity, let samples = storage.int16ChannelData?[0] else { return noErr }
@@ -267,9 +277,13 @@ final class MacCallAudioDevice: NSObject, RTCAudioDevice, @unchecked Sendable {
             return deliver(&flags, timestamp, 0, frames, storage.audioBufferList, nil, nil)
         }
         inputEngine.attach(sink)
-        inputEngine.connect(node, to: sink, format: format)
+        guard MsgATConnectCallInput(inputEngine, node, sink, format) else {
+            inputEngine.detach(sink)
+            return false
+        }
+        inputRate = format.sampleRate
         sinkNode = sink
-        inputEngine.prepare()
+        return true
     }
 
     private func configureOutput() throws {

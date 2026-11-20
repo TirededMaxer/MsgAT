@@ -6,7 +6,10 @@ import org.msgat.ui.theme.uiString
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.widget.VideoView
+import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
+import androidx.media3.ui.PlayerView
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
@@ -34,6 +37,7 @@ import org.msgat.core.media.*
 import org.msgat.core.call.CallManager
 import org.msgat.core.call.CallState
 
+@androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
 internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaSource)->Unit){
     val context=LocalContext.current
@@ -64,8 +68,24 @@ internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaS
     var finishFailed by remember { mutableStateOf(false) }
     var error by remember{mutableStateOf<Int?>(null)}
     var source by remember{mutableStateOf<RecordingMediaSource?>(null)}
-    var player by remember{mutableStateOf<VideoView?>(null)}
-    var playbackPosition by remember { mutableIntStateOf(0) }
+    var playbackPosition by remember { mutableLongStateOf(0) }
+    val clip = source?.takeUnless { callActive }
+    val player = remember(clip) { clip?.let { RecordingPlayback.player(context, it.uri) } }
+    val currentPlayer by rememberUpdatedState(player)
+    DisposableEffect(clip, player) {
+        if (player == null || clip == null) return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onPlayerError(failure: PlaybackException) { error = R.string.ui_capture_video_preview_failed }
+        }
+        player.addListener(listener)
+        player.setMediaItem(MediaItem.fromUri(clip.uri), playbackPosition)
+        player.prepare()
+        onDispose {
+            playbackPosition = player.currentPosition.coerceAtLeast(0)
+            player.removeListener(listener)
+            player.release()
+        }
+    }
     val request=rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()){grants->
         cameraPermission=grants[Manifest.permission.CAMERA]?:cameraPermission
         microphonePermission=grants[Manifest.permission.RECORD_AUDIO]?:microphonePermission
@@ -108,25 +128,17 @@ internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaS
         }
         if (!busy && started && source == null && !finishFailed && (callActive || autoFinished)) owner.launch { finish() }
     }
-    LaunchedEffect(callActive) {
-        if (!callActive) return@LaunchedEffect
-        player?.let {
-            playbackPosition = it.currentPosition
-            it.stopPlayback()
-        }
-        player = null
-    }
     DisposableEffect(lifecycle){
         val observer=object:androidx.lifecycle.DefaultLifecycleObserver{
             override fun onStop(ownerLifecycle:androidx.lifecycle.LifecycleOwner){
-                player?.pause()
+                currentPlayer?.pause()
                 if(active.get() && controller.phase.value in listOf(RecordingPhase.RECORDING,RecordingPhase.PAUSED))owner.launch{finish()}
             }
         }
         lifecycle.lifecycle.addObserver(observer);onDispose{lifecycle.lifecycle.removeObserver(observer)}
     }
     DisposableEffect(Unit){onDispose{
-        active.set(false);player?.stopPlayback();player=null;source?.close();source=null
+        active.set(false);source?.close();source=null
         owner.launch{try{controller.close()}finally{provider?.unbind(preview,video);owner.cancel()}}
     }}
     Dialog(onDismissRequest={if(!busy)onDismiss()},properties=DialogProperties(usePlatformDefaultWidth=false,decorFitsSystemWindows=false,securePolicy=SecureFlagPolicy.SecureOn)){
@@ -146,15 +158,10 @@ internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaS
                     if(recorded==null) {
                         if(showingCamera) CameraPreview(previewView,camera,!busy,Modifier.fillMaxSize())
                     }
-                    else if (!callActive) AndroidView(factory={VideoView(it).also{view->
-                        player=view;view.setVideoURI(recorded.uri)
-                        view.setMediaController(android.widget.MediaController(it).also{controls->controls.setAnchorView(view)})
-                        view.setOnPreparedListener {
-                            it.isLooping = false
-                            view.seekTo(playbackPosition.coerceAtLeast(1))
-                        }
-                        view.setOnErrorListener{_,_,_->error=R.string.ui_capture_video_preview_failed;true}
-                    }},modifier=Modifier.fillMaxSize())
+                    else if (player != null) AndroidView(
+                        factory = { PlayerView(it) }, update = { it.player = player },
+                        onRelease = { it.player = null }, modifier = Modifier.fillMaxSize()
+                    )
                 }
                 if(!cameraPermission)Button(onClick={request.launch(arrayOf(Manifest.permission.CAMERA))}){Text(uiString(R.string.ui_capture_allow_camera))}
                 error?.let{Text(uiString(it),color=MaterialTheme.colorScheme.error)}
@@ -185,7 +192,7 @@ internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaS
                             Button(enabled=!busy,onClick={owner.launch{finish()}}){Text(uiString(R.string.ui_record_finish))}
                         }
                         RecordingPhase.READY->source?.let{recorded->Button(enabled=!busy,onClick={
-                            player?.stopPlayback();player=null;source=null;onRecorded(recorded)
+                            player?.pause();source=null;onRecorded(recorded)
                         }){Text(uiString(R.string.ui_capture_use_video))}}
                         else->Unit
                     }

@@ -26,6 +26,7 @@ import org.msgat.core.media.AudioRecordingController
 import org.msgat.core.media.EncryptedCaptureStore
 import org.msgat.core.media.RecordingMediaSource
 import org.msgat.core.media.RecordingMediaStore
+import org.msgat.core.media.RecordingReader
 import org.msgat.core.media.RecordingPhase
 import org.msgat.R
 
@@ -39,6 +40,7 @@ internal class VoiceCaptureSession(context: Context, private val captures: Encry
     private var previewClock: Job? = null
     private var source: RecordingMediaSource? = null
     private var player: MediaPlayer? = null
+    private var previewReader: RecordingReader? = null
     private var previewReady = false
     private var previewPlayRequested = false
     private var finishRequested = false
@@ -207,7 +209,7 @@ internal class VoiceCaptureSession(context: Context, private val captures: Encry
                 }
                 true
             }
-            preview.setDataSource(context, recording.uri)
+            preview.setDataSource(RecordingReader(context, recording.uri).also { previewReader = it })
             preview.prepareAsync()
         } catch (_: Exception) {
             closePlayer(keepPosition = true)
@@ -339,7 +341,7 @@ internal class VoiceCaptureSession(context: Context, private val captures: Encry
     private fun closePlayer(keepPosition: Boolean = false) {
         previewClock?.cancel()
         previewClock = null
-        player?.release()
+        try { player?.release() } finally { previewReader?.close(); previewReader = null }
         player = null
         previewReady = false
         previewPlayRequested = false

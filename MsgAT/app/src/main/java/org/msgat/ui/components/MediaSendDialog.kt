@@ -77,6 +77,7 @@ import org.msgat.core.media.MemoryMediaSource
 import org.msgat.core.media.PendingPreparation
 import org.msgat.core.media.PreparationSendResult
 import org.msgat.core.media.RecordingMediaStore
+import org.msgat.core.media.RecordingReader
 import org.msgat.core.media.VideoTrim
 import org.msgat.core.network.MediaSendChoice
 import org.msgat.core.network.SendOptions
@@ -167,6 +168,20 @@ private fun inspectMedia(context: Context, uri: Uri, thumbnailLimit: Int? = null
     var name = "Attachment"
     var size: Long? = null
     try {
+        if (RecordingMediaStore.isRecording(context, uri)) {
+            val details = RecordingMediaStore.details(context, uri)
+            val video = details.mime.startsWith("video/")
+            val image = if (video && thumbnailLimit != null) runCatching {
+                RecordingReader(context, uri).use { input ->
+                    android.media.MediaMetadataRetriever().use { media ->
+                        media.setDataSource(input)
+                        media.getScaledFrameAtTime(0, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            thumbnailLimit, thumbnailLimit)
+                    }
+                }
+            }.getOrNull() else null
+            return SelectedMedia(uri, details.name, details.size, image, mime = details.mime, visualMedia = video, video = video)
+        }
         val columns = arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE)
         resolver.query(uri, columns, null, null, null)?.use { row ->
             if (row.moveToFirst()) {
@@ -456,7 +471,9 @@ internal fun MediaSendDialog(
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
-                val recording = uris.singleOrNull()?.takeIf { RecordingMediaStore.isRecording(context, it) }
+                val recording = uris.singleOrNull()?.takeIf {
+                    loaded[it]?.mime?.startsWith("audio/") == true && RecordingMediaStore.isRecording(context, it)
+                }
                 Column(
                     Modifier.weight(1f, fill = false)
                         .fillMaxWidth()
@@ -876,6 +893,7 @@ private fun AttachmentRecordingPlayback(selection: MediaConfirmation, uri: Uri, 
     DisposableEffect(selection, uri, lifecycle, attempt) {
         val owner = selection.retain()
         val media = MediaPlayer()
+        var reader: RecordingReader? = null
         player = media
         val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
             if (event == androidx.lifecycle.Lifecycle.Event.ON_PAUSE && playing) {
@@ -899,13 +917,13 @@ private fun AttachmentRecordingPlayback(selection: MediaConfirmation, uri: Uri, 
             true
         }
         try {
-            media.setDataSource(context, uri)
+            media.setDataSource(RecordingReader(context, uri).also { reader = it })
             media.prepareAsync()
         } catch (_: Exception) { failed = true }
         onDispose {
             lifecycle.removeObserver(observer)
             player = null
-            try { media.release() } finally { owner.close() }
+            try { media.release() } finally { try { reader?.close() } finally { owner.close() } }
         }
     }
     LaunchedEffect(previewBlocked) {

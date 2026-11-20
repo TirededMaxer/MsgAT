@@ -32,7 +32,6 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -40,6 +39,9 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.msgat.core.media.VideoCompression
 import org.msgat.core.media.VideoTrim
+import org.msgat.core.media.RecordingMediaStore
+import org.msgat.core.media.RecordingPlayback
+import org.msgat.core.media.RecordingReader
 import java.util.Locale
 import kotlin.math.abs
 import kotlin.math.roundToLong
@@ -80,8 +82,11 @@ internal fun VideoTrimDialog(
             duration = length
             withContext(Dispatchers.IO) {
                 val retriever = MediaMetadataRetriever()
+                var recordingReader: RecordingReader? = null
                 try {
-                    retriever.setDataSource(context, uri)
+                    if (RecordingMediaStore.isRecording(context, uri))
+                        retriever.setDataSource(RecordingReader(context, uri).also { recordingReader = it })
+                    else retriever.setDataSource(context, uri)
                     repeat(6) { index ->
                         ensureActive()
                         decoded += runCatching {
@@ -90,7 +95,7 @@ internal fun VideoTrimDialog(
                         }.getOrNull()
                     }
                 } finally {
-                    retriever.release()
+                    try { retriever.release() } finally { recordingReader?.close() }
                 }
             }
             ensureActive()
@@ -112,7 +117,7 @@ internal fun VideoTrimDialog(
     }
 
     val player = if (duration > 0L) remember(uri) {
-        ExoPlayer.Builder(context).build().apply {
+        RecordingPlayback.player(context, uri).apply {
             volume = if (muteAudio) 0f else 1f
             setMediaItem(VideoCompression.mediaItem(uri, null), range.start.roundToLong())
             prepare()

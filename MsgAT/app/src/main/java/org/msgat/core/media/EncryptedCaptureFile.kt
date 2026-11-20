@@ -29,6 +29,14 @@ internal class EncryptedCaptureStore(private val objects:EncryptedObjectStore,pr
         }}catch(cancelled:CancellationException){withContext(NonCancellable){created?.close()};throw cancelled}
     }
     internal fun stop(action:suspend()->Unit):Deferred<Unit> = stopScope.async{action()}
+    internal fun releaseOnIo(action: () -> Unit) {
+        stopScope.launch(Dispatchers.IO) {
+            try { action() } catch (error: Exception) {
+                // The store retains the file for another cleanup attempt when the vault drains.
+                android.util.Log.w("MsgATCapture", "Deferred recording cleanup failed", error)
+            }
+        }
+    }
     internal fun removed(file:EncryptedCaptureFile){synchronized(gate){files.remove(file)}}
     suspend fun close()=withContext(NonCancellable){
         val active=withContext(Dispatchers.IO){synchronized(gate){closed=true;files.toList()}}
@@ -118,12 +126,26 @@ internal class EncryptedCaptureFile internal constructor(
         SecurityCore.call(JSONObject().put("operation","import_capture_file").put("capture_id",handle).put("manifest",manifest)
             .put("directory",objectsDirectory.absolutePath).put("maximum_size",100L*1024*1024).put("work_id",preparation?.workID()?:JSONObject.NULL)).getJSONObject("manifest")
     }
-    private fun disposeNative(){
-        if(disposed)return
-        call("close_capture_file");disposed=true
-        try{objects.discardRecording(objectId)}finally{store.removed(this)}
+    private var stagingRemoved = false
+    private fun disposeNative() {
+        if (!disposed) {
+            call("close_capture_file")
+            disposed = true
+        }
+        if (!stagingRemoved) {
+            objects.discardRecording(objectId)
+            stagingRemoved = true
+            store.removed(this)
+        }
     }
-    private fun releaseReader(){synchronized(io){check(owners>0);owners--;if(owners==0 && !disposed)disposeNative()}}
+    private fun releaseReader() = synchronized(io) {
+        check(owners > 0)
+        owners--
+        if (owners == 0 && !disposed) {
+            draining = true
+            store.releaseOnIo { synchronized(io) { disposeNative() } }
+        }
+    }
     suspend fun close(){
         stopHardware()
         withContext(NonCancellable+Dispatchers.IO){synchronized(io){if(!producerReleased){producerReleased=true;owners--;if(owners==0 && !disposed)disposeNative()}}}

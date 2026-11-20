@@ -124,11 +124,15 @@ internal object VideoCompression {
     }
 
     private fun inspect(context: Context, uri: Uri): Input? {
-        val size = context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: return null
+        val recording = RecordingMediaStore.isRecording(context, uri)
+        val size = if (recording) RecordingMediaStore.details(context, uri).size
+            else context.contentResolver.openAssetFileDescriptor(uri, "r")?.use { it.length } ?: return null
         if (size !in 2..MaximumInput) return null
         val extractor = MediaExtractor()
+        var reader: RecordingReader? = null
         try {
-            extractor.setDataSource(context, uri, null)
+            if (recording) extractor.setDataSource(RecordingReader(context, uri).also { reader = it })
+            else extractor.setDataSource(context, uri, null)
             var video: MediaFormat? = null
             var audioCount = 0
             for (index in 0 until extractor.trackCount) {
@@ -158,7 +162,7 @@ internal object VideoCompression {
             val swap = rotation == 90 || rotation == 270
             return Input(size, if (swap) height else width, if (swap) width else height, duration / 1000, audioCount > 0)
         } finally {
-            extractor.release()
+            try { extractor.release() } finally { reader?.close() }
         }
     }
 
@@ -235,6 +239,14 @@ internal object VideoCompression {
                         override fun videoNeedsEncoding() = true
                     }
                     val active = Transformer.Builder(context)
+                        .apply {
+                            if (RecordingMediaStore.isRecording(context, uri)) {
+                                setAssetLoaderFactory(androidx.media3.transformer.ExoPlayerAssetLoader.Factory(
+                                    context, androidx.media3.transformer.DefaultDecoderFactory.Builder(context).build(),
+                                    androidx.media3.common.util.Clock.DEFAULT, RecordingPlayback.factory(context, uri)
+                                ))
+                            }
+                        }
                         .setLooper(thread.looper)
                         .setEncoderFactory(encoderFactory)
                         .setVideoMimeType(MimeTypes.VIDEO_H264)

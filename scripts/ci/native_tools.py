@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import time
+import urllib.error
 import urllib.request
 
 
@@ -29,7 +31,20 @@ def main():
     digest = hashlib.sha256()
     size = 0
     try:
-        with urllib.request.urlopen(url, timeout=60) as response, executable.open('wb') as output:
+        for attempt in range(4):
+            try:
+                response = urllib.request.urlopen(url, timeout=60)
+                break
+            except urllib.error.HTTPError as error:
+                with error:
+                    if error.code not in (429, 502, 503, 504) or attempt == 3:
+                        raise
+                    retry_after = error.headers.get('Retry-After', '')
+                    delay = int(retry_after) if retry_after.isdecimal() else 10 * 2**attempt
+                    if delay > 120:
+                        raise
+                time.sleep(max(1, delay))
+        with response, executable.open('wb') as output:
             while chunk := response.read(1024 * 1024):
                 size += len(chunk)
                 if size > 32 * 1024 * 1024:

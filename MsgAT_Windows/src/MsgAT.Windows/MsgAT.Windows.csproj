@@ -17,6 +17,8 @@
     <PlatformTarget>x64</PlatformTarget>
     <WindowsPackageType>None</WindowsPackageType>
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <!-- The call surface and the encrypted media viewer use the desktop WebView2 API. -->
+    <WebView2EnableCsWinRTProjection>false</WebView2EnableCsWinRTProjection>
     <EnableMsixTooling>true</EnableMsixTooling>
     <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>

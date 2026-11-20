@@ -16,13 +16,13 @@ namespace MsgAT.Windows.Presentation;
 public sealed class ConversationListHost : WorkspaceHost
 {
     private NativeList? _list;
-    private readonly HashSet<ConversationRow> _active = [];
+    private readonly Dictionary<string, Entry> _entries = new(StringComparer.Ordinal);
     private (string Scope, string Peer)? _drag;
     private bool _updating;
     private bool _refreshQueued;
     private MainViewModel? _subscribed;
-    private readonly Dictionary<string, ConversationItem> _items = new(StringComparer.Ordinal);
-    private ConversationItem? Item(object? key) => key is string id ? _items.GetValueOrDefault(id) : null;
+    private static ConversationItem? Item(object? key) => (key as Entry)?.Item;
+    private Entry? SelectedEntry() => Model?.SelectedConversation is { } selected ? _entries.GetValueOrDefault(selected.Uuid) : null;
     internal Action<ConversationItem>? Choose { get; set; }
     internal Func<ConversationItem, System.Windows.Controls.ContextMenu?>? MenuFor { get; set; }
 
@@ -31,7 +31,6 @@ public sealed class ConversationListHost : WorkspaceHost
         var list = new NativeList { SelectionMode = ListViewSelectionMode.Single,
             IsItemClickEnabled = true, CanDragItems = true, AllowDrop = true, Padding = new Thickness(2, 2, 2, 8) };
         _list = list;
-        list.ContainerContentChanging += ContainerChanged;
         list.ItemClick += (_, args) => { if (Item(args.ClickedItem) is { } target) ChooseItem(target); };
         list.SelectionChanged += (_, args) =>
         {
@@ -76,33 +75,52 @@ public sealed class ConversationListHost : WorkspaceHost
     {
         if (_list is not { } list) return;
         _updating = true;
-        try { list.SelectedItem = Model?.SelectedConversation?.Uuid; }
+        try { list.SelectedItem = SelectedEntry(); }
         finally { _updating = false; }
     }
 
-    internal void ScrollIntoView(ConversationItem item) => _list?.ScrollIntoView(item.Uuid);
-
-    private void ContainerChanged(ListViewBase sender, ContainerContentChangingEventArgs args)
+    internal void ScrollIntoView(ConversationItem item)
     {
-        var container = args.ItemContainer;
-        if (container.Tag is not ConversationRow row)
+        if (_entries.TryGetValue(item.Uuid, out var entry)) _list?.ScrollIntoView(entry);
+    }
+
+    // Keep the native container stable across selection and reorder. Create the
+    // avatar and formatted preview only while the row occupies the viewport.
+    private sealed class Entry : ListViewItem
+    {
+        internal ConversationItem Item { get; private set; }
+
+        internal Entry(ConversationItem item)
         {
-            row = new ConversationRow();
-            container.Tag = row;
-            container.HorizontalContentAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Stretch;
-            container.Padding = new Thickness(8, 0, 8, 0);
+            Item = item;
+            MinHeight = 64;
+            HorizontalContentAlignment = Microsoft.UI.Xaml.HorizontalAlignment.Stretch;
+            Padding = new Thickness(8, 2, 8, 2);
+            AutomationProperties.SetName(this, item.Alias);
+            Loaded += (_, _) =>
+            {
+                if (Content is not ConversationRow)
+                {
+                    var row = new ConversationRow();
+                    row.Present(Item);
+                    Content = row;
+                }
+            };
+            Unloaded += (_, _) => Detach();
         }
-        if (args.InRecycleQueue || Item(args.Item) is not { } item)
+
+        internal void Update(ConversationItem item)
         {
-            row.Present(null);
-            _active.Remove(row);
-            return;
+            if (!ReferenceEquals(Item, item) && Content is ConversationRow row) row.Present(item);
+            Item = item;
+            AutomationProperties.SetName(this, item.Alias);
         }
-        _active.Add(row);
-        row.Present(item);
-        container.Content = row;
-        AutomationProperties.SetName(container, item.Alias);
-        args.Handled = true;
+
+        internal void Detach()
+        {
+            if (Content is ConversationRow row) row.Present(null);
+            Content = null;
+        }
     }
 
     private ListViewItem? FindRow(object source)
@@ -153,27 +171,26 @@ public sealed class ConversationListHost : WorkspaceHost
         _updating = true;
         try
         {
-            _items.Clear();
-            foreach (var item in visible) _items.Add(item.Uuid, item);
-            for (var index = list.Items.Count - 1; index >= 0; index--)
-                if (Item(list.Items[index]) is null) list.Items.RemoveAt(index);
-
+            var retained = visible.Select(item => item.Uuid).ToHashSet(StringComparer.Ordinal);
+            foreach (var (id, entry) in _entries.ToArray())
+            {
+                if (retained.Contains(id)) continue;
+                list.Items.Remove(entry);
+                entry.Detach();
+                _entries.Remove(id);
+            }
             for (var index = 0; index < visible.Length; index++)
             {
                 var item = visible[index];
-                if (index >= list.Items.Count || !Equals(list.Items[index], item.Uuid))
-                {
-                    var existing = list.Items.IndexOf(item.Uuid);
-                    if (existing >= 0) list.Items.RemoveAt(existing);
-                    list.Items.Insert(index, item.Uuid);
-                }
-                if (list.ContainerFromIndex(index) is ListViewItem { Tag: ConversationRow row } container)
-                {
-                    row.Present(item);
-                    AutomationProperties.SetName(container, item.Alias);
-                }
+                if (!_entries.TryGetValue(item.Uuid, out var entry))
+                    _entries[item.Uuid] = entry = new Entry(item);
+                else entry.Update(item);
+                if (index < list.Items.Count && ReferenceEquals(list.Items[index], entry)) continue;
+                int previous = list.Items.IndexOf(entry);
+                if (previous >= 0) list.Items.RemoveAt(previous);
+                list.Items.Insert(index, entry);
             }
-            list.SelectedItem = Model?.SelectedConversation?.Uuid;
+            list.SelectedItem = SelectedEntry();
         }
         finally { _updating = false; }
     }
@@ -189,14 +206,14 @@ public sealed class ConversationListHost : WorkspaceHost
         AutomationProperties.SetName(_list, AppStrings.Get("UiAllChats"));
         if (!System.Windows.SystemParameters.HighContrast) _list.Background = ColorBrush("MessagingSidebarColor");
         else _list.ClearValue(Control.BackgroundProperty);
-        foreach (var row in _active) row.RefreshColors();
+        foreach (var entry in _entries.Values) (entry.Content as ConversationRow)?.RefreshColors();
     }
 
     protected override void ReleaseContent()
     {
         base.ReleaseContent();
-        foreach (var row in _active) row.Present(null);
-        _active.Clear();
+        foreach (var entry in _entries.Values) entry.Detach();
+        _entries.Clear();
         _list = null;
     }
 }

@@ -1040,8 +1040,8 @@ public struct ChatView: View {
             clearFloatingTimelineDay()
         }
         .toolbar {
-            ToolbarItem(placement:.primaryAction) {
-                if viewModel.isSelecting {
+            if viewModel.isSelecting {
+                ToolbarItem(placement: .primaryAction) {
                     let selectionCanBeKept = !viewModel.messages.contains {
                         viewModel.selectedMessages.contains($0.id) && $0.expiresAt != nil
                     }
@@ -1073,48 +1073,56 @@ public struct ChatView: View {
                             .help(interfaceText("cancel_message_selection")).accessibilityLabel(interfaceText("cancel_message_selection"))
                             .disabled(viewModel.savingSelection)
                     }
-                } else {
-                    HStack {
-                        Button {
-                            CallManager.shared.startOutgoingCall(peerUuid: viewModel.targetUuid)
-                        } label: {
-                            Image(systemName: "phone")
-                        }.help(interfaceText("voice_call")).accessibilityLabel(interfaceText("voice_call")).disabled(!viewModel.canCompose)
-                        Button {
-                            CallManager.shared.startOutgoingCall(peerUuid: viewModel.targetUuid, video: true)
-                        } label: {
-                            Image(systemName: "video")
-                        }.help(interfaceText("video_call")).accessibilityLabel(interfaceText("video_call")).disabled(!viewModel.canCompose)
-                        Button(action: onSearch) {
-                            Image(systemName: "magnifyingglass")
-                        }.help(interfaceText("search_messages")).accessibilityLabel(interfaceText("search_messages")).keyboardShortcut("f", modifiers: .command)
-                        if !compactChatToolbar {
-                            ConversationMuteMenu(muteUntil: viewModel.muteUntil, onChange: changeMute)
-                        }
-                        Menu {
-                            if compactChatToolbar {
-                                Menu(interfaceText("conversation_notifications")) {
-                                    ConversationMuteMenuItems(muteUntil: viewModel.muteUntil, onChange: changeMute)
-                                }
-                                Divider()
-                            }
-                            Button { showHistoryNavigation = true } label: { Label(interfaceText("history_navigation"), systemImage: "calendar") }
-                            Button { showSendQueue = true } label: { Label(interfaceText("sending_queue"), systemImage: "clock") }
-                            Button {
-                                if showAttachmentMenu { closeAttachmentMenu() }
-                                closeStickers(restoreFocus: false)
-                                startScheduled = false
-                                showSendOptions = true
-                            } label: {
-                                Label(interfaceText("send_options"), systemImage: "slider.horizontal.3")
-                            }.disabled(!viewModel.canCompose || editingMessage != nil || stickerBusy)
-                        } label: {
-                            Image(systemName: "ellipsis.circle")
-                        }
-                        .menuIndicator(.hidden)
-                        .help(interfaceText("chat_actions"))
-                        .accessibilityLabel(interfaceText("chat_actions"))
+                }
+            } else {
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        CallManager.shared.startOutgoingCall(peerUuid: viewModel.targetUuid)
+                    } label: {
+                        Image(systemName: "phone")
+                    }.help(interfaceText("voice_call")).accessibilityLabel(interfaceText("voice_call")).disabled(!viewModel.canCompose)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        CallManager.shared.startOutgoingCall(peerUuid: viewModel.targetUuid, video: true)
+                    } label: {
+                        Image(systemName: "video")
+                    }.help(interfaceText("video_call")).accessibilityLabel(interfaceText("video_call")).disabled(!viewModel.canCompose)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: onSearch) {
+                        Image(systemName: "magnifyingglass")
+                    }.help(interfaceText("search_messages")).accessibilityLabel(interfaceText("search_messages")).keyboardShortcut("f", modifiers: .command)
+                }
+                if !compactChatToolbar {
+                    ToolbarItem(placement: .primaryAction) {
+                        ConversationMuteMenu(muteUntil: viewModel.muteUntil, onChange: changeMute)
                     }
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        if compactChatToolbar {
+                            Menu(interfaceText("conversation_notifications")) {
+                                ConversationMuteMenuItems(muteUntil: viewModel.muteUntil, onChange: changeMute)
+                            }
+                            Divider()
+                        }
+                        Button { showHistoryNavigation = true } label: { Label(interfaceText("history_navigation"), systemImage: "calendar") }
+                        Button { showSendQueue = true } label: { Label(interfaceText("sending_queue"), systemImage: "clock") }
+                        Button {
+                            if showAttachmentMenu { closeAttachmentMenu() }
+                            closeStickers(restoreFocus: false)
+                            startScheduled = false
+                            showSendOptions = true
+                        } label: {
+                            Label(interfaceText("send_options"), systemImage: "slider.horizontal.3")
+                        }.disabled(!viewModel.canCompose || editingMessage != nil || stickerBusy)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuIndicator(.hidden)
+                    .help(interfaceText("chat_actions"))
+                    .accessibilityLabel(interfaceText("chat_actions"))
                 }
             }
             if #available(macOS 26.0, *) {

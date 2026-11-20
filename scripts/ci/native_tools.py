@@ -27,17 +27,19 @@ def main():
     directory = Path(os.environ['RUNNER_TEMP']) / 'msgat-native-tools'
     directory.mkdir(exist_ok=True)
     executable = directory / ('protoc.exe' if os.name == 'nt' else 'protoc')
-    url = f'https://repo.maven.apache.org/maven2/com/google/protobuf/protoc/3.25.5/protoc-3.25.5-{classifier}.exe'
+    artifact = f'com/google/protobuf/protoc/3.25.5/protoc-3.25.5-{classifier}.exe'
+    repositories = ('https://repo.maven.apache.org/maven2', 'https://maven-central.storage-download.googleapis.com/maven2')
     digest = hashlib.sha256()
     size = 0
     try:
         for attempt in range(4):
             try:
-                response = urllib.request.urlopen(url, timeout=60)
+                repository = repositories[attempt % len(repositories)]
+                response = urllib.request.urlopen(f'{repository}/{artifact}', timeout=60)
                 break
             except urllib.error.HTTPError as error:
                 with error:
-                    if error.code not in (429, 502, 503, 504) or attempt == 3:
+                    if error.code not in (404, 429, 502, 503, 504) or attempt == 3:
                         raise
                     retry_after = error.headers.get('Retry-After', '')
                     delay = int(retry_after) if retry_after.isdecimal() else 10 * 2**attempt

@@ -10,6 +10,7 @@ namespace MsgAT.Windows.Presentation;
 public sealed class ChatEditorHost : WinUIHost
 {
     private TextBox? _editor;
+    private Grid? _surface;
     private bool _nativeUpdate;
     public static readonly Wpf.DependencyProperty TextProperty = Wpf.DependencyProperty.Register(nameof(Text),
         typeof(string), typeof(ChatEditorHost), new Wpf.FrameworkPropertyMetadata("", Wpf.FrameworkPropertyMetadataOptions.BindsTwoWayByDefault, UpdateValue));
@@ -72,7 +73,9 @@ public sealed class ChatEditorHost : WinUIHost
         editor.ContextFlyout = flyout;
         editor.SelectionFlyout = flyout;
         UpdateEditor();
-        return editor;
+        _surface = new Grid();
+        _surface.Children.Add(editor);
+        return _surface;
     }
 
     private static void UpdateValue(Wpf.DependencyObject target, Wpf.DependencyPropertyChangedEventArgs args) =>
@@ -150,6 +153,12 @@ public sealed class ChatEditorHost : WinUIHost
     protected override void RefreshPresentation()
     {
         if (_editor is not { } editor) return;
+        if (_surface is { } surface)
+        {
+            surface.Background = Wpf.SystemParameters.HighContrast
+                ? new Microsoft.UI.Xaml.Media.SolidColorBrush(new global::Windows.UI.ViewManagement.UISettings().UIElementColor(global::Windows.UI.ViewManagement.UIElementType.Window))
+                : WorkspaceHost.ColorBrush("MessagingChromeColor");
+        }
         editor.PlaceholderText = AppStrings.Get(PlaceholderKey);
         AutomationProperties.SetName(editor, editor.PlaceholderText);
     }
@@ -158,5 +167,6 @@ public sealed class ChatEditorHost : WinUIHost
     {
         Composing = false;
         _editor = null;
+        _surface = null;
     }
 }

@@ -29,7 +29,7 @@ public sealed class WorkspaceBarHost : WorkspaceHost
         _status = new TextBlock { FontSize = 12, MaxLines = 1, TextTrimming = TextTrimming.CharacterEllipsis };
         labels.Children.Add(_status);
         grid.Children.Add(labels);
-        _menu = new Button { Content = new FontIcon { Glyph = "\uE710", FontSize = 18 }, Width = 36, Height = 36,
+        _menu = new Button { Content = new FontIcon { Glyph = "\uE700", FontSize = 18 }, Width = 36, Height = 36,
             Padding = new Thickness(0), BorderThickness = new Thickness(0), Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent) };
         _menu.Click += (_, _) => { if (MenuFor?.Invoke() is { } menu) NativeMenu.From(menu.Items).ShowAt(_menu); };
         Grid.SetColumn(_menu, 1);

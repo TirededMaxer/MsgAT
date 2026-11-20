@@ -32,8 +32,8 @@ public partial class App : System.Windows.Application
 
         try
         {
-            Presentation.DesktopXamlRuntime.Start();
             Infrastructure.AppStrings.SetLanguage(Infrastructure.AppLanguage.System);
+            Presentation.DesktopXamlRuntime.Start();
             Infrastructure.WindowAppearance.StartObserving();
             _mainWindow = new MainWindow();
             MainWindow = _mainWindow;
@@ -43,7 +43,10 @@ public partial class App : System.Windows.Application
         catch (Exception exception)
         {
             Trace.TraceError("Application startup failed: {0}", exception);
-            MessageBox.Show(exception.Message, "MsgAT could not start", MessageBoxButton.OK, MessageBoxImage.Error);
+            var reason = string.IsNullOrWhiteSpace(exception.Message)
+                ? Infrastructure.AppStrings.Get("UiStartupServicesUnavailable") : exception.Message;
+            MessageBox.Show($"{reason}{Environment.NewLine}{exception.GetType().Name} (0x{exception.HResult:X8})",
+                Infrastructure.AppStrings.Get("UiAppStartError"), MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
         }
     }

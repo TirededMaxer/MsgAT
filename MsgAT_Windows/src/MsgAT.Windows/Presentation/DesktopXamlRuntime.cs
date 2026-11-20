@@ -32,8 +32,16 @@ internal static partial class DesktopXamlRuntime
 
     private sealed class IslandApplication : Microsoft.UI.Xaml.Application, IXamlMetadataProvider
     {
-        private readonly XamlControlsXamlMetaDataProvider _types = new();
-        internal WindowsXamlManager Manager { get; } = WindowsXamlManager.InitializeForCurrentThread();
+        private readonly XamlControlsXamlMetaDataProvider _types;
+        internal WindowsXamlManager Manager { get; }
+
+        internal IslandApplication()
+        {
+            // Initializing the manager in a field initializer creates a default XAML application
+            // before the base constructor can register this application and its metadata provider.
+            _types = new XamlControlsXamlMetaDataProvider();
+            Manager = WindowsXamlManager.InitializeForCurrentThread();
+        }
         protected override void OnLaunched(Microsoft.UI.Xaml.LaunchActivatedEventArgs args) =>
             Resources.MergedDictionaries.Add(new XamlControlsResources());
         IXamlType IXamlMetadataProvider.GetXamlType(Type type) => _types.GetXamlType(type);

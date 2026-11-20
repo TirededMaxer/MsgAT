@@ -46,7 +46,7 @@ internal fun VideoRecordingDialog(onDismiss:()->Unit,onRecorded:(RecordingMediaS
     val active=remember{java.util.concurrent.atomic.AtomicBoolean(true)}
     val previewView=remember{PreviewView(context).apply{implementationMode=PreviewView.ImplementationMode.COMPATIBLE;scaleType=PreviewView.ScaleType.FIT_CENTER}}
     val preview=remember{Preview.Builder().build().also{it.setSurfaceProvider(previewView.surfaceProvider)}}
-    val recorder=remember{Recorder.Builder().setQualitySelector(QualitySelector.fromOrderedList(listOf(Quality.HD,Quality.SD),FallbackStrategy.lowerQualityThan(Quality.SD))).build()}
+    val recorder=remember{CameraPipeMuxer.useWith(Recorder.Builder()).setQualitySelector(QualitySelector.fromOrderedList(listOf(Quality.HD,Quality.SD),FallbackStrategy.lowerQualityThan(Quality.SD))).build()}
     val video=remember{VideoCapture.withOutput(recorder)}
     var provider by remember{mutableStateOf<ProcessCameraProvider?>(null)}
     val controller=remember{VideoRecordingController(context,org.msgat.MsgATApp.instance.nettyClient.objects.captures){provider?.unbind(preview,video)}}

@@ -15,7 +15,7 @@ internal class VideoRecordingController(context:Context,private val captures:Enc
     private val context=context.applicationContext
     private val mutex=Mutex()
     private var file:EncryptedCaptureFile?=null
-    private var descriptor:CaptureDescriptor?=null
+    private var pipe:CapturePipe?=null
     private var recording:Recording?=null
     private var microphone: MicrophoneOwnership.RecordingLease? = null
     private var finalized:CompletableDeferred<Unit>?=null
@@ -32,9 +32,21 @@ internal class VideoRecordingController(context:Context,private val captures:Enc
             if (sound) microphone = MicrophoneOwnership.startRecording(::yieldMicrophone)
             val output=captures.open("Video-${System.currentTimeMillis()}.mp4","video/mp4",stopWriter={stopDevice()})
             file=output
-            val bridge=withContext(Dispatchers.IO){CaptureDescriptor.open(context,output,true)};descriptor=bridge
+            val bridge=CapturePipe({ input ->
+                val buffer=ByteArray(64*1024)
+                var offset=0L
+                try {
+                    while(true) {
+                        val count=input.read(buffer)
+                        if(count<0) break
+                        output.write(offset,buffer,0,count)
+                        offset+=count
+                    }
+                } finally { buffer.fill(0) }
+            }, { error.value="The video recording could not be written";autoFinished.value=true })
+            pipe=bridge
             val completed=CompletableDeferred<Unit>();finalized=completed
-            val options=FileDescriptorOutputOptions.Builder(bridge.descriptor).setFileSizeLimit(95L*1024*1024).setDurationLimitMillis(10*60*1000L).build()
+            val options=FileDescriptorOutputOptions.Builder(bridge.writer).setFileSizeLimit(95L*1024*1024).setDurationLimitMillis(10*60*1000L).build()
             var pending=recorder.prepareRecording(context,options)
             if(sound)pending=pending.withAudioEnabled()
             recording=pending.start(ContextCompat.getMainExecutor(context)){event->
@@ -64,19 +76,22 @@ internal class VideoRecordingController(context:Context,private val captures:Enc
 
     private suspend fun stopDevice()=withContext(NonCancellable){
         val completion=withContext(Dispatchers.Main.immediate){mutex.withLock{recording?.let{it.stop();finalized}}}
-        completion?.await()
+        if (completion != null && withTimeoutOrNull(8_000) { completion.await(); true } == null) {
+            failure="Video recording could not be finalized"
+            withContext(Dispatchers.Main.immediate) { stopCamera() }
+        }
         withContext(Dispatchers.Main.immediate){mutex.withLock{
             recording?.close();recording=null
             microphone?.close();microphone=null
             stopCamera()
         }}
-        val bridge=mutex.withLock{val value=descriptor;descriptor=null;value}
-        withContext(Dispatchers.IO){bridge?.closeAndDrain()}
+        val bridge=mutex.withLock{val value=pipe;pipe=null;value}
+        try { bridge?.finish() } catch (_: Exception) { failure="Video recording could not be finalized" }
     }
     suspend fun finish():EncryptedCaptureFile {
         val output=mutex.withLock{file?:kotlin.error("No recording is active")}
         output.freeze()
-        mutex.withLock{failure?.let{throw java.io.IOException(it)};phase.value=RecordingPhase.READY}
+        mutex.withLock{(failure ?: error.value)?.let{throw java.io.IOException(it)};phase.value=RecordingPhase.READY}
         return output
     }
     suspend fun close()=withContext(NonCancellable){

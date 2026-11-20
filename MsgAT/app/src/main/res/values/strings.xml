@@ -442,6 +442,7 @@
     <string name="ui_attachment_gallery_access">Choose gallery access</string>
     <string name="ui_attachment_gallery_unavailable">Gallery could not be loaded.</string>
     <string name="ui_attachment_camera">Camera</string>
+    <string name="ui_play_video">Play video</string>
     <string name="ui_attachment_record_video">Record video</string>
     <string name="ui_capture_take_photo">Take photo</string>
     <string name="ui_capture_review_photo">Review photo</string>

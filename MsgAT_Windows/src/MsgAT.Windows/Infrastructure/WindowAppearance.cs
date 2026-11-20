@@ -21,20 +21,21 @@ internal static class WindowAppearance
     private static readonly (string Resource, int Rgb)[] LightPalette =
     [
         ("WindowColor", 0xE9EEEB), ("PanelColor", 0xF0F4F2), ("SurfaceColor", 0xFFFFFF),
-        ("RaisedColor", 0xE3EBE7), ("BorderColor", 0xA8B9B0), ("TextColor", 0x182923),
+        ("RaisedColor", 0xE8EEEA), ("BorderColor", 0xBFCDC3), ("TextColor", 0x172620),
         ("MutedColor", 0x455B50), ("AccentColor", 0x78C6A8), ("AccentHoverColor", 0x66BA98),
         ("AccentTextColor", 0x125D40), ("ConnectionDotColor", 0x1F855B), ("ConnectionColor", 0x155D41),
         ("DangerColor", 0xA62339),
-        ("MessagingTimelineColor", 0xEAF0ED), ("MessagingChromeColor", 0xFBFCFB),
-        ("MessagingSidebarColor", 0xDCE7E1), ("MessagingSelectionColor", 0xC5DECF),
-        ("MessagingDividerColor", 0xA5B8AE), ("MessagingSelectionMarkColor", 0x176144),
-        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xD2EADD),
+        ("MessagingTimelineColor", 0xF4F7F5), ("MessagingChromeColor", 0xFCFDFC),
+        ("MessagingSidebarColor", 0xEAF0EB), ("MessagingSelectionColor", 0xD3E7DA),
+        ("MessagingDividerColor", 0xCAD6CE), ("MessagingSelectionMarkColor", 0x176144),
+        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xDCEFE4),
         ("MessagingMetadataColor", 0x45594F)
     ];
     private static (Color Dark, PaletteColor Source)[]? _palette;
     private static UISettings? _systemSettings;
     private static bool _dark = true;
     public static AppThemeMode Theme { get; private set; }
+    internal static event EventHandler? Changed;
 
     public static void StartObserving()
     {
@@ -68,7 +69,7 @@ internal static class WindowAppearance
     {
         Theme = Enum.IsDefined(mode) ? mode : AppThemeMode.System;
         var dark = Theme == AppThemeMode.Dark || (Theme == AppThemeMode.System && IsSystemDark());
-        if (dark == _dark) return;
+        if (dark == _dark) { Changed?.Invoke(null, EventArgs.Empty); return; }
         var app = Application.Current;
         var resources = app.Resources;
         var palette = _palette ??= BindPalette(resources);
@@ -82,6 +83,7 @@ internal static class WindowAppearance
             resources[resource] = color;
         }
         foreach (Window window in app.Windows) Refresh(window);
+        Changed?.Invoke(null, EventArgs.Empty);
     }
 
     private static (Color Dark, PaletteColor Source)[] BindPalette(ResourceDictionary resources)

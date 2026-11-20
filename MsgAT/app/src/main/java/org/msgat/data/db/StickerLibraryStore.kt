@@ -77,8 +77,11 @@ internal class StickerLibraryStore(private val database: AppDatabase,private val
                 }
                 currentCoroutineContext().ensureActive()
                 withContext(NonCancellable){database.withTransaction {
-                    val db=database.openHelper.writableDatabase;val now=System.currentTimeMillis();val destination=packId?:UUID.randomUUID().toString()
-                    if(packId==null)db.execSQL("INSERT INTO sticker_packs(id,name,created_at) VALUES(?,?,?)",arrayOf(destination,name,now))
+                    val db=database.openHelper.writableDatabase
+                    val now=System.currentTimeMillis()
+                    val existing=packId ?: text(db,"SELECT id FROM sticker_packs WHERE name=? ORDER BY created_at,id LIMIT 1",arrayOf(name))
+                    val destination=existing ?: UUID.randomUUID().toString()
+                    if(existing==null)db.execSQL("INSERT INTO sticker_packs(id,name,created_at) VALUES(?,?,?)",arrayOf(destination,name,now))
                     else check(exists(db,"SELECT 1 FROM sticker_packs WHERE id=?",arrayOf(destination))){"Selected sticker group was deleted"}
                     var position=number(db,"SELECT COALESCE(MAX(position),-1)+1 FROM sticker_pack_items WHERE pack_id=?",arrayOf(destination));var added=0
                     for(row in prepared){var id=text(db,"SELECT id FROM sticker_items WHERE sha256=?",arrayOf(row.sha))

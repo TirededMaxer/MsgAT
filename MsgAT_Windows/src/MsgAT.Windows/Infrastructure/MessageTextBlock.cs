@@ -167,9 +167,9 @@ public sealed class MessageTextBlock:TextBlock
         catch (Exception error) when (error is System.Security.Cryptography.CryptographicException or
             InvalidOperationException or IOException or JsonException or KeyNotFoundException or ArgumentException) { }
     }
-    private static Block[] Parse(string text,bool summary)
+    private static Block[] Parse(string text,bool summary,string? hiddenLabel)
     {
-        if(summary){var value=SecurityCore.Call(new{operation="summarize_message_text",text=text,limit=240});return [new Block("paragraph","",[new Part(value.GetProperty("text").GetString()!,0,0,null)])];}
+        if(summary){var value=SecurityCore.Call(new{operation="summarize_message_text",text=text,limit=240,hidden_label=hiddenLabel});return [new Block("paragraph","",[new Part(value.GetProperty("text").GetString()!,0,0,null)])];}
         var result=SecurityCore.Call(new {operation="render_message_text",text=text});
         if(result.GetProperty("version").GetInt32()!=1)throw new InvalidOperationException("Unknown text renderer.");
         return result.GetProperty("blocks").EnumerateArray().Select(block=>new Block(block.GetProperty("kind").GetString()!,block.GetProperty("language").GetString()!,
@@ -318,7 +318,8 @@ public sealed class MessageTextBlock:TextBlock
     private async Task LoadAsync(string text,bool summary,long generation,CancellationToken token)
     {
         IReadOnlyList<Block> document;
-        try {document=await Task.Run(()=>Parse(text,summary),token);}
+        var hiddenLabel = summary ? AppStrings.Get("UiHiddenMessageText") : null;
+        try {document=await Task.Run(()=>Parse(text,summary,hiddenLabel),token);}
         catch(OperationCanceledException){return;}
         catch(Exception error) when(error is InvalidOperationException or JsonException or KeyNotFoundException){document=[new Block("paragraph","",[new Part(AppStrings.Get("UiMessageFormattingUnavailable"),0,0,null)])];}
         if(token.IsCancellationRequested || generation!=_generation || !IsLoaded)return;

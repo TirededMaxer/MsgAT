@@ -4,10 +4,12 @@ import AVFoundation
 
 @MainActor
 public final class AppDelegate: NSObject, NSApplicationDelegate {
+    private(set) static weak var running: AppDelegate?
     private var activityObservers=[NSObjectProtocol]()
     private var workspaceObservers = [NSObjectProtocol]()
     private var drainingTermination=false
     private var terminationDrained=false
+    private var awaitingTerminationReply = false
     private var requestedMicrophone = false
     private func updateActivityForeground(){
         guard !drainingTermination,KeychainManager.startupFailure == nil,AppDatabase.startupFailure == nil else {return}
@@ -26,6 +28,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
 
     public func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.running = self
         guard KeychainManager.startupFailure == nil,AppDatabase.startupFailure == nil else { return }
         AppLockSession.shared.load()
         IdentityRevocationWorker.shared.start()
@@ -69,7 +72,18 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     public func applicationShouldTerminate(_ sender:NSApplication)->NSApplication.TerminateReply {
         guard KeychainManager.startupFailure == nil,AppDatabase.startupFailure == nil,!terminationDrained else{return .terminateNow}
-        guard !drainingTermination else{return .terminateLater}
+        awaitingTerminationReply = true
+        drainForTermination(sender)
+        return .terminateLater
+    }
+
+    func quitAfterIdentityReset() {
+        // Finish asynchronous owners before AppKit can enter its nested termination loop.
+        drainForTermination(NSApp)
+    }
+
+    private func drainForTermination(_ sender: NSApplication) {
+        guard !drainingTermination else { return }
         drainingTermination=true
         activityObservers.forEach(NotificationCenter.default.removeObserver)
         activityObservers.removeAll()
@@ -109,9 +123,12 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             terminationDrained=true
-            sender.reply(toApplicationShouldTerminate:true)
+            if awaitingTerminationReply {
+                sender.reply(toApplicationShouldTerminate: true)
+            } else {
+                sender.terminate(nil)
+            }
         }
-        return .terminateLater
     }
 
     public func applicationDidBecomeActive(_ notification: Notification) {

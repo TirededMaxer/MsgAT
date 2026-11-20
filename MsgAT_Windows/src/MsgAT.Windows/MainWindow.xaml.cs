@@ -16,6 +16,7 @@ using MsgAT.Windows.Core.Models;
 using MsgAT.Windows.Core.Network;
 using MsgAT.Windows.Core.Storage;
 using MsgAT.Windows.ViewModels;
+using MsgAT.Windows.Presentation;
 using MsgAT.Windows.Views;
 using MsgAT.Windows.Infrastructure;
 using ScaleTransform = System.Windows.Media.ScaleTransform;
@@ -80,8 +81,10 @@ public partial class MainWindow : Window
     private void UpdateChatColumnLayout(double width)
     {
         const double maximumChatColumnWidth = 856;
+        var compact = width < 600;
         var inset = Math.Max(0, (width - maximumChatColumnWidth) / 2);
-        MessageList.Padding = new Thickness(16 + inset, 8, 16 + inset, 8);
+        var margin = (compact ? 10 : 16) + inset;
+        MessageList.Padding = new Thickness(margin, 8, margin, 8);
         ComposerLayout.Margin = new Thickness(inset, 0, inset, 0);
         AttachmentPanel.Margin = new Thickness(8 + inset, 0, 8 + inset, 6);
         StickerHost.Margin = new Thickness(8 + inset, 0, 10 + inset, 7);
@@ -210,7 +213,7 @@ public partial class MainWindow : Window
     private RecordingDialog? _recordingDialog;
     private AttachmentPreview? _inlineAudioPreview;
     private double _inlineAudioSpeed = 1;
-    private bool _editImeComposing;
+    private bool _editImeComposing => EditComposer.Composing;
     private bool _allowClose;
     private bool _loadingOlderMessages;
     private bool _sendCancellationPending;
@@ -224,7 +227,7 @@ public partial class MainWindow : Window
     private readonly System.Windows.Threading.DispatcherTimer _timelineDateTimer = new() { Interval = TimeSpan.FromMilliseconds(1600) };
     private bool _exiting;
     private Task<AppServices>? _initialization;
-    private bool _imeComposing;
+    private bool _imeComposing => Composer.Composing;
     private const double DefaultSidebarRatio = 330d / 1040d;
     private double _preferredSidebarRatio = DefaultSidebarRatio;
     private double _sidebarWidthBeforeKey;
@@ -235,30 +238,35 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
+        ConversationList.Choose = SelectConversationRow;
+        ConversationList.MenuFor = CreateConversationMenu;
+        ChatHeader.InvokeAction = PerformHeaderAction;
+        ChatHeader.NotificationMenu = CreateNotificationMenu;
         _jumpHighlightTimer.Tick += (_, _) => ClearJumpHighlight();
         _timelineDateTimer.Tick += (_, _) =>
         {
             if (!FloatingTimelineDate.IsMouseOver && !FloatingTimelineDate.IsKeyboardFocusWithin) ClearFloatingTimelineDate(fade: true);
         };
         AttachAppLock();
-        CommandManager.AddPreviewCanExecuteHandler(Composer, Composer_PreviewCanExecute);
-        CommandManager.AddPreviewExecutedHandler(Composer, Composer_PreviewExecuted);
-        CommandManager.AddPreviewExecutedHandler(Composer, Composer_SecureCopyOrCut);
-        CommandManager.AddPreviewExecutedHandler(EditComposer, Composer_SecureCopyOrCut);
-        TextCompositionManager.AddPreviewTextInputStartHandler(Composer, (_, _) => _imeComposing=true);
-        TextCompositionManager.AddPreviewTextInputUpdateHandler(Composer, (_, _) => _imeComposing=true);
-        TextCompositionManager.AddPreviewTextInputHandler(Composer, (_, _) => _imeComposing=false);
-        Composer.LostKeyboardFocus+=(_,_)=>{_imeComposing=false;UpdateChatActivity(force:true);};
-        Composer.GotKeyboardFocus+=(_,_)=>UpdateChatActivity(force:true);
-        Composer.TextChanged+=(_,_)=>{if(Composer.IsKeyboardFocusWithin)UpdateChatActivity(typing:true);};
-        Composer.ContextMenu = new ContextMenu();
-        Composer.ContextMenuOpening += Composer_ContextMenuOpening;
-        TextCompositionManager.AddPreviewTextInputStartHandler(EditComposer, (_, _) => _editImeComposing = true);
-        TextCompositionManager.AddPreviewTextInputUpdateHandler(EditComposer, (_, _) => _editImeComposing = true);
-        TextCompositionManager.AddPreviewTextInputHandler(EditComposer, (_, _) => _editImeComposing = false);
-        EditComposer.LostKeyboardFocus += (_, _) => _editImeComposing = false;
-        EditComposer.ContextMenu = new ContextMenu();
-        EditComposer.ContextMenuOpening += Composer_ContextMenuOpening;
+        WorkspaceBar.MenuFor = CreateWorkspaceMenu;
+        FolderList.Shortcut = WorkspaceBar.Shortcut = ConversationList.Shortcut = ChatHeader.Shortcut = HandleWorkspaceKey;
+        foreach (var editor in new[] { Composer, EditComposer })
+        {
+            editor.Shortcut = HandleWorkspaceKey;
+            editor.SecureCopy = text => !_appLocked && !_exiting && MessageTextBlock.CopyToClipboard(text, this, showSuccess: false);
+            editor.CanFormat = () => CanFormatComposer(editor);
+            editor.Format = kind => FormatComposerSelection(kind, editor);
+        }
+        Composer.HasMediaPaste = HasComposerMediaPaste;
+        Composer.PasteMedia = PasteComposerMedia;
+        Composer.FocusChanged = () =>
+        {
+            if (Composer.EditorFocused && StickerHost.IsHitTestVisible) CloseStickerPanel();
+            UpdateChatActivity(force: true);
+        };
+        Composer.Typed = () => UpdateChatActivity(typing: true);
+        ChatDropIndicator.IsVisibleChanged += (_, _) => SetNativeChatVisibility();
+        DropPreparationIndicator.IsVisibleChanged += (_, _) => SetNativeChatVisibility();
         PreviewKeyDown += Window_PreviewKeyDown;
         LayoutGrid.SizeChanged += (_, args) => ApplySidebarWidth(args.NewSize.Width);
         SidebarSplitter.DragCompleted += (_, args) =>
@@ -294,10 +302,6 @@ public partial class MainWindow : Window
         {
             if (args.WidthChanged) UpdateChatColumnLayout(args.NewSize.Width);
         };
-        Composer.GotKeyboardFocus += (_, _) =>
-        {
-            if (StickerHost.IsHitTestVisible) CloseStickerPanel();
-        };
         _activityLabelTimer.Tick += (_, _) => RefreshPeerActivity();
         System.Windows.Application.Current.Activated+=ActivityAppActivated;
         System.Windows.Application.Current.Deactivated+=ActivityAppDeactivated;
@@ -306,6 +310,7 @@ public partial class MainWindow : Window
         Activated += (_, _) =>
         {
             CloseModalCallWindow();
+            UpdateActivityForeground();
             QueueVisibleReads();
             UpdateChatActivity();
             if (_interruptedRecording is not null) Dispatcher.BeginInvoke(new Action(ReviewInterruptedRecording));
@@ -490,10 +495,7 @@ public partial class MainWindow : Window
         Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Loaded, new Action(() =>
         {
             if (_appLocked || _exiting || !ReferenceEquals(_viewModel, model) || model.FolderKey != key) return;
-            if (FolderList.SelectedItem is not { } selected) { FolderList.Focus(); return; }
-            FolderList.ScrollIntoView(selected);
-            if (FolderList.ItemContainerGenerator.ContainerFromItem(selected) is ListBoxItem tab) tab.Focus();
-            else FolderList.Focus();
+            FolderList.FocusSelected();
         }));
     }
 
@@ -645,11 +647,10 @@ public partial class MainWindow : Window
         WebRtcView.Dispose();
     }
 
-    private void MainMenu_Click(object sender, RoutedEventArgs e)
+    private ContextMenu? CreateWorkspaceMenu()
     {
-        _ = e;
-        if (sender is not Button button || _exiting) { return; }
-        var menu = new ContextMenu { PlacementTarget = button };
+        if (_appLocked || _exiting || _viewModel?.IsWorkspaceReady != true) return null;
+        var menu = new ContextMenu();
         var add = new MenuItem { Header = AppStrings.Get("UiAddFriend") };
         add.Click += AddFriend_Click;
         var requests = new MenuItem { Header = AppStrings.Get("UiFriendRequests") };
@@ -716,10 +717,10 @@ public partial class MainWindow : Window
         var exit = new MenuItem { Header = AppStrings.Get("UiExit"), InputGestureText = "Ctrl+Q" };
         exit.Click += (_, _) => ((App)System.Windows.Application.Current).ExitApplication();
         menu.Items.Add(exit);
-        menu.IsOpen = true;
+        return menu;
     }
 
-    private async void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         _ = sender;
         if (_appLocked) return;
@@ -729,6 +730,20 @@ public partial class MainWindow : Window
             if (e.Key == Key.Escape && callOverlay.MinimizeFromKeyboard()) e.Handled = true;
             return;
         }
+        if (MediaOverlayHost.Content is MediaOverlay activeMedia)
+        {
+            activeMedia.HandleViewShortcut(e);
+            return;
+        }
+        if (e.OriginalSource is WinUIHost) return;
+        var key = new WorkspaceKey(e.Key == Key.System ? e.SystemKey : e.Key, Keyboard.Modifiers, e.IsRepeat);
+        HandleWorkspaceKey(key);
+        e.Handled |= key.Handled;
+    }
+
+    private async void HandleWorkspaceKey(WorkspaceKey e)
+    {
+        if (_appLocked || _exiting || _callWindow?.CoversChat == true || MediaOverlayHost.Content is not null) return;
         if (e.Key == Key.Escape && _replyQuotePicker is not null)
         {
             e.Handled = true;
@@ -742,16 +757,18 @@ public partial class MainWindow : Window
             CloseInlineAudio();
             return;
         }
-        if (MediaOverlayHost.Content is MediaOverlay activeMedia)
+        if (TryConversationNavigationShortcut(e)) return;
+        var canHandleComposerKeys = Composer.EditorFocused && !_imeComposing;
+        if (e.Key == Key.Escape &&
+            (_imeComposing && Composer.EditorFocused || _editImeComposing && EditComposer.EditorFocused))
+            return;
+        if (canHandleComposerKeys && (e.Key == Key.V && e.Modifiers == ModifierKeys.Control ||
+            e.Key == Key.Insert && e.Modifiers == ModifierKeys.Shift) && HasComposerMediaPaste())
         {
-            activeMedia.HandleViewShortcut(e);
+            e.Handled = true;
+            if (!e.IsRepeat) PasteComposerMedia();
             return;
         }
-        if (TryConversationNavigationShortcut(e)) return;
-        var canHandleComposerKeys = ReferenceEquals(Keyboard.FocusedElement, Composer) && !_imeComposing;
-        if (e.Key == Key.Escape &&
-            (_imeComposing && Composer.IsKeyboardFocusWithin || _editImeComposing && EditComposer.IsKeyboardFocusWithin))
-            return;
         if (canHandleComposerKeys && TryFormatShortcut(e)) return;
         if (e.Key == Key.Escape && _viewModel is { ShowAttachments: true } attachmentModel)
         {
@@ -774,10 +791,10 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
-            if (ReferenceEquals(Keyboard.FocusedElement, EditComposer) && !_editImeComposing)
+            if (EditComposer.EditorFocused && !_editImeComposing)
             {
                 if (TryFormatShortcut(e)) return;
-                if (e.Key == Key.Return && Keyboard.Modifiers == ModifierKeys.None)
+                if (e.Key == Key.Return && e.Modifiers == ModifierKeys.None)
                 {
                     e.Handled = true;
                     await SubmitMessageEditAsync();
@@ -785,7 +802,7 @@ public partial class MainWindow : Window
                 }
             }
         }
-        if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control && _viewModel is { IsSelecting: true })
+        if (e.Key == Key.C && e.Modifiers == ModifierKeys.Control && _viewModel is { IsSelecting: true })
         {
             e.Handled = true;
             await CopySelectedMessagesAsync();
@@ -795,101 +812,56 @@ public partial class MainWindow : Window
         {
             e.Handled=true;if(_viewModel.CanChangeSelection)_viewModel.ClearSelection();return;
         }
-        if (StickerHost.Child is StickerLibraryPanel { IsBusy: true } && ReferenceEquals(Keyboard.FocusedElement, Composer))
+        if (StickerHost.Child is StickerLibraryPanel { IsBusy: true } && Composer.EditorFocused)
         {
             if (e.Key == Key.Return) e.Handled = true;
             return;
         }
         if ((e.Key == Key.Escape || canHandleComposerKeys) && TryComposerHistoryShortcut(e)) return;
         if (TrySearchNavigationShortcut(e)) return;
-        if (e.Key == Key.O && Keyboard.Modifiers == ModifierKeys.Control && !IsDropCoveringChat && !IsComposerSendMenuOpen &&
+        if (e.Key == Key.O && e.Modifiers == ModifierKeys.Control && !IsDropCoveringChat && !IsComposerSendMenuOpen &&
             !_imeComposing && !_editImeComposing && _viewModel is { CanCompose: true, IsChatContentVisible: true })
         {
             e.Handled = true;
             if (!e.IsRepeat) ChooseChatFiles("Files");
             return;
         }
-        if(e.Key==Key.F && Keyboard.Modifiers==ModifierKeys.Control)
+        if(e.Key==Key.F && e.Modifiers==ModifierKeys.Control)
         {
             e.Handled=true;OpenMessageSearch();return;
         }
-        if (e.Key==Key.Q && Keyboard.Modifiers==ModifierKeys.Control)
+        if (e.Key==Key.Q && e.Modifiers==ModifierKeys.Control)
         {
             e.Handled=true;
             ((App)System.Windows.Application.Current).ExitApplication();
             return;
         }
-        if (e.Key != Key.Return || Keyboard.Modifiers != ModifierKeys.None || !canHandleComposerKeys) return;
+        if (e.Key != Key.Return || e.Modifiers != ModifierKeys.None || !canHandleComposerKeys) return;
         e.Handled=true; // Shift+Enter and IME confirmation retain native text editing.
         if (_viewModel is { HasDraft: true } model) await SendComposerDraftAsync(model);
     }
 
-    private void Composer_ContextMenuOpening(object sender, ContextMenuEventArgs e)
-    {
-        if (sender is not TextBox { ContextMenu: { } menu } editor) return;
-        if (_appLocked || _exiting)
-        {
-            e.Handled = true;
-            return;
-        }
-        menu.Items.Clear();
-        foreach (var (label, command) in new[]
-        {
-            ("UiUndo", ApplicationCommands.Undo), ("UiRedo", ApplicationCommands.Redo),
-            ("UiCut", ApplicationCommands.Cut), ("UiCopy", ApplicationCommands.Copy),
-            ("UiPaste", ApplicationCommands.Paste), ("UiSelectAll", ApplicationCommands.SelectAll)
-        })
-            menu.Items.Add(new MenuItem { Header = AppStrings.Get(label), Command = command, CommandTarget = editor });
-
-        menu.Items.Add(new Separator());
-        var formats = new MenuItem { Header = AppStrings.Get("UiFormatting"), IsEnabled = CanFormatComposer(editor) };
-        foreach (var (label, kind, shortcut) in new[]
-        {
-            ("UiFormatBold", "bold", "Ctrl+B"), ("UiFormatItalic", "italic", "Ctrl+I"),
-            ("UiFormatUnderline", "underline", "Ctrl+U"), ("UiFormatStrike", "strike", "Ctrl+Shift+X"),
-            ("UiFormatCode", "code", "Ctrl+Shift+M"), ("UiFormatSpoiler", "spoiler", "Ctrl+Shift+P"),
-            ("UiFormatQuote", "quote", "Ctrl+Shift+9"), ("UiFormatCodeBlock", "code_block", "")
-        })
-        {
-            var item = new MenuItem { Header = AppStrings.Get(label), InputGestureText = shortcut };
-            item.Click += (_, _) => FormatComposerSelection(kind, editor);
-            formats.Items.Add(item);
-        }
-        menu.Items.Add(formats);
-    }
-
-    private bool CanFormatComposer(TextBox editor) =>
+    private bool CanFormatComposer(ChatEditorHost editor) =>
         !_appLocked && !_exiting && !editor.IsReadOnly && _viewModel is { IsChatContentVisible: true } model &&
         (editor == EditComposer ? model.CanEditText && !_editImeComposing : model.CanCompose && !_imeComposing);
 
-    private void Composer_SecureCopyOrCut(object sender, ExecutedRoutedEventArgs e)
+    private bool TryFormatShortcut(WorkspaceKey e)
     {
-        var cut = e.Command == ApplicationCommands.Cut;
-        if (!cut && e.Command != ApplicationCommands.Copy) return;
-        e.Handled = true;
-        if (sender is not TextBox { SelectionLength: > 0 } editor || _appLocked || _exiting ||
-            (cut && !CanFormatComposer(editor))) return;
-        if (MessageTextBlock.CopyToClipboard(editor.SelectedText, this, showSuccess: false) && cut)
-            editor.SelectedText = "";
-    }
-
-    private bool TryFormatShortcut(KeyEventArgs e)
-    {
-        var modifiers=Keyboard.Modifiers;
+        var modifiers=e.Modifiers;
         if(modifiers!=ModifierKeys.Control && modifiers!=(ModifierKeys.Control|ModifierKeys.Shift))return false;
         var kind=modifiers.HasFlag(ModifierKeys.Shift)?e.Key switch{Key.X=>"strike",Key.M=>"code",Key.P=>"spoiler",Key.D9=>"quote",_=>null}:e.Key switch{Key.B=>"bold",Key.I=>"italic",Key.U=>"underline",_=>null};
         if(kind is null)return false;e.Handled=true;
-        FormatComposerSelection(kind, ReferenceEquals(Keyboard.FocusedElement, EditComposer) ? EditComposer : Composer);
+        FormatComposerSelection(kind, EditComposer.EditorFocused ? EditComposer : Composer);
         return true;
     }
-    private void FormatComposerSelection(string kind, TextBox? target = null)
+    private void FormatComposerSelection(string kind, ChatEditorHost? target = null)
     {
         var editor = target ?? Composer;
         if (!CanFormatComposer(editor)) return;
         try {
             var result=MsgAT.Windows.Core.Crypto.SecurityCore.Call(new{operation="format_message_selection",text=editor.Text,start=editor.SelectionStart,end=editor.SelectionStart+editor.SelectionLength,kind=kind});
             var text=result.GetProperty("text").GetString()!;var start=result.GetProperty("start").GetInt32();var end=result.GetProperty("end").GetInt32();
-            editor.BeginChange();try{editor.SelectAll();editor.SelectedText=text;editor.Select(start,end-start);}finally{editor.EndChange();}editor.Focus();
+            editor.ApplyFormatting(text, start, end-start);
         }catch(InvalidOperationException){TransientNotice.Show(this, AppStrings.Get("UiFormatUnavailable"));}
     }
 
@@ -1031,29 +1003,22 @@ public partial class MainWindow : Window
             model.SelectContact(peer);
     }
 
-    private void ConversationList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private void SelectConversationRow(ConversationItem target)
     {
-        if (sender is not ListBox list || !ReferenceEquals(e.OriginalSource, list) ||
-            _viewModel is not { } model || list.SelectedItem is not ConversationItem target ||
-            target.Uuid == model.SelectedConversation?.Uuid) return;
-
-        if (_exiting || _appLocked || model.HasMessageEdit)
-        {
-            list.SetCurrentValue(ListBox.SelectedItemProperty, model.SelectedConversation);
-            if (_exiting || _appLocked || !model.CanCancelEdit || !ConfirmDiscardMessageEdit(model)) return;
-            if (!list.Items.Contains(target)) return;
-        }
-        model.SelectedConversation = target;
+        if (_appLocked || _exiting || _viewModel is not { } model || target.Uuid == model.SelectedConversation?.Uuid ||
+            !model.CanChangeSelection || !model.VisibleConversations.Contains(target)) return;
+        if (model.HasMessageEdit && (!model.CanCancelEdit || !ConfirmDiscardMessageEdit(model))) return;
+        if (!_appLocked && !_exiting && model.VisibleConversations.Contains(target)) model.SelectedConversation = target;
     }
 
-    private bool TryConversationNavigationShortcut(KeyEventArgs e)
+    private bool TryConversationNavigationShortcut(WorkspaceKey e)
     {
         if (_imeComposing || _editImeComposing || _replyQuotePicker is not null || IsDropCoveringChat ||
             IsComposerSendMenuOpen || StickerHost.IsHitTestVisible || !ConversationList.IsVisible ||
             _viewModel is not { ShowAttachments: false, CanChangeSelection: true } model) return false;
 
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        var direction = (Keyboard.Modifiers, key) switch
+        var key = e.Key;
+        var direction = (e.Modifiers, key) switch
         {
             (ModifierKeys.Alt, Key.Up) or (ModifierKeys.Control, Key.PageUp) => -1,
             (ModifierKeys.Alt, Key.Down) or (ModifierKeys.Control, Key.PageDown) => 1,
@@ -1063,11 +1028,12 @@ public partial class MainWindow : Window
         e.Handled = true;
         if (e.IsRepeat && model.HasMessageEdit) return true;
 
-        var current = model.SelectedConversation is { } selected ? ConversationList.Items.IndexOf(selected) : -1;
+        var current = model.SelectedConversation is { } selected ? model.VisibleConversations.IndexOf(selected) : -1;
         var next = current < 0 ? 0 : current + direction;
-        if (next >= 0 && next < ConversationList.Items.Count && ConversationList.Items[next] is ConversationItem target)
+        if (next >= 0 && next < model.VisibleConversations.Count)
         {
-            ConversationList.SetCurrentValue(ListBox.SelectedItemProperty, target);
+            var target = model.VisibleConversations[next];
+            SelectConversationRow(target);
             if (model.SelectedConversation?.Uuid == target.Uuid) ConversationList.ScrollIntoView(target);
         }
         return true;
@@ -1079,17 +1045,17 @@ public partial class MainWindow : Window
         var peer = model.SelectedConversation?.Uuid;
         await model.SubmitMessageEditAsync();
         if (!CanRestoreComposerFocus(model, peer) ||
-            (Keyboard.FocusedElement is not null && !Composer.IsKeyboardFocusWithin &&
-                !EditComposer.IsKeyboardFocusWithin && !ComposerActionButton.IsKeyboardFocusWithin)) return;
+            (Keyboard.FocusedElement is not null && !Composer.EditorFocused &&
+                !EditComposer.EditorFocused && !ComposerActionButton.IsKeyboardFocusWithin)) return;
         if (model.HasMessageEdit && EditComposer.IsEnabled) EditComposer.Focus();
         else if (Composer.IsEnabled) Composer.Focus();
     }
 
-    private bool TryComposerHistoryShortcut(KeyEventArgs e)
+    private bool TryComposerHistoryShortcut(WorkspaceKey e)
     {
         if (e.Key is not (Key.Up or Key.Down or Key.Escape) || IsRestoringHistory || IsDropCoveringChat || IsComposerSendMenuOpen ||
             _viewModel is not { CanCompose: true, IsChatContentVisible: true } model) return false;
-        var modifiers = Keyboard.Modifiers;
+        var modifiers = e.Modifiers;
         if (e.Key == Key.Escape)
         {
             if (modifiers != ModifierKeys.None || model.ReplyTarget is null) return false;
@@ -1211,6 +1177,8 @@ public partial class MainWindow : Window
             UpdateComposerAction(model, animate: true);
         if (args.PropertyName == nameof(MainViewModel.SelectedConversation))
         {
+            Composer.ClearUndoHistory();
+            EditComposer.ClearUndoHistory();
             if (_interruptedRecording is { } recording && recording.Peer != model.SelectedConversation?.Uuid)
                 DiscardInterruptedRecording();
             ResetVisibleReadCandidates();
@@ -1359,26 +1327,21 @@ public partial class MainWindow : Window
         }
     }
 
-    private void Composer_PreviewCanExecute(object sender, CanExecuteRoutedEventArgs e)
+    private bool HasComposerMediaPaste()
     {
-        if (e.Command != ApplicationCommands.Paste || _exiting || _appLocked || _imeComposing ||
-            _viewModel is not { CanCompose: true, SelectedConversation: not null }) return;
+        if (_appLocked || _exiting || _imeComposing || Composer.IsReadOnly || _viewModel is not { CanCompose: true, SelectedConversation: not null }) return false;
         try
         {
             var data = Clipboard.GetDataObject();
-            if (data is not null && (data.GetDataPresent(DataFormats.Bitmap) ||
-                data.GetDataPresent("PNG", autoConvert: false) || data.GetDataPresent(DataFormats.FileDrop, autoConvert: false)))
-            {
-                e.CanExecute = true;
-                e.Handled = true;
-            }
+            return data is not null && (data.GetDataPresent(DataFormats.Bitmap) ||
+                data.GetDataPresent("PNG", autoConvert: false) || data.GetDataPresent(DataFormats.FileDrop, autoConvert: false));
         }
-        catch (System.Runtime.InteropServices.ExternalException) { }
+        catch (ExternalException) { return false; }
     }
 
-    private async void Composer_PreviewExecuted(object sender, ExecutedRoutedEventArgs e)
+    private async void PasteComposerMedia()
     {
-        if (e.Command != ApplicationCommands.Paste || _exiting || _appLocked || _imeComposing ||
+        if (_exiting || _appLocked || _imeComposing ||
             _viewModel is not { CanCompose: true, SelectedConversation: not null } model) return;
         try
         {
@@ -1386,7 +1349,6 @@ public partial class MainWindow : Window
             if (data is null) return;
             if (ClipboardFiles(data) is { } files)
             {
-                e.Handled = true;
                 await ReviewExternalFilesAsync(files, asFile: false);
                 return;
             }
@@ -1394,7 +1356,6 @@ public partial class MainWindow : Window
             if (pngData is MemoryStream oversizedStream && oversizedStream.Length > 100L * 1024 * 1024 ||
                 pngData is byte[] oversizedBytes && oversizedBytes.Length > 100L * 1024 * 1024)
             {
-                e.Handled = true;
                 TransientNotice.Show(this, AppStrings.Get("UiAttachmentSizeLimit"));
                 return;
             }
@@ -1406,7 +1367,6 @@ public partial class MainWindow : Window
             };
             var bitmap = png is null && data.GetDataPresent(DataFormats.Bitmap) ? Clipboard.GetImage() : null;
             if (png is null && bitmap is null) return;
-            e.Handled = true;
             var send = model.CaptureImageSender();
             if (send is null)
             {
@@ -1452,7 +1412,6 @@ public partial class MainWindow : Window
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException or ArgumentException or System.Runtime.InteropServices.ExternalException)
         {
-            e.Handled = true;
             TransientNotice.Show(this, AppStrings.Get("UiPasteImageFailed"));
         }
     }
@@ -1684,105 +1643,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private const string PinDragFormat = "MsgAT.PinnedConversation";
-    private (string Scope, string Peer)? _pinDrag;
-    private ListBoxItem? _pinDropIndicator;
-    private long _lastPinDragScroll;
-
-    private void PinnedConversation_Grab(object sender, MouseButtonEventArgs e)
+    private ContextMenu? CreateConversationMenu(ConversationItem conversation)
     {
-        if (_appLocked || _viewModel is not { } model || _pinDrag is not null ||
-            sender is not FrameworkElement { DataContext: ConversationItem { IsPinned: true } row } ||
-            model.VisibleConversations.Count(item => item.IsPinned) < 2) return;
-
-        e.Handled = true;
-        _pinDrag = (model.FolderKey, row.Uuid);
-        _lastPinDragScroll = 0;
-        try
-        {
-            DragDrop.DoDragDrop(ConversationList, new DataObject(PinDragFormat, row.Uuid), DragDropEffects.Move);
-        }
-        finally
-        {
-            ClearPinDropIndicator();
-            _pinDrag = null;
-        }
-    }
-
-    private bool IsPinDrag(System.Windows.DragEventArgs e) =>
-        !_appLocked && _pinDrag is { } drag && _viewModel?.FolderKey == drag.Scope &&
-        string.Equals(e.Data.GetData(PinDragFormat, false) as string, drag.Peer, StringComparison.Ordinal);
-
-    private ListBoxItem? PinDropRow(System.Windows.DragEventArgs e)
-    {
-        return e.OriginalSource is DependencyObject source &&
-            ItemsControl.ContainerFromElement(ConversationList, source) is ListBoxItem
-                { DataContext: ConversationItem { IsPinned: true } target } row &&
-            target.Uuid != _pinDrag?.Peer ? row : null;
-    }
-
-    private void ClearPinDropIndicator()
-    {
-        if (_pinDropIndicator is not null) _pinDropIndicator.Tag = null;
-        _pinDropIndicator = null;
-    }
-
-    private void PinnedConversation_DragOver(object sender, System.Windows.DragEventArgs e)
-    {
-        if (!IsPinDrag(e)) return;
-        e.Handled = true;
-        e.Effects = DragDropEffects.None;
-        var y = e.GetPosition(ConversationList).Y;
-        var now = Environment.TickCount64;
-        if (now - _lastPinDragScroll >= 110 && GetScrollViewer(ConversationList) is { } viewer)
-        {
-            if (y < 24) { viewer.LineUp(); _lastPinDragScroll = now; }
-            else if (y > ConversationList.ActualHeight - 24) { viewer.LineDown(); _lastPinDragScroll = now; }
-        }
-        if (PinDropRow(e) is not { } row) { ClearPinDropIndicator(); return; }
-        if (_pinDropIndicator != row) ClearPinDropIndicator();
-        _pinDropIndicator = row;
-        row.Tag = e.GetPosition(row).Y < row.ActualHeight / 2 ? "PinBefore" : "PinAfter";
-        e.Effects = DragDropEffects.Move;
-    }
-
-    private void PinnedConversation_DragLeave(object sender, System.Windows.DragEventArgs e) => ClearPinDropIndicator();
-
-    private async void PinnedConversation_Drop(object sender, System.Windows.DragEventArgs e)
-    {
-        ClearPinDropIndicator();
-        if (!IsPinDrag(e) || _pinDrag is not { } drag || _viewModel is not { } model) return;
-        e.Handled = true;
-        e.Effects = DragDropEffects.None;
-        if (PinDropRow(e) is not { DataContext: ConversationItem target } row) return;
-        var before = e.GetPosition(row).Y < row.ActualHeight / 2;
-        e.Effects = DragDropEffects.Move;
-        await model.MovePinAsync(drag.Scope, drag.Peer, target.Uuid, before);
-    }
-
-    private void Conversation_PreviewMouseRightButtonDown(object sender, MouseButtonEventArgs e)
-    {
-        if (sender is ListBoxItem container) e.Handled = ShowConversationMenu(container, fromKeyboard: false);
-    }
-
-    private void Conversation_PreviewKeyDown(object sender, KeyEventArgs e)
-    {
-        var key = e.Key == Key.System ? e.SystemKey : e.Key;
-        if (sender is not ListBoxItem container ||
-            !(key == Key.Apps || key == Key.F10 && Keyboard.Modifiers == ModifierKeys.Shift)) return;
-        e.Handled = e.IsRepeat || ShowConversationMenu(container, fromKeyboard: true);
-    }
-
-    private bool ShowConversationMenu(ListBoxItem container, bool fromKeyboard)
-    {
-        if (_appLocked || _exiting || _viewModel is not { } model ||
-            container.DataContext is not ConversationItem conversation) return false;
-        var menu = new ContextMenu
-        {
-            PlacementTarget = container,
-            Placement = fromKeyboard ? System.Windows.Controls.Primitives.PlacementMode.Bottom :
-                System.Windows.Controls.Primitives.PlacementMode.MousePoint
-        };
+        if (_appLocked || _exiting || _viewModel is not { } model) return null;
+        var menu = new ContextMenu();
         bool CanUseMenu() => !_appLocked && !_exiting && ReferenceEquals(model, _viewModel);
 
         var folderId = model.CurrentCustomFolderId;
@@ -1847,22 +1711,35 @@ public partial class MainWindow : Window
         }
         AddDestructiveAction("UiClearMessages", "UiClearMessagesConfirm", () => model.ClearMessagesAsync(conversation.Uuid));
         AddDestructiveAction("UiDeleteFriend", "UiDeleteFriendConfirm", () => model.DeleteFriendAsync(conversation.Uuid));
-        container.ContextMenu = menu;
-        menu.Closed += (_, _) =>
-        {
-            if (ReferenceEquals(container.ContextMenu, menu)) container.ClearValue(FrameworkElement.ContextMenuProperty);
-        };
-        menu.IsOpen = true;
-        return true;
+        return menu;
     }
 
-    private void ConversationMute_Click(object sender, RoutedEventArgs e)
+    private void PerformHeaderAction(ChatAction action)
     {
-        if (_exiting || _appLocked || sender is not Button button || _viewModel?.SelectedConversation is not { } conversation) return;
-        var menu = new ContextMenu { PlacementTarget = button, Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom };
-        AddConversationMuteOptions(menu.Items, conversation);
-        button.ContextMenu = menu;
-        menu.IsOpen = true;
+        if (_appLocked || _exiting || _viewModel?.SelectedConversation is null || _callWindow?.CoversChat == true) return;
+        var args = new RoutedEventArgs();
+        switch (action)
+        {
+            case ChatAction.Profile: OpenContactProfile_Click(this, args); break;
+            case ChatAction.Voice: VoiceCall_Click(this, args); break;
+            case ChatAction.Video: VideoCall_Click(this, args); break;
+            case ChatAction.Search: OpenMessageSearch(); break;
+            case ChatAction.History: OpenHistoryNavigation(); break;
+            case ChatAction.Queue: ChatSendQueue_Click(this, args); break;
+            case ChatAction.Forward: ForwardSelected_Click(this, args); break;
+            case ChatAction.Save: SaveSelected_Click(this, args); break;
+            case ChatAction.Copy: CopySelected_Click(this, args); break;
+            case ChatAction.Delete: DeleteSelected_Click(this, args); break;
+            case ChatAction.Cancel: ClearSelection_Click(this, args); break;
+        }
+    }
+
+    private ContextMenu? CreateNotificationMenu()
+    {
+        if (_appLocked || _exiting || _viewModel?.SelectedConversation is not { } peer) return null;
+        var menu = new ContextMenu();
+        AddConversationMuteOptions(menu.Items, peer);
+        return menu;
     }
 
     private void AddConversationMuteOptions(ItemCollection items, ConversationItem conversation)
@@ -2520,14 +2397,14 @@ public partial class MainWindow : Window
     private void PreviousSearchResult_Click(object sender, RoutedEventArgs e) => _ = MoveSearchAsync(newer: true);
     private void NextSearchResult_Click(object sender, RoutedEventArgs e) => _ = MoveSearchAsync(newer: false);
 
-    private bool TrySearchNavigationShortcut(KeyEventArgs e)
+    private bool TrySearchNavigationShortcut(WorkspaceKey e)
     {
         if (!SearchNavigationBar.IsVisible || IsRestoringHistory || IsDropCoveringChat ||
             IsComposerSendMenuOpen || StickerHost.IsHitTestVisible ||
             _viewModel is not { IsChatContentVisible: true, HasMessageEdit: false } model ||
             _imeComposing || _editImeComposing) return false;
 
-        var modifiers = Keyboard.Modifiers;
+        var modifiers = e.Modifiers;
         if (e.Key == Key.Escape && modifiers == ModifierKeys.None)
         {
             if (model.ReplyTarget is not null)
@@ -3787,7 +3664,8 @@ public partial class MainWindow : Window
         QueueVisibleReads();
     }
 
-    private void ActivityAppActivated(object? sender,EventArgs args)=>UpdateActivityForeground();
+    private void ActivityAppActivated(object? sender, EventArgs args) =>
+        Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Input, new Action(UpdateActivityForeground));
     private void ActivityAppDeactivated(object? sender, EventArgs args)
     {
         CloseInlineAudio();
@@ -3815,7 +3693,7 @@ public partial class MainWindow : Window
             ? _viewModel.SelectedConversation?.Uuid : null;
         if(peer==_reportedActivityPeer && !typing && !force)return;
         _reportedActivityPeer=peer;
-        _services.Messaging.SetActiveChat(peer,typing && Composer.IsKeyboardFocusWithin && !string.IsNullOrWhiteSpace(Composer.Text));
+        _services.Messaging.SetActiveChat(peer,typing && Composer.EditorFocused && !string.IsNullOrWhiteSpace(Composer.Text));
         RefreshPeerActivity();
     }
 
@@ -4390,10 +4268,20 @@ public partial class MainWindow : Window
     private string? _peerBeforeCallOverlay;
     private IInputElement? _focusBeforeCallOverlay;
 
+    private void SetNativeChatVisibility()
+    {
+        var visible = MediaOverlayHost.Content is null && _callWindow?.CoversChat != true &&
+            ChatDropIndicator.Visibility != Visibility.Visible && DropPreparationIndicator.Visibility != Visibility.Visible;
+        ChatHeader.Visibility = EditorSurface.Visibility = visible ? Visibility.Visible : Visibility.Hidden;
+    }
+
     private void UpdateChatVisibility()
     {
         if (_viewModel is null) return;
         var callCoversChat = _callWindow?.CoversChat == true;
+        var showNativeSurfaces = MediaOverlayHost.Content is null && !callCoversChat;
+        SidebarSurface.Visibility = showNativeSurfaces ? Visibility.Visible : Visibility.Hidden;
+        SetNativeChatVisibility();
         if (callCoversChat && !_callCoveredChat)
         {
             _peerBeforeCallOverlay = _viewModel.SelectedConversation?.Uuid;

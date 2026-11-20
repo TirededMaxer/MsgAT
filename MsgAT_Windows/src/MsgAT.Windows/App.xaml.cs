@@ -20,7 +20,6 @@ public partial class App : System.Windows.Application
 
     protected override void OnStartup(StartupEventArgs e)
     {
-        System.Windows.Media.RenderOptions.ProcessRenderMode = System.Windows.Interop.RenderMode.SoftwareOnly;
         base.OnStartup(e);
         _singleInstance = new Mutex(initiallyOwned: true, MsgAT.Windows.Core.Storage.RuntimePaths.SingleInstanceName, out var createdNew);
         _ownsSingleInstance = createdNew;
@@ -33,6 +32,7 @@ public partial class App : System.Windows.Application
 
         try
         {
+            Presentation.DesktopXamlRuntime.Start();
             Infrastructure.AppStrings.SetLanguage(Infrastructure.AppLanguage.System);
             Infrastructure.WindowAppearance.StartObserving();
             _mainWindow = new MainWindow();
@@ -52,6 +52,7 @@ public partial class App : System.Windows.Application
     {
         Infrastructure.WindowAppearance.StopObserving();
         _trayIcon?.Dispose();
+        Presentation.DesktopXamlRuntime.Stop();
         base.OnExit(e);
         if (_ownsSingleInstance) _singleInstance?.ReleaseMutex();
         _singleInstance?.Dispose();

@@ -309,17 +309,22 @@ pub fn visible_urls(text: String) -> Result<Value, String> {
 
 /// Summaries can start from a database prefix that ends before a closing spoiler.
 /// Mask conservatively before parsing so truncation cannot expose the hidden tail.
-pub fn summarize(text:String,limit:usize)->Result<Value,String>{
+pub fn summarize(text:String,limit:usize,hidden_label:Option<&str>)->Result<Value,String>{
     let text=Zeroizing::new(text);
     if text.len()>48*1024 || limit>48*1024{return Err("Unsupported message summary size".into())}
-    let masked=masked_spoilers(&text);
+    let label = hidden_label.unwrap_or("Hidden text");
+    if label.is_empty() || label.len() > 64 || !label.chars().all(|c| c.is_alphanumeric() || c == ' ') {
+        return Err("Unsupported spoiler label".into());
+    }
+    let masked = mask_with_label(&text, label);
     summarize_visible(&masked,limit)
 }
-fn masked_spoilers(text:&str)->String{
+fn masked_spoilers(text:&str)->String { mask_with_label(text, "Hidden text") }
+fn mask_with_label(text:&str, label:&str)->String{
     let mut masked=String::new();let mut hidden=false;let mut index=0;
     while index<text.len(){
         if escaped(text.as_bytes(),index){if !hidden{masked.push_str(&text[index..index+2]);}index+=2;continue}
-        if text[index..].starts_with("||") {if !hidden{masked.push_str("Hidden text");}hidden=!hidden;index+=2;continue}
+        if text[index..].starts_with("||") {if !hidden{masked.push_str(label);}hidden=!hidden;index+=2;continue}
         let next=index+text[index..].chars().next().unwrap().len_utf8();
         if !hidden{masked.push_str(&text[index..next]);}index=next;
     }

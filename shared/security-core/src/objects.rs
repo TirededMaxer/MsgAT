@@ -306,10 +306,20 @@ where F: FnMut(u64,&mut Vec<u8>) -> Result<(),String> {
         output.sync_all().map_err(|_|"Cannot persist the encrypted object")?;
         if let Some(work)=work {work.check()?;}
         drop(output);
-        if target.exists() { return Err("Encrypted object identifier collision".into()); }
-        fs::hard_link(&temporary,&target).map_err(|_|"Cannot finalize the encrypted object")?;
-        finalized=true;
-        fs::remove_file(&temporary).map_err(|_|"Cannot remove encrypted staging data")?;
+        #[cfg(target_os = "android")]
+        {
+            // Reserve the name exclusively under the vault lease. Android app storage
+            // can disallow hard links. The staging row owns both names until commit.
+            drop(options.open(&target).map_err(|_| "Cannot reserve the encrypted object")?);
+            finalized = true;
+            fs::rename(&temporary, &target).map_err(|_| "Cannot finalize the encrypted object")?;
+        }
+        #[cfg(not(target_os = "android"))]
+        {
+            fs::hard_link(&temporary,&target).map_err(|_|"Cannot finalize the encrypted object")?;
+            finalized=true;
+            fs::remove_file(&temporary).map_err(|_|"Cannot remove encrypted staging data")?;
+        }
         sync_publication(directory,&manifest.object_id)?;
         Ok(json!({"manifest":manifest}))
     })();

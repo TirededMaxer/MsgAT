@@ -517,7 +517,7 @@ private struct ActiveAudioAttachment: View {
                 })
                 .accessibilityLabel(interfaceText("media_seek"))
                 HStack {
-                    Text("\(playback.timeText(scrub ?? playback.position)) / \(playback.timeText(playback.duration))")
+                    Text("\(playback.timeText(scrub ?? playback.position)) / \(playback.timeText(playback.duration, duration: true))")
                         .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     Spacer(minLength: 4)
                     MediaSpeedMenu(playback: playback)

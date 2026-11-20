@@ -76,6 +76,11 @@ internal class EncryptedCaptureFile internal constructor(
         check(bytes.size==result.getInt("length")){"Incomplete recording read"};bytes
     }
     fun sync(){synchronized(io){check(!disposed){"The recording is closed"};call("sync_capture_file")}}
+    fun resize(size: Long) = synchronized(io) {
+        check(!disposed && !frozen)
+        require(size in 0..capacity)
+        length = call("resize_capture_file", JSONObject().put("size", size)).getLong("size")
+    }
     internal suspend fun stopHardware(){
         val task=synchronized(io){stopped?:store.stop(stopWriter).also{stopped=it}}
         try{withContext(NonCancellable){task.await()}}catch(error:Exception){synchronized(io){if(stopped===task)stopped=null};throw error}

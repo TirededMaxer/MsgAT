@@ -13,6 +13,7 @@ internal static class AppStrings
     private static readonly ConcurrentDictionary<string, CompositeFormat> Formats = new(StringComparer.Ordinal);
     private static ResourceDictionary? _strings;
     private static string? _locale;
+    internal static event EventHandler? Changed;
     public static AppLanguage Language { get; private set; }
     public static CultureInfo InterfaceCulture => Language switch
     {
@@ -38,6 +39,7 @@ internal static class AppStrings
         else dictionaries[dictionaries.IndexOf(_strings)] = next;
         _strings = next;
         _locale = locale;
+        Changed?.Invoke(null, EventArgs.Empty);
     }
 
     public static string Get(string key) => (string)Application.Current.FindResource(key);

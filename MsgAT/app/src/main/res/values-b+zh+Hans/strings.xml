@@ -416,6 +416,7 @@
     <string name="ui_attachment_gallery_access">选择相册访问权限</string>
     <string name="ui_attachment_gallery_unavailable">无法加载相册。</string>
     <string name="ui_attachment_camera">拍照</string>
+    <string name="ui_play_video">播放视频</string>
     <string name="ui_attachment_record_video">录像</string>
     <string name="ui_capture_take_photo">拍照</string>
     <string name="ui_capture_review_photo">查看照片</string>

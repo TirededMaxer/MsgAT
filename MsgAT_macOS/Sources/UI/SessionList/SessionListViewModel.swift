@@ -258,7 +258,11 @@ public final class SessionListViewModel: ObservableObject {
                     return
                 }
             }
-            NSApp.terminate(nil)
+            if let delegate = AppDelegate.running {
+                delegate.quitAfterIdentityReset()
+            } else {
+                RunLoop.main.perform { NSApp.terminate(nil) }
+            }
         }
     }
 

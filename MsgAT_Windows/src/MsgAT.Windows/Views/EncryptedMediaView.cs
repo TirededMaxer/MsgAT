@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Net;
 using System.Security.Cryptography;
+using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -37,6 +38,8 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         internal IWebView2 View => (IWebView2)Surface;
         internal string Source { get; } =
             "https://msgat-media.invalid/" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        internal string Page => Source + "/viewer";
+        internal byte[]? Markup { get; set; }
         internal Queue<Stream> Streams { get; } = new();
         internal bool DocumentReady { get; set; }
     }
@@ -101,7 +104,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
             core.PermissionRequested+=(_,e)=>e.State=CoreWebView2PermissionState.Deny;
             core.DownloadStarting+=(_,e)=>e.Cancel=true;
             core.NewWindowRequested+=(_,e)=>e.Handled=true;
-            core.NavigationStarting+=(_,e)=>e.Cancel=e.Uri!="about:blank";
+            core.NavigationStarting+=(_,e)=>e.Cancel=e.Uri!=session.Page;
             core.NavigationCompleted += (_, e) =>
             {
                 if (!IsCurrent(session)) return;
@@ -162,7 +165,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
             var element=_mime.StartsWith("image/",StringComparison.Ordinal)?"img":_mime.StartsWith("audio/",StringComparison.Ordinal)?"audio":"video";
             var control = element == "img" ? "" :
                 " controlslist=\"nodownload noremoteplayback\" playsinline preload=\"metadata\"";
-            core.NavigateToString(Document.Replace("%ELEMENT%",element,StringComparison.Ordinal)
+            session.Markup = Encoding.UTF8.GetBytes(Document.Replace("%ELEMENT%",element,StringComparison.Ordinal)
                 .Replace("%CONTROL%",control,StringComparison.Ordinal).Replace("%SOURCE%",session.Source,StringComparison.Ordinal)
                 .Replace("%AUTOPLAY%", _autoplay && !_callActive && !_suppressAutoplay ? "true" : "false", StringComparison.Ordinal)
                 .Replace("%HIDE_CLOSE%", _showClose ? "" : " hidden", StringComparison.Ordinal)
@@ -173,10 +176,12 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
                 .Replace("%LOADING%", WebUtility.HtmlEncode(AppStrings.Get("UiLoading")), StringComparison.Ordinal)
                 .Replace("%RETRY%", WebUtility.HtmlEncode(AppStrings.Get("UiRetry")), StringComparison.Ordinal)
                 .Replace("%UNAVAILABLE%", WebUtility.HtmlEncode(AppStrings.Get("UiMediaPlaybackUnavailable")), StringComparison.Ordinal));
+            core.Navigate(session.Page);
         }
         catch(Exception error) when(error is not OutOfMemoryException)
         {
             if (_disposed || !ReferenceEquals(_session, attempt)) return;
+            System.Diagnostics.Trace.TraceWarning("Private media initialization failed with {0} (0x{1:X8}).", error.GetType().Name, error.HResult);
             if (environmentRequest is not null && ReferenceEquals(_environment, environmentRequest))
                 _environment = null;
             ShowFailure(attempt);
@@ -318,6 +323,14 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         try
         {
             deferral = e.GetDeferral();
+            if (e.Request.Uri == session.Page && e.Request.Method == "GET" && session.Markup is { } markup)
+            {
+                var document = new MemoryStream(markup, writable: false);
+                session.Streams.Enqueue(document);
+                e.Response = environment.CreateWebResourceResponse(document, 200, "OK",
+                    "Content-Type: text/html; charset=utf-8\r\nCache-Control: no-store\r\nReferrer-Policy: no-referrer\r\n");
+                return;
+            }
             if(e.Request.Uri!=session.Source || e.Request.Method is not ("GET" or "HEAD"))
             {
                 e.Response=environment.CreateWebResourceResponse(null!,403,"Forbidden","Cache-Control: no-store\r\n");
@@ -444,7 +457,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
 
     private const string Document="""
         <!doctype html><html><head><meta charset="utf-8">
-        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src https://msgat-media.invalid; img-src https://msgat-media.invalid; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; media-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
         <style>html,body{margin:0;background:#000;color:#fff;height:100%;overflow:hidden;font:14px system-ui}body{display:flex;align-items:center;justify-content:center}video,img{max-width:100%;max-height:100%;object-fit:contain}audio{width:min(90%,600px)}button{position:fixed;top:14px;right:14px;width:36px;height:36px;border:0;border-radius:18px;background:#333b;color:white;font:26px system-ui;cursor:pointer}p{padding:0 16px;text-align:center}</style>
         <style>body.inline-audio{justify-content:flex-start;padding:0 8px;box-sizing:border-box}body.inline-audio audio{width:calc(100% - 34px);height:42px}body.inline-audio button{right:6px;top:50%;transform:translateY(-50%);width:26px;height:26px;font-size:18px}#loading{position:absolute;pointer-events:none;background:#000;padding:4px 8px;border-radius:6px}</style>
         <style>#error{text-align:center;max-width:90%}#error p{margin:0 0 8px}#retry{position:static;transform:none;width:auto;height:auto;padding:6px 14px;font:inherit}body.inline-audio #error{display:flex;gap:6px;align-items:center}body.inline-audio #error[hidden]{display:none}body.inline-audio #error p{margin:0;padding:0}#retry:focus-visible{outline:2px solid white}</style>

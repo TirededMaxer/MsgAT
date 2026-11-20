@@ -76,8 +76,11 @@ public sealed class StickerLibraryStore(EncryptedDatabase database,EncryptedObje
                 }
                 var result=database.ProtocolTransaction(db=>
                 {
-                    ct.ThrowIfCancellationRequested();var now=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();var destination=packId??Guid.NewGuid().ToString("D");
-                    if(packId is null)db.Execute("INSERT INTO sticker_packs(id,name,created_at) VALUES($p0,$p1,$p2)",destination,packName,now);
+                    ct.ThrowIfCancellationRequested();
+                    var now=DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+                    var existing=packId ?? db.Text("SELECT id FROM sticker_packs WHERE name=$p0 ORDER BY created_at,id LIMIT 1",packName);
+                    var destination=existing ?? Guid.NewGuid().ToString("D");
+                    if(existing is null)db.Execute("INSERT INTO sticker_packs(id,name,created_at) VALUES($p0,$p1,$p2)",destination,packName,now);
                     else if(!db.Exists("SELECT 1 FROM sticker_packs WHERE id=$p0",destination))throw new InvalidOperationException("The selected sticker group was deleted.");
                     var added=0;var position=db.Number("SELECT COALESCE(MAX(position),-1)+1 FROM sticker_pack_items WHERE pack_id=$p0",destination);
                     foreach(var row in prepared)

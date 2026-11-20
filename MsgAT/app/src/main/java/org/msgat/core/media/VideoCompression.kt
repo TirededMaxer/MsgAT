@@ -2,10 +2,8 @@
 package org.msgat.core.media
 
 import android.content.Context
-import android.media.MediaCodec
 import android.media.MediaExtractor
 import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.net.Uri
 import android.os.Handler
 import android.os.HandlerThread
@@ -13,9 +11,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
-import androidx.media3.common.Metadata
 import androidx.media3.common.MimeTypes
-import androidx.media3.common.util.MediaFormatUtil
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.Presentation
 import androidx.media3.transformer.Codec
@@ -25,13 +21,12 @@ import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
-import androidx.media3.transformer.Muxer
+import androidx.media3.muxer.Muxer
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import androidx.media3.transformer.VideoEncoderSettings
 import com.google.common.collect.ImmutableList
 import java.io.IOException
-import java.nio.ByteBuffer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -176,13 +171,7 @@ internal object VideoCompression {
                           preparation: ObjectPreparation?): Boolean {
             val active = gate.withLock {
                 if (closing) throw CancellationException("The video encoder is closing")
-                val descriptor = CaptureDescriptor.open(context, output, writable = true)
-                try {
-                    EncoderSession(context, uri, plan, descriptor, preparation).also { session = it }
-                } catch (error: Exception) {
-                    descriptor.closeAndDrain()
-                    throw error
-                }
+                EncoderSession(context, uri, plan, output, preparation).also { session = it }
             }
             return active.result.await()
         }
@@ -198,7 +187,7 @@ internal object VideoCompression {
         context: Context,
         uri: Uri,
         plan: Plan,
-        private val bridge: CaptureDescriptor,
+        private val output: EncryptedCaptureFile,
         private val preparation: ObjectPreparation?
     ) {
         val result = CompletableDeferred<Boolean>()
@@ -250,7 +239,7 @@ internal object VideoCompression {
                         .setEncoderFactory(encoderFactory)
                         .setVideoMimeType(MimeTypes.VIDEO_H264)
                         .setAudioMimeType(MimeTypes.AUDIO_AAC)
-                        .setMuxerFactory(EncryptedMuxerFactory(bridge, plan.trim?.muteAudio == true))
+                        .setMuxerFactory(EncryptedMuxerFactory(output, plan.trim?.muteAudio == true))
                         .addListener(object : Transformer.Listener {
                             override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                                 handler.removeCallbacks(monitor)
@@ -284,7 +273,7 @@ internal object VideoCompression {
                     try {
                         transformer?.cancel()
                     } catch (_: RuntimeException) {
-                        // The descriptor below also waits for all native duplicates to close.
+                        // Joining this encoder thread drains all outstanding writes.
                     } finally {
                         transformer = null
                         result.cancel()
@@ -293,19 +282,18 @@ internal object VideoCompression {
                     }
                 }) drained.await()
             withContext(Dispatchers.IO) { thread.join() }
-            bridge.closeAndDrain()
         }
     }
 
-    private class EncryptedMuxerFactory(private val bridge: CaptureDescriptor, private val muteAudio: Boolean) : Muxer.Factory {
+    private class EncryptedMuxerFactory(private val output: EncryptedCaptureFile, private val muteAudio: Boolean) : Muxer.Factory {
         override fun create(path: String): Muxer {
             check(path == OutputTag)
-            try {
-                return EncryptedMuxer(
-                    MediaMuxer(bridge.descriptor.fileDescriptor, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4), muteAudio
-                )
-            } catch (error: Exception) {
-                throw Muxer.MuxerException("Could not open the encrypted output", error)
+            val muxer = CaptureMuxerOutput.muxer(output)
+            return object : Muxer by muxer {
+                override fun addTrack(format: Format): Int {
+                    check(!muteAudio || MimeTypes.isVideo(format.sampleMimeType)) { "A muted video must contain only video tracks" }
+                    return muxer.addTrack(format)
+                }
             }
         }
 
@@ -314,52 +302,5 @@ internal object VideoCompression {
             C.TRACK_TYPE_VIDEO -> ImmutableList.of(MimeTypes.VIDEO_H264)
             else -> ImmutableList.of()
         }
-    }
-
-    private class EncryptedMuxer(private val native: MediaMuxer, private val muteAudio: Boolean) : Muxer {
-        private var started = false
-        private val timeOffsets = mutableMapOf<Int, Long>()
-
-        override fun addTrack(format: Format): Int = muxing {
-            val videoTrack = MimeTypes.isVideo(format.sampleMimeType)
-            check(!muteAudio || videoTrack) { "A muted video must contain only video tracks" }
-            if (videoTrack) native.setOrientationHint(format.rotationDegrees)
-            native.addTrack(MediaFormatUtil.createMediaFormatFromFormat(format))
-        }
-
-        override fun writeSampleData(trackIndex: Int, data: ByteBuffer, presentationTimeUs: Long, flags: Int) {
-            if (!data.hasRemaining()) return
-            muxing {
-                if (!started) {
-                    native.start()
-                    started = true
-                }
-                val shift = timeOffsets.getOrPut(trackIndex) { maxOf(0L, -presentationTimeUs) }
-                val info = MediaCodec.BufferInfo().apply {
-                    set(data.position(), data.remaining(), maxOf(0L, presentationTimeUs + shift),
-                        if (flags and C.BUFFER_FLAG_KEY_FRAME != 0) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0)
-                }
-                native.writeSampleData(trackIndex, data, info)
-            }
-        }
-
-        override fun addMetadata(metadata: Metadata) = Unit
-
-        override fun release(forCancellation: Boolean) {
-            try {
-                muxing {
-                    try { if (started) native.stop() } finally { native.release() }
-                }
-            } catch (error: Muxer.MuxerException) {
-                if (!forCancellation) throw error
-            }
-        }
-
-        override fun getMaxDelayBetweenSamplesMs(): Long = 10_000
-
-        private inline fun <T> muxing(operation: () -> T): T =
-            try { operation() } catch (error: RuntimeException) {
-                throw Muxer.MuxerException("Encrypted MP4 write failed", error)
-            }
     }
 }

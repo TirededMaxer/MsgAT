@@ -597,7 +597,7 @@ public struct InAppMediaViewer: View {
                 }
                     .keyboardShortcut(.space, modifiers: [])
                     .disabled(playback.preparing)
-                Text("\(playback.timeText(scrubPosition ?? playback.position)) / \(playback.timeText(playback.duration))")
+                Text("\(playback.timeText(scrubPosition ?? playback.position)) / \(playback.timeText(playback.duration, duration: true))")
                     .font(.caption.monospacedDigit()).foregroundStyle(.white)
                 Spacer(minLength: 4)
                 MediaSpeedMenu(playback: playback)
@@ -1085,8 +1085,8 @@ struct MediaSpeedMenu: View {
                 }.store(in: &playbackInterruptions)
         }
     }
-    func timeText(_ seconds: Double) -> String {
-        let whole = Int(max(0, seconds))
+    func timeText(_ seconds: Double, duration: Bool = false) -> String {
+        let whole = seconds.isFinite ? Int(max(0, seconds).rounded(duration ? .toNearestOrAwayFromZero : .down)) : 0
         if whole >= 3600 { return String(format: "%d:%02d:%02d", whole / 3600, whole / 60 % 60, whole % 60) }
         return String(format: "%02d:%02d", whole / 60, whole % 60)
     }

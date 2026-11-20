@@ -108,6 +108,7 @@
     <sys:String x:Key="UiSearchSearching">正在搜索…</sys:String>
     <sys:String x:Key="UiSearchResultsCount">找到 {0} 条结果</sys:String>
     <sys:String x:Key="UiMenu">菜单</sys:String>
+    <sys:String x:Key="UiChatMoreActions">更多聊天操作</sys:String>
     <sys:String x:Key="UiChatFolders">聊天文件夹</sys:String>
     <sys:String x:Key="UiResizeSidebar">调整聊天列表宽度</sys:String>
     <sys:String x:Key="UiFolderSearchMembers">搜索联系人</sys:String>

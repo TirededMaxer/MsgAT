@@ -4,28 +4,28 @@
              xmlns:infra="clr-namespace:MsgAT.Windows.Infrastructure"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <Color x:Key="WindowColor">#FF171F1B</Color>
-        <Color x:Key="PanelColor">#FF202B25</Color>
-        <Color x:Key="SurfaceColor">#FF25322B</Color>
-        <Color x:Key="RaisedColor">#FF314139</Color>
-        <Color x:Key="BorderColor">#FF53675B</Color>
-        <Color x:Key="TextColor">#FFF0F6F2</Color>
-        <Color x:Key="MutedColor">#FFBCD0C5</Color>
+        <Color x:Key="WindowColor">#FF19211E</Color>
+        <Color x:Key="PanelColor">#FF202925</Color>
+        <Color x:Key="SurfaceColor">#FF29332E</Color>
+        <Color x:Key="RaisedColor">#FF344139</Color>
+        <Color x:Key="BorderColor">#FF46564C</Color>
+        <Color x:Key="TextColor">#FFE9F3EE</Color>
+        <Color x:Key="MutedColor">#FFB0C3B8</Color>
         <Color x:Key="AccentColor">#FF7ED8AD</Color>
         <Color x:Key="AccentHoverColor">#FF96E5BE</Color>
         <Color x:Key="DangerColor">#FFFF6B78</Color>
         <Color x:Key="AccentTextColor">#FF95E3BB</Color>
         <Color x:Key="ConnectionDotColor">#FF6FD6A2</Color>
         <Color x:Key="ConnectionColor">#FF8BD8AC</Color>
-        <Color x:Key="MessagingTimelineColor">#FF18211C</Color>
-        <Color x:Key="MessagingChromeColor">#FF27342D</Color>
-        <Color x:Key="MessagingSidebarColor">#FF1E2C24</Color>
+        <Color x:Key="MessagingTimelineColor">#FF171E1B</Color>
+        <Color x:Key="MessagingChromeColor">#FF242E29</Color>
+        <Color x:Key="MessagingSidebarColor">#FF1E2823</Color>
         <Color x:Key="MessagingSelectionColor">#FF334C3F</Color>
-        <Color x:Key="MessagingDividerColor">#FF475C50</Color>
+        <Color x:Key="MessagingDividerColor">#FF38473E</Color>
         <Color x:Key="MessagingSelectionMarkColor">#FF8DDAB1</Color>
         <Color x:Key="MessagingIncomingBubbleColor">#FF2C3B32</Color>
-        <Color x:Key="MessagingOutgoingBubbleColor">#FF245241</Color>
-        <Color x:Key="MessagingMetadataColor">#FFBCD0C4</Color>
+        <Color x:Key="MessagingOutgoingBubbleColor">#FF25493A</Color>
+        <Color x:Key="MessagingMetadataColor">#FFB0C3B8</Color>
 
         <SolidColorBrush x:Key="WindowBrush" Color="{DynamicResource WindowColor}" />
         <SolidColorBrush x:Key="PanelBrush" Color="{DynamicResource PanelColor}" />
@@ -160,10 +160,12 @@
         <Style x:Key="AppWindowStyle" TargetType="Window">
             <Setter Property="Background" Value="{StaticResource WindowBrush}" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
-            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Segoe UI" />
+            <Setter Property="FontFamily" Value="Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI, Microsoft YaHei" />
+            <Setter Property="UseLayoutRounding" Value="True" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
             <Setter Property="FontSize" Value="14" />
             <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
-            <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+            <Setter Property="TextOptions.TextRenderingMode" Value="Auto" />
         </Style>
 
         <Style x:Key="ButtonStyle" TargetType="Button">
@@ -402,6 +404,78 @@
             </Setter>
         </Style>
 
+        <Style TargetType="ComboBoxItem">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Padding" Value="10,6" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemSurface" Padding="{TemplateBinding Padding}" Background="Transparent" CornerRadius="4">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemSurface" Property="Background" Value="{StaticResource MessagingSelectionBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ItemSurface" Property="Background" Value="{StaticResource RaisedBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Opacity" Value="0.5" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style TargetType="ComboBox">
+            <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
+            <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
+            <Setter Property="MinHeight" Value="32" />
+            <Setter Property="Padding" Value="10,4" />
+            <Style.Triggers>
+                <Trigger Property="IsEditable" Value="False">
+                    <Setter Property="Template">
+                        <Setter.Value>
+                            <ControlTemplate TargetType="ComboBox">
+                                <Grid>
+                                    <ToggleButton Focusable="False" ClickMode="Press"
+                                                  IsChecked="{Binding IsDropDownOpen, RelativeSource={RelativeSource TemplatedParent}, Mode=TwoWay}">
+                                        <ToggleButton.Template>
+                                            <ControlTemplate TargetType="ToggleButton"><Border Background="Transparent"/></ControlTemplate>
+                                        </ToggleButton.Template>
+                                    </ToggleButton>
+                                    <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
+                                            BorderThickness="1" CornerRadius="6" IsHitTestVisible="False" Padding="{TemplateBinding Padding}">
+                                        <DockPanel>
+                                            <Path DockPanel.Dock="Right" Data="M0,0 L4,4 L8,0" Stroke="{StaticResource MutedBrush}"
+                                                  StrokeThickness="1.5" Margin="10,0,1,0" VerticalAlignment="Center" />
+                                            <ContentPresenter VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}"
+                                                ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}" ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"/>
+                                        </DockPanel>
+                                    </Border>
+                                    <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False">
+                                        <Border MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
+                                                MaxHeight="{TemplateBinding MaxDropDownHeight}" Padding="3" Margin="0,2,0,0"
+                                                Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6">
+                                            <ScrollViewer CanContentScroll="True"><ItemsPresenter /></ScrollViewer>
+                                        </Border>
+                                    </Popup>
+                                </Grid>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                        <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentTextBrush}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.55"/></Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Setter.Value>
+                    </Setter>
+                </Trigger>
+            </Style.Triggers>
+        </Style>
         <Style TargetType="ContextMenu">
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />

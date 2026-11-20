@@ -605,7 +605,9 @@ public struct ChatView: View {
                             retryingLatestJump = false
                             historyPageToRetry = nil
                             requestedQuoteOrigin = nil
-                            proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+                            if initialMessageId == nil && historyPosition == nil {
+                                proxy.scrollTo("BOTTOM_ANCHOR", anchor: .bottom)
+                            }
                         }
                         .overlay(alignment: .top) {
                             Group {
@@ -2307,19 +2309,22 @@ public struct ChatView: View {
         let generation = highlightGeneration
         historyPositionRevision += 1
         let navigation = historyPositionRevision
-        DispatchQueue.main.async {
-            if generation == highlightGeneration, navigation == historyPositionRevision,
-               viewModel.isChatMounted, AppLockSession.shared.canShowContent {
-                withAnimation(animated && !reduceMotion ? .easeOut(duration: 0.2) : nil) {
-                    scrollToMessage(id, proxy: proxy, anchor: anchor, positioningRevision: navigation)
+        Task { @MainActor in
+            defer {
+                if navigation == historyPositionRevision {
+                    restoringHistory = false
+                    updateViewingLatest()
+                    updateReadVisibility()
                 }
             }
-            DispatchQueue.main.async {
-                guard navigation == historyPositionRevision else { return }
-                restoringHistory = false
-                guard viewModel.isChatMounted, AppLockSession.shared.canShowContent else { return }
-                updateViewingLatest()
-                updateReadVisibility()
+            for (attempt, delay) in [0, 32, 80, 160, 220].enumerated() {
+                if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) }
+                guard navigation == historyPositionRevision, generation == highlightGeneration,
+                      viewModel.isChatMounted, AppLockSession.shared.canShowContent else { return }
+                if attempt > 0, let frame = messageFrames[id], frame.maxY > 0, frame.minY < viewportHeight { return }
+                withAnimation(attempt == 0 && animated && !reduceMotion ? .easeOut(duration: 0.2) : nil) {
+                    scrollToMessage(id, proxy: proxy, anchor: anchor, positioningRevision: navigation)
+                }
             }
         }
     }
@@ -2849,7 +2854,7 @@ fileprivate extension View {
                 .defaultScrollAnchor(.bottom, for: .alignment)
                 .defaultScrollAnchor(followingLatest ? .bottom : nil, for: .sizeChanges)
         } else if #available(macOS 14.0, *) {
-            self.defaultScrollAnchor(.bottom)
+            self.defaultScrollAnchor(followingLatest ? .bottom : nil)
         } else {
             self
         }

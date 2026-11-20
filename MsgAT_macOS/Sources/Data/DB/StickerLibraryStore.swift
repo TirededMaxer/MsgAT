@@ -64,8 +64,10 @@ final class StickerLibraryStore:@unchecked Sendable {
                 }
                 try self.requireOpen();try cancellation.check()
                 let result=try AppDatabase.shared.transaction(notifyChanged:true){db in
-                    let now=Int64(Date().timeIntervalSince1970*1000);let destination=packId ?? UUID().uuidString.lowercased()
-                    if packId==nil {try db.execute("INSERT INTO sticker_packs(id,name,created_at) VALUES(?,?,?)",values:[.text(destination),.text(name),.integer(now)])}
+                    let now=Int64(Date().timeIntervalSince1970*1000)
+                    let existing = try packId ?? db.query("SELECT id FROM sticker_packs WHERE name=? ORDER BY created_at,id LIMIT 1", values:[.text(name)]) { String(cString:sqlite3_column_text($0,0)) }.first
+                    let destination=existing ?? UUID().uuidString.lowercased()
+                    if existing==nil {try db.execute("INSERT INTO sticker_packs(id,name,created_at) VALUES(?,?,?)",values:[.text(destination),.text(name),.integer(now)])}
                     else {guard try !db.query("SELECT 1 FROM sticker_packs WHERE id=?",values:[.text(destination)],map:{_ in true}).isEmpty else {throw self.failure("Selected sticker group was deleted.")}}
                     var position=try self.number(db,"SELECT COALESCE(MAX(position),-1)+1 FROM sticker_pack_items WHERE pack_id=?",[.text(destination)]);var added=0
                     for row in prepared {

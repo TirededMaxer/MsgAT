@@ -1,6 +1,7 @@
 <Window x:Class="MsgAT.Windows.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:presentation="clr-namespace:MsgAT.Windows.Presentation"
         xmlns:views="clr-namespace:MsgAT.Windows.Views"
         xmlns:infra="clr-namespace:MsgAT.Windows.Infrastructure"
         xmlns:network="clr-namespace:MsgAT.Windows.Core.Network;assembly=MsgAT.Windows.Core"
@@ -244,7 +245,7 @@
             <ColumnDefinition Width="7" />
             <ColumnDefinition x:Name="ChatColumn" Width="*" MinWidth="390" />
         </Grid.ColumnDefinitions>
-        <Border Grid.Column="0" Background="{DynamicResource MessagingSidebarBrush}"
+        <Border x:Name="SidebarSurface" Grid.Column="0" Background="{DynamicResource MessagingSidebarBrush}"
                 BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,0,1,0">
             <Grid>
                 <Grid.ColumnDefinitions>
@@ -252,140 +253,14 @@
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="48" />
+                    <RowDefinition Height="58" />
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="*" />
                     <RowDefinition Height="Auto" />
                 </Grid.RowDefinitions>
 
-                <Grid Grid.Column="1" Margin="12,0,8,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*" />
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="40" />
-                    </Grid.ColumnDefinitions>
-                    <TextBlock Text="MsgAT" FontSize="18" VerticalAlignment="Center" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,16,0">
-                        <Grid Width="12" Height="12" Margin="0,0,6,0">
-                            <Ellipse Width="10" Height="10">
-                                <Ellipse.Style>
-                                    <Style TargetType="Ellipse">
-                                        <Setter Property="Fill" Value="Red" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SyncText}" Value="Connected">
-                                                <Setter Property="Fill" Value="{StaticResource ConnectionDotBrush}" />
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding SyncText}" Value="Syncing...">
-                                                <Setter Property="Visibility" Value="Collapsed" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Ellipse.Style>
-                            </Ellipse>
-                            <Path Data="M 6,1 A 5,5 0 1 1 1,6" Stroke="{StaticResource ConnectionDotBrush}" StrokeThickness="2" RenderTransformOrigin="0.5,0.5">
-                                <Path.RenderTransform><RotateTransform /></Path.RenderTransform>
-                                <Path.Style>
-                                    <Style TargetType="Path">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding SyncText}" Value="Syncing...">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                                <DataTrigger.EnterActions>
-                                                    <BeginStoryboard Name="SyncAnimation">
-                                                        <Storyboard>
-                                                            <DoubleAnimation Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
-                                                                             From="0" To="360" Duration="0:0:1" RepeatBehavior="Forever" />
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </DataTrigger.EnterActions>
-                                                <DataTrigger.ExitActions><RemoveStoryboard BeginStoryboardName="SyncAnimation" /></DataTrigger.ExitActions>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Path.Style>
-                            </Path>
-                        </Grid>
-                        <TextBlock FontSize="12">
-                            <TextBlock.Style>
-                                <Style TargetType="TextBlock">
-                                    <Setter Property="Foreground" Value="Red" />
-                                    <Setter Property="Text" Value="{DynamicResource UiDisconnected}" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Connected">
-                                            <Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" />
-                                            <Setter Property="Text" Value="{DynamicResource UiConnected}" />
-                                        </DataTrigger>
-                                        <DataTrigger Binding="{Binding SyncText}" Value="Syncing...">
-                                            <Setter Property="Foreground" Value="{StaticResource ConnectionDotBrush}" />
-                                            <Setter Property="Text" Value="{DynamicResource UiSyncing}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </TextBlock.Style>
-                        </TextBlock>
-                    </StackPanel>
-                    <Button Grid.Column="2" Style="{StaticResource IconButtonStyle}" ToolTip="{DynamicResource UiMenu}" AutomationProperties.Name="{DynamicResource UiMenu}"
-                            IsEnabled="{Binding IsWorkspaceReady}" Click="MainMenu_Click">
-                        <Button.Content><Geometry>M 12,4 L 12,20 M 4,12 L 20,12</Geometry></Button.Content>
-                    </Button>
-                </Grid>
-
-                <Border Grid.RowSpan="4" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,1,0"
-                        Background="{StaticResource WindowBrush}">
-                    <ListBox x:Name="FolderList" ItemsSource="{Binding FolderChoices}" SelectedValuePath="Key"
-                             SelectedValue="{Binding FolderKey,Mode=TwoWay}" AutomationProperties.Name="{DynamicResource UiChatFolders}"
-                             Background="Transparent" BorderThickness="0" Padding="0,8"
-                             ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.VerticalScrollBarVisibility="Hidden">
-                        <ListBox.ItemContainerStyle>
-                            <Style TargetType="ListBoxItem">
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                <Setter Property="ToolTip" Value="{Binding AccessibleName}" />
-                                <Setter Property="AutomationProperties.Name" Value="{Binding AccessibleName}" />
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="ListBoxItem">
-                                            <Border x:Name="FolderChrome" Background="Transparent" BorderBrush="Transparent"
-                                                    BorderThickness="2,0,0,0" Padding="2,4,4,4">
-                                                <ContentPresenter HorizontalAlignment="Stretch" />
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="IsMouseOver" Value="True">
-                                                    <Setter TargetName="FolderChrome" Property="Background" Value="{StaticResource PanelBrush}" />
-                                                </Trigger>
-                                                <Trigger Property="IsSelected" Value="True">
-                                                    <Setter TargetName="FolderChrome" Property="Background" Value="{StaticResource SurfaceBrush}" />
-                                                    <Setter TargetName="FolderChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                                    <Setter Property="Foreground" Value="{StaticResource AccentTextBrush}" />
-                                                </Trigger>
-                                                <Trigger Property="IsKeyboardFocused" Value="True">
-                                                    <Setter TargetName="FolderChrome" Property="BorderBrush" Value="{StaticResource AccentBrush}" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </ListBox.ItemContainerStyle>
-                        <ListBox.ItemTemplate>
-                            <DataTemplate>
-                                <Grid Height="44">
-                                    <StackPanel VerticalAlignment="Center">
-                                        <TextBlock Text="{Binding Icon}" FontFamily="Segoe MDL2 Assets" FontSize="17" HorizontalAlignment="Center" />
-                                        <TextBlock Text="{Binding Title}" FontSize="10" TextAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" Margin="1,4,1,0" />
-                                    </StackPanel>
-                                    <infra:CircularBadge Background="#FFF22626" Padding="3,1"
-                                                         HorizontalAlignment="Right" VerticalAlignment="Top"
-                                                         Visibility="{Binding HasUnread, Converter={StaticResource BooleanVisibilityConverter}}">
-                                        <TextBlock Text="{Binding UnreadLabel}" Foreground="White" FontSize="9"
-                                                   FontWeight="SemiBold" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    </infra:CircularBadge>
-                                </Grid>
-                            </DataTemplate>
-                        </ListBox.ItemTemplate>
-                    </ListBox>
-                </Border>
+                <presentation:WorkspaceBarHost x:Name="WorkspaceBar" Grid.Column="1" />
+                <presentation:FolderRailHost x:Name="FolderList" Grid.RowSpan="4" />
 
                 <Button Grid.Column="1" Grid.Row="1" Padding="10,6" Margin="4,0,4,2"
                         MinHeight="40" HorizontalContentAlignment="Stretch" Click="ArchiveEntry_Click"
@@ -434,104 +309,20 @@
 
                 <Grid Grid.Column="1" Grid.Row="2" ClipToBounds="True">
                 <Grid x:Name="ConversationFolderContent">
-                <ListBox x:Name="ConversationList" ItemsSource="{Binding VisibleConversations}"
-                         SelectedItem="{Binding SelectedConversation, Mode=OneWay}" SelectionChanged="ConversationList_SelectionChanged"
-                         Background="Transparent"
-                         BorderThickness="0" HorizontalContentAlignment="Stretch"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled" AllowDrop="True"
-                         DragOver="PinnedConversation_DragOver" DragLeave="PinnedConversation_DragLeave" Drop="PinnedConversation_Drop">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem" BasedOn="{StaticResource ConversationItemStyle}">
-                            <EventSetter Event="PreviewMouseRightButtonDown" Handler="Conversation_PreviewMouseRightButtonDown" />
-                            <EventSetter Event="PreviewKeyDown" Handler="Conversation_PreviewKeyDown" />
+                <presentation:ConversationListHost x:Name="ConversationList">
+                    <presentation:ConversationListHost.Style>
+                        <Style TargetType="presentation:ConversationListHost">
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding VisibleConversations.Count}" Value="0">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                                <DataTrigger Binding="{Binding IsWorkspaceReady}" Value="False">
+                                    <Setter Property="Visibility" Value="Collapsed" />
+                                </DataTrigger>
+                            </Style.Triggers>
                         </Style>
-                    </ListBox.ItemContainerStyle>
-                    <ListBox.ItemTemplate>
-                        <DataTemplate>
-                            <Grid MinHeight="46">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="46" />
-                                    <ColumnDefinition />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <Border Width="46" Height="46" CornerRadius="23" Background="{StaticResource SurfaceBrush}"
-                                        HorizontalAlignment="Left" VerticalAlignment="Center">
-                                    <Grid>
-                                        <TextBlock Text="{Binding Initial}" HorizontalAlignment="Center"
-                                                   VerticalAlignment="Center" FontWeight="SemiBold" FontSize="17" />
-                                        <Ellipse Fill="{Binding AvatarPath, Converter={StaticResource AvatarConverter}}" />
-                                    </Grid>
-                                </Border>
-                                <Grid Grid.Column="1" VerticalAlignment="Center" Margin="12,0,0,0">
-                                    <Grid.RowDefinitions>
-                                        <RowDefinition Height="Auto" MinHeight="22" />
-                                        <RowDefinition Height="Auto" MinHeight="22" />
-                                    </Grid.RowDefinitions>
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition />
-                                        <ColumnDefinition Width="Auto" />
-                                    </Grid.ColumnDefinitions>
-                                    <DockPanel Grid.Row="0" Margin="0,0,5,0">
-                                        <Path DockPanel.Dock="Right" Margin="4,0,0,0" Width="11" Height="11" Stretch="Uniform"
-                                              Stroke="{StaticResource MutedBrush}" StrokeThickness="1.4"
-                                              Data="M 5,17 L 7,14 L 7,9 A 5,5 0 0 1 17,9 L 17,14 L 19,17 L 5,17 M 10,21 L 14,21 M 4,4 L 20,20"
-                                              ToolTip="{DynamicResource UiConversationMuted}"
-                                              AutomationProperties.Name="{DynamicResource UiConversationMuted}"
-                                              Visibility="{Binding IsMuted, Converter={StaticResource BooleanVisibilityConverter}}" />
-                                        <TextBlock Text="{Binding Alias}" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center"
-                                                   TextTrimming="CharacterEllipsis" />
-                                    </DockPanel>
-                                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                                        <infra:MessageReceiptPresenter Content="{Binding Receipt}" ContentTemplate="{StaticResource ChatReceiptTemplate}" />
-                                        <TextBlock Text="{Binding ActivityTime}" FontSize="13" VerticalAlignment="Center" Margin="3,0,0,0"
-                                                   TextAlignment="Right" Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis" MaxWidth="104" />
-                                    </StackPanel>
-                                    <DockPanel Grid.Row="1" VerticalAlignment="Center">
-                                        <TextBlock DockPanel.Dock="Left" Margin="0,0,4,0" FontSize="13" FontWeight="SemiBold"
-                                                   Text="{DynamicResource UiDraftPrefix}" Foreground="{StaticResource DangerBrush}"
-                                                   Visibility="{Binding IsDraftPreview, Converter={StaticResource BooleanVisibilityConverter}}" />
-                                        <infra:MessageTextBlock MessageText="{Binding Preview}" IsSummary="True"
-                                                                VerticalAlignment="Center" FontSize="13" TextTrimming="CharacterEllipsis"
-                                                                Foreground="{StaticResource MutedBrush}" />
-                                    </DockPanel>
-                                    <StackPanel Grid.Column="1" Grid.Row="1" Orientation="Horizontal" VerticalAlignment="Center"
-                                                HorizontalAlignment="Right" Margin="5,0,0,0">
-                                        <TextBlock Text="&#xE718;" FontFamily="Segoe MDL2 Assets" FontSize="10" Margin="0,0,4,0"
-                                                   VerticalAlignment="Center" Foreground="{StaticResource MutedBrush}"
-                                                   ToolTip="{DynamicResource UiChatPinned}" AutomationProperties.Name="{DynamicResource UiChatPinned}"
-                                                   Visibility="{Binding IsPinned, Converter={StaticResource BooleanVisibilityConverter}}" />
-                                        <infra:CircularBadge x:Name="Unread" Background="#FFF22626" Padding="5,2" VerticalAlignment="Center"
-                                                             AutomationProperties.Name="{Binding UnreadDescription}">
-                                            <TextBlock Text="{Binding UnreadLabel}" Foreground="White"
-                                                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                       FontSize="12" FontWeight="Bold" />
-                                        </infra:CircularBadge>
-                                    </StackPanel>
-                                </Grid>
-                                <TextBlock Grid.Column="2" Text="&#xE700;" FontFamily="Segoe MDL2 Assets" FontSize="12"
-                                           Width="20" Padding="2,8" TextAlignment="Center" Background="Transparent" Cursor="SizeNS"
-                                           VerticalAlignment="Center" ToolTip="{DynamicResource UiReorderPinnedChat}" AutomationProperties.Name="{DynamicResource UiReorderPinnedChat}"
-                                           Visibility="{Binding IsPinned, Converter={StaticResource BooleanVisibilityConverter}}"
-                                           PreviewMouseLeftButtonDown="PinnedConversation_Grab" />
-                                <Border x:Name="PinInsertionLine" Grid.ColumnSpan="3" Height="2" Background="{StaticResource AccentBrush}"
-                                        IsHitTestVisible="False" Visibility="Collapsed" />
-                            </Grid>
-                            <DataTemplate.Triggers>
-                                <DataTrigger Binding="{Binding HasUnread}" Value="False">
-                                    <Setter TargetName="Unread" Property="Visibility" Value="Collapsed" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="PinBefore">
-                                    <Setter TargetName="PinInsertionLine" Property="VerticalAlignment" Value="Top" />
-                                    <Setter TargetName="PinInsertionLine" Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="PinAfter">
-                                    <Setter TargetName="PinInsertionLine" Property="VerticalAlignment" Value="Bottom" />
-                                    <Setter TargetName="PinInsertionLine" Property="Visibility" Value="Visible" />
-                                </DataTrigger>
-                            </DataTemplate.Triggers>
-                        </DataTemplate>
-                    </ListBox.ItemTemplate>
-                </ListBox>
+                    </presentation:ConversationListHost.Style>
+                </presentation:ConversationListHost>
                 <TextBlock HorizontalAlignment="Center" VerticalAlignment="Center"
                            Margin="16" Foreground="{StaticResource MutedBrush}" TextWrapping="Wrap"
                            TextAlignment="Center" IsHitTestVisible="False">
@@ -650,206 +441,13 @@
                 </Style>
             </Grid.Style>
             <Grid.RowDefinitions>
-                <RowDefinition x:Name="ChatHeaderRow" Height="48" />
+                <RowDefinition x:Name="ChatHeaderRow" Height="58" />
                 <RowDefinition x:Name="PinnedBannerRow" Height="Auto" />
                 <RowDefinition Height="*" />
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Background="{DynamicResource MessagingChromeBrush}"
-                    BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="0,0,0,1">
-                <Grid Margin="12,0">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <Grid VerticalAlignment="Center">
-                        <Grid.Style>
-                            <Style TargetType="Grid">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsSelecting}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </Grid.Style>
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="36" />
-                            <ColumnDefinition />
-                        </Grid.ColumnDefinitions>
-                        <Button Width="36" Height="36" MinHeight="0" Padding="0" BorderThickness="0"
-                                Background="Transparent" Click="OpenContactProfile_Click"
-                                ToolTip="{DynamicResource UiContactProfile}" AutomationProperties.Name="{DynamicResource UiContactProfile}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding ChatPeerVerified}" Value="True">
-                                            <Setter Property="AutomationProperties.ItemStatus" Value="{DynamicResource UiContactVerified}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                            <Border Width="36" Height="36" CornerRadius="18" Background="{StaticResource SurfaceBrush}">
-                                <Grid>
-                                    <TextBlock Text="{Binding SelectedConversation.Initial}" FontSize="14" FontWeight="SemiBold"
-                                               HorizontalAlignment="Center" VerticalAlignment="Center" />
-                                    <Ellipse Fill="{Binding SelectedConversation.AvatarPath, Converter={StaticResource AvatarConverter}}" />
-                                </Grid>
-                            </Border>
-                        </Button>
-                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="8,0,10,0">
-                            <Grid HorizontalAlignment="Left">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition />
-                                    <ColumnDefinition Width="Auto" />
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="{Binding SelectedConversation.Alias}" FontSize="15" FontWeight="SemiBold"
-                                           TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
-                                <Path Grid.Column="1" Width="13" Height="13" Margin="4,0,0,0" VerticalAlignment="Center"
-                                      Data="M 7,1 L 12,3 V 7 C 12,10 10,12 7,13 C 4,12 2,10 2,7 V 3 Z M 4.5,7 L 6.3,8.8 L 9.5,5.5"
-                                      Stretch="Uniform" Stroke="{DynamicResource MessagingSelectionMarkBrush}"
-                                      StrokeThickness="1.2" StrokeLineJoin="Round" ToolTip="{DynamicResource UiContactVerified}"
-                                      Visibility="{Binding ChatPeerVerified, Converter={StaticResource BooleanVisibilityConverter}}" />
-                            </Grid>
-                            <DockPanel>
-                            <ContentControl DockPanel.Dock="Left" Margin="0,0,4,0" Content="{Binding SyncText}"
-                                            ContentTemplate="{StaticResource ChatConnectionIndicatorTemplate}" VerticalAlignment="Center" />
-                            <ContentControl DockPanel.Dock="Left" Content="{Binding PeerActivity}" Margin="0,0,4,0"
-                                            ContentTemplate="{StaticResource ChatTypingDotsTemplate}">
-                                <ContentControl.Style>
-                                    <Style TargetType="ContentControl">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Typing}">
-                                                <Setter Property="Visibility" Value="Visible" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </ContentControl.Style>
-                            </ContentControl>
-                            <TextBlock FontSize="11" TextTrimming="CharacterEllipsis">
-                                <TextBlock.Style>
-                                    <Style TargetType="TextBlock">
-                                        <Setter Property="Text" Value="{DynamicResource UiDisconnected}" />
-                                        <Setter Property="Foreground" Value="{DynamicResource MutedBrush}" />
-                                        <Style.Triggers>
-                                            <MultiDataTrigger>
-                                                <MultiDataTrigger.Conditions>
-                                                    <Condition Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.None}" />
-                                                    <Condition Binding="{Binding SyncText}" Value="Connected" />
-                                                </MultiDataTrigger.Conditions>
-                                                <Setter Property="Text" Value="{DynamicResource UiConnected}" />
-                                            </MultiDataTrigger>
-                                            <MultiDataTrigger>
-                                                <MultiDataTrigger.Conditions>
-                                                    <Condition Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.None}" />
-                                                    <Condition Binding="{Binding SyncText}" Value="Syncing..." />
-                                                </MultiDataTrigger.Conditions>
-                                                <Setter Property="Text" Value="{DynamicResource UiSyncing}" />
-                                            </MultiDataTrigger>
-                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Typing}">
-                                                <Setter Property="Text" Value="{DynamicResource UiPeerTyping}" />
-                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Online}">
-                                                <Setter Property="Text" Value="{DynamicResource UiPeerOnline}" />
-                                                <Setter Property="Foreground" Value="{DynamicResource AccentTextBrush}" />
-                                            </DataTrigger>
-                                            <DataTrigger Binding="{Binding PeerActivity}" Value="{x:Static network:PeerActivityStatus.Offline}">
-                                                <Setter Property="Text" Value="{DynamicResource UiPeerOffline}" />
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </TextBlock.Style>
-                            </TextBlock>
-                            </DockPanel>
-                        </StackPanel>
-                    </Grid>
-                    <TextBlock Text="{Binding SelectionText}" FontSize="15" FontWeight="SemiBold" VerticalAlignment="Center"
-                               Visibility="{Binding IsSelecting, Converter={StaticResource BooleanVisibilityConverter}}" />
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                        <StackPanel.Style>
-                            <Style TargetType="StackPanel">
-                                <Style.Triggers>
-                                    <DataTrigger Binding="{Binding IsSelecting}" Value="True">
-                                        <Setter Property="Visibility" Value="Collapsed" />
-                                    </DataTrigger>
-                                </Style.Triggers>
-                            </Style>
-                        </StackPanel.Style>
-                        <Button Content="{StaticResource CallIcon}" Click="VoiceCall_Click"
-                                ToolTip="{DynamicResource UiVoiceCall}" AutomationProperties.Name="{DynamicResource UiVoiceCall}" IsEnabled="{Binding CanCompose}"
-                                Style="{StaticResource ChatToolbarButtonStyle}" />
-                        <Button Content="{StaticResource VideoCallIcon}" Click="VideoCall_Click"
-                                ToolTip="{DynamicResource UiVideoCall}" AutomationProperties.Name="{DynamicResource UiVideoCall}" IsEnabled="{Binding CanCompose}"
-                                Style="{StaticResource ChatToolbarButtonStyle}" />
-                        <Button Click="SearchChat_Click" ToolTip="{DynamicResource UiSearchMessages}" AutomationProperties.Name="{DynamicResource UiSearchMessages}"
-                                Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M 15.5,10 A 5.5,5.5 0 1 1 4.5,10 A 5.5,5.5 0 1 1 15.5,10 M 14,14 L 20,20"
-                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="ConversationMute_Click" AutomationProperties.Name="{DynamicResource UiConversationNotifications}">
-                            <Button.Style>
-                                <Style TargetType="Button" BasedOn="{StaticResource ChatToolbarButtonStyle}">
-                                    <Setter Property="ToolTip" Value="{DynamicResource UiConversationNotifications}" />
-                                    <Style.Triggers>
-                                        <DataTrigger Binding="{Binding SelectedConversation.IsMuted}" Value="True">
-                                            <Setter Property="ToolTip" Value="{DynamicResource UiConversationMuted}" />
-                                            <Setter Property="AutomationProperties.HelpText" Value="{DynamicResource UiConversationMuted}" />
-                                        </DataTrigger>
-                                    </Style.Triggers>
-                                </Style>
-                            </Button.Style>
-                            <Grid Width="17" Height="17">
-                                <Path Data="M12,3 C8.6,3 6,5.4 6,9 V13 L4,16 H20 L18,13 V9 C18,5.4 15.4,3 12,3 M10,19 C10.8,21 13.2,21 14,19"
-                                      Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Stretch="Uniform" />
-                                <Line X1="1" Y1="1" X2="16" Y2="16" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5"
-                                      Visibility="{Binding SelectedConversation.IsMuted, Converter={StaticResource BooleanVisibilityConverter}}" />
-                            </Grid>
-                        </Button>
-                        <Button Click="NavigateHistory_Click" ToolTip="{DynamicResource UiHistoryNavigation}" AutomationProperties.Name="{DynamicResource UiHistoryNavigation}"
-                                Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M3,5 L21,5 L21,22 L3,22 Z M3,10 L21,10 M7,2 L7,7 M17,2 L17,7 M7,14 L11,14 M14,14 L17,14 M7,18 L11,18"
-                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="ChatSendQueue_Click" ToolTip="{DynamicResource UiSendingQueue}" AutomationProperties.Name="{DynamicResource UiSendingQueue}"
-                                Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M12,3 A9,9 0 1 1 12,21 A9,9 0 1 1 12,3 M12,7 L12,12 L16,14"
-                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.6" Width="17" Height="17" Stretch="Uniform" />
-                        </Button>
-                    </StackPanel>
-                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center"
-                                Visibility="{Binding IsSelecting, Converter={StaticResource BooleanVisibilityConverter}}">
-                        <Button Click="ForwardSelected_Click" ToolTip="{DynamicResource UiForwardSelectedMessages}"
-                                AutomationProperties.Name="{DynamicResource UiForwardSelectedMessages}"
-                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M2,10 L9,3 M9,3 L9,8 C15,8 19,12 20,20 C17,15 14,13 9,13 L9,18 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="20" Height="20" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="SaveSelected_Click" ToolTip="{DynamicResource UiSaveSelectedMessages}"
-                                AutomationProperties.Name="{DynamicResource UiSaveSelectedMessages}"
-                                IsEnabled="{Binding CanKeepSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M4,2 L18,2 L18,22 L11,17 L4,22 Z" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="20" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="CopySelected_Click" ToolTip="{DynamicResource UiCopySelectedMessages}"
-                                AutomationProperties.Name="{DynamicResource UiCopySelectedMessages}"
-                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M8,6 H18 V20 H8 Z M14,3 H5 V16"
-                                  Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="DeleteSelected_Click" ToolTip="{DynamicResource UiDeleteMessages}"
-                                AutomationProperties.Name="{DynamicResource UiDeleteMessages}"
-                                IsEnabled="{Binding CanUseSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M3,5 H17 M7,5 V3 H13 V5 M5,5 L6,17 H14 L15,5 M8,8 V14 M12,8 V14"
-                                  Stroke="{StaticResource DangerBrush}" StrokeThickness="1.5" Width="17" Height="17" Stretch="Uniform" />
-                        </Button>
-                        <Button Click="ClearSelection_Click" ToolTip="{DynamicResource UiCancelMessageSelection}"
-                                AutomationProperties.Name="{DynamicResource UiCancelMessageSelection}"
-                                IsEnabled="{Binding CanChangeSelection}" Style="{StaticResource ChatToolbarButtonStyle}">
-                            <Path Data="M2,2 L18,18 M18,2 L2,18" Stroke="{StaticResource TextBrush}" StrokeThickness="1.5" Width="16" Height="16" Stretch="Uniform" />
-                        </Button>
-                    </StackPanel>
-                </Grid>
-            </Border>
+            <presentation:ChatHeaderHost x:Name="ChatHeader" Grid.Row="0" />
 
             <StackPanel Grid.Row="1">
             <Border x:Name="SearchNavigationBar" Background="{StaticResource PanelBrush}"
@@ -1582,51 +1180,21 @@
                         </DockPanel>
                     </Border>
                     </StackPanel>
-                    <TextBox x:Name="Composer" Grid.Row="1" Grid.Column="1"
-                             Text="{Binding Draft, UpdateSourceTrigger=PropertyChanged}"
-                             Margin="8,9" MinHeight="36" MaxHeight="72" AcceptsReturn="True"
-                             FontSize="{DynamicResource ChatComposerFontSize}" Background="{DynamicResource MessagingTimelineBrush}" Foreground="{StaticResource TextBrush}"
-                             TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                             AutomationProperties.Name="{DynamicResource UiMessagePlaceholder}"
-                             IsEnabled="{Binding CanCompose}">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="TextBox">
-                                            <Border x:Name="InputChrome" Background="{TemplateBinding Background}" CornerRadius="20"
-                                                    BorderBrush="{DynamicResource MessagingDividerBrush}" BorderThickness="1" Padding="11">
-                                                <Grid>
-                                                    <TextBlock x:Name="Placeholder" Text="{DynamicResource UiMessagePlaceholder}"
-                                                               Foreground="{StaticResource MutedBrush}" TextTrimming="CharacterEllipsis"
-                                                               Visibility="Collapsed" IsHitTestVisible="False" />
-                                                    <ScrollViewer x:Name="PART_ContentHost" />
-                                                </Grid>
-                                            </Border>
-                                            <ControlTemplate.Triggers>
-                                                <Trigger Property="Text" Value=""><Setter TargetName="Placeholder" Property="Visibility" Value="Visible" /></Trigger>
-                                                <Trigger Property="IsKeyboardFocusWithin" Value="True">
-                                                    <Setter TargetName="InputChrome" Property="BorderBrush" Value="{DynamicResource MessagingSelectionMarkBrush}" />
-                                                </Trigger>
-                                            </ControlTemplate.Triggers>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                                <Style.Triggers><DataTrigger Binding="{Binding HasMessageEdit}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers>
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
-                    <TextBox x:Name="EditComposer" Grid.Row="1" Grid.ColumnSpan="2" Margin="8,9" MinHeight="36" MaxHeight="72"
-                             Text="{Binding EditText, UpdateSourceTrigger=PropertyChanged}" TextWrapping="Wrap" AcceptsReturn="True"
-                             FontSize="{DynamicResource ChatComposerFontSize}" VerticalScrollBarVisibility="Auto"
-                             AutomationProperties.Name="{DynamicResource UiEditMessage}" IsReadOnly="{Binding IsSavingEdit}"
-                             Visibility="{Binding HasMessageEdit, Converter={StaticResource BooleanVisibilityConverter}}">
-                        <TextBox.Style>
-                            <Style TargetType="TextBox" BasedOn="{StaticResource TextBoxStyle}">
-                                <Setter Property="Background" Value="{DynamicResource MessagingTimelineBrush}" />
-                            </Style>
-                        </TextBox.Style>
-                    </TextBox>
+                    <Grid Grid.Row="1" Grid.ColumnSpan="2" x:Name="EditorSurface" IsHitTestVisible="True">
+                        <presentation:ChatEditorHost x:Name="Composer" Margin="59,9,8,9"
+                            MinHeight="38" MaxHeight="72" EditorFontSize="{DynamicResource ChatComposerFontSize}"
+                            Text="{Binding Draft, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsEnabled="{Binding CanCompose}">
+                            <presentation:ChatEditorHost.Style>
+                                <Style TargetType="presentation:ChatEditorHost">
+                                    <Style.Triggers><DataTrigger Binding="{Binding HasMessageEdit}" Value="True"><Setter Property="Visibility" Value="Collapsed" /></DataTrigger></Style.Triggers>
+                                </Style>
+                            </presentation:ChatEditorHost.Style>
+                        </presentation:ChatEditorHost>
+                        <presentation:ChatEditorHost x:Name="EditComposer" Margin="8,9" MinHeight="38" MaxHeight="72"
+                            PlaceholderKey="UiEditMessage" EditorFontSize="{DynamicResource ChatComposerFontSize}"
+                            Text="{Binding EditText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}" IsReadOnly="{Binding IsSavingEdit}"
+                            Visibility="{Binding HasMessageEdit, Converter={StaticResource BooleanVisibilityConverter}}" />
+                    </Grid>
                     <Button x:Name="AttachmentToggle" Grid.Row="1" Grid.Column="0" Width="44" Height="46" Margin="8,9,0,9"
                             VerticalAlignment="Bottom" Background="Transparent" ContentTemplate="{x:Null}"
                             IsEnabled="{Binding CanCompose}" Click="ToggleAttachments_Click">

@@ -36,7 +36,9 @@ public sealed class MessageSearchStore(EncryptedDatabase database)
                     using var stream = typeof(MessageSearchStore).Assembly.GetManifestResourceStream("MsgAT.MessageSearch.sql")
                         ?? throw new InvalidOperationException("The search resource is unavailable.");
                     using var reader = new StreamReader(stream);
-                    foreach (var statement in reader.ReadToEnd().Split("\n-- statement\n", StringSplitOptions.None)) db.Execute(statement);
+                    var schema = reader.ReadToEnd().ReplaceLineEndings("\n");
+                    foreach (var statement in schema.Split("\n-- statement\n", StringSplitOptions.RemoveEmptyEntries))
+                        db.Execute(statement);
                 }
                 var indexed = query.EnumerateRunes().Count() >= 3;
                 var condition = indexed ? "local_message_search MATCH $p0" : "instr(lower(s.body),lower($p0))>0";

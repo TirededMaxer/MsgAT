@@ -10,12 +10,12 @@ import kotlinx.coroutines.sync.withLock
 
 internal enum class RecordingPhase { IDLE,RECORDING,PAUSED,READY,CLOSED }
 
-/** Native AAC/MP4 encoder writes only through the encrypted seekable descriptor. */
+/** The microphone emits AAC frames into a bounded pipe. MP4 headers and samples are written to encrypted pages. */
 internal class AudioRecordingController(context:Context,private val captures:EncryptedCaptureStore) {
     private val context=context.applicationContext
     private val mutex=Mutex()
     private var recorder:MediaRecorder?=null
-    private var descriptor:CaptureDescriptor?=null
+    private var pipe:CapturePipe?=null
     private var file:EncryptedCaptureFile?=null
     private var microphone: MicrophoneOwnership.RecordingLease? = null
     private var started=false
@@ -29,15 +29,18 @@ internal class AudioRecordingController(context:Context,private val captures:Enc
             microphone = MicrophoneOwnership.startRecording(::yieldMicrophone)
             val output=captures.open("Voice-${System.currentTimeMillis()}.m4a","audio/mp4",stopWriter={stopDevice()})
             file=output
-            val bridge=CaptureDescriptor.open(context,output,true);descriptor=bridge
+            val bridge=CapturePipe({ input -> muxVoiceFrames(input,output) }, {
+                error.value="The microphone recording could not be written";limitReached.value=true
+            })
+            pipe=bridge
             @Suppress("DEPRECATION")
             val encoder=if(android.os.Build.VERSION.SDK_INT>=31)MediaRecorder(context)else MediaRecorder()
             recorder=encoder
             encoder.setAudioSource(MediaRecorder.AudioSource.MIC)
-            encoder.setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+            encoder.setOutputFormat(MediaRecorder.OutputFormat.AAC_ADTS)
             encoder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
             encoder.setAudioEncodingBitRate(64_000);encoder.setAudioSamplingRate(48_000);encoder.setAudioChannels(1)
-            encoder.setOutputFile(bridge.descriptor.fileDescriptor)
+            encoder.setOutputFile(bridge.writer.fileDescriptor)
             encoder.setMaxFileSize(95L*1024*1024);encoder.setMaxDuration(30*60*1000)
             encoder.setOnInfoListener{_,what,_->if(what==MediaRecorder.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED || what==MediaRecorder.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED)limitReached.value=true}
             encoder.setOnErrorListener{_,_,_->error.value="The microphone recording stopped unexpectedly";limitReached.value=true}
@@ -77,7 +80,8 @@ internal class AudioRecordingController(context:Context,private val captures:Enc
                 microphone?.close()
                 microphone = null
             } finally {
-                val bridge=descriptor;descriptor=null;bridge?.closeAndDrain()
+                val bridge=pipe;pipe=null
+                try { bridge?.finish() } catch (_: Exception) { failure="The recording could not be finalized" }
             }
         }
     }}

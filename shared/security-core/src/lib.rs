@@ -87,7 +87,7 @@ enum Request {
     ReplyQuoteSelection { text: String, selection: String },
     LocateReplyQuote { text: String, preview: String },
     VisibleMessageUrls { text: String },
-    SummarizeMessageText {text:String,limit:usize},
+    SummarizeMessageText {text:String,limit:usize,hidden_label:Option<String>},
     FormatMessageSelection {text:String,start:u32,end:u32,kind:String},
     ReduceMessageChange { previous: Option<events::MessageChange>, change: events::MessageChange, #[serde(default)] incoming: bool },
 }
@@ -181,7 +181,7 @@ fn dispatch(bytes: &[u8]) -> Result<Value, String> {
         Request::ReplyQuoteSelection { text, selection } => rich_text::reply_quote_selection(text, selection),
         Request::LocateReplyQuote { text, preview } => rich_text::locate_reply_quote(text, preview),
         Request::VisibleMessageUrls { text } => rich_text::visible_urls(text),
-        Request::SummarizeMessageText {text,limit} => rich_text::summarize(text,limit),
+        Request::SummarizeMessageText {text,limit,hidden_label} => rich_text::summarize(text,limit,hidden_label.as_deref()),
         Request::FormatMessageSelection {text,start,end,kind} => rich_text::format_selection(text,start,end,kind),
         Request::ReduceMessageChange {previous,change,incoming} => events::reduce(previous,change,incoming),
     }

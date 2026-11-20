@@ -445,10 +445,11 @@ private fun FooterAlignedParagraph(text: AnnotatedString, style: TextStyle, colo
 
 @Composable
 internal fun MessageSummaryText(text:String,modifier:Modifier=Modifier,style:TextStyle=LocalTextStyle.current,color:Color=Color.Unspecified,maxLines:Int=Int.MAX_VALUE,fontSize:androidx.compose.ui.unit.TextUnit=androidx.compose.ui.unit.TextUnit.Unspecified,overflow:androidx.compose.ui.text.style.TextOverflow=androidx.compose.ui.text.style.TextOverflow.Clip){
+    val hiddenLabel = uiString(R.string.ui_hidden_message_text)
     var renderedSource by remember{mutableStateOf<String?>(null)}
     var rendered by remember{mutableStateOf("")}
-    LaunchedEffect(text){
-        val value=withContext(Dispatchers.Default){try{SecurityCore.call(JSONObject().put("operation","summarize_message_text").put("text",text).put("limit",240)).getString("text")}catch(_:Exception){"Message"}}
+    LaunchedEffect(text,hiddenLabel){
+        val value=withContext(Dispatchers.Default){try{SecurityCore.call(JSONObject().put("operation","summarize_message_text").put("text",text).put("limit",240).put("hidden_label",hiddenLabel)).getString("text")}catch(_:Exception){"Message"}}
         rendered=value;renderedSource=text
     }
     Text(if(renderedSource==text)rendered else " ",modifier=modifier,style=style,color=color,maxLines=maxLines,fontSize=fontSize,overflow=overflow)

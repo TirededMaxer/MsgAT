@@ -107,9 +107,14 @@ internal class EncryptedObjectStore(
     suspend fun import(uri: Uri,preparation:ObjectPreparation?=null,asFile:Boolean=false,compressPhotos:Boolean=false,compressVideos:Boolean=false,videoTrim:VideoTrim?=null): JSONObject = withContext(Dispatchers.IO) {
         preparation?.check()
         val resolver = context.contentResolver
-        val filename = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
-        }?.substringAfterLast('/')?.substringAfterLast('\\') ?: "attachment.bin"
+        val details = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val name = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            val length = cursor.getColumnIndex(OpenableColumns.SIZE)
+            val knownSize = if (length >= 0 && !cursor.isNull(length)) cursor.getLong(length).takeIf { it >= 0 } else null
+            (if (name >= 0) cursor.getString(name) else null) to knownSize
+        }
+        val filename = details?.first?.substringAfterLast('/')?.substringAfterLast('\\') ?: "attachment.bin"
         if (videoTrim != null) {
             require(resolver.getType(uri)?.startsWith("video/") == true) { "The selected video is no longer available" }
             return@withContext VideoCompression.import(
@@ -139,21 +144,10 @@ internal class EncryptedObjectStore(
                 compressed?.fill(0)
             }
         }
-        var staged: JSONObject? = null
-        try {
-            resolver.openFileDescriptor(uri, "r")?.use { descriptor ->
-                if (descriptor.statSize < 0) return@use null
-                require(descriptor.statSize <= MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
-                val metadata = create(descriptor.statSize, filename, mime)
-                staged = metadata
-                SecurityCore.call(JSONObject().put("operation", "import_object_file").put("manifest", metadata)
-                    .put("source", "/proc/self/fd/${descriptor.fd}").put("directory", directory.absolutePath)
-                    .put("maximum_size", MAXIMUM_SIZE).put("work_id", preparation?.workID() ?: JSONObject.NULL))
-                    .getJSONObject("manifest")
-            } ?: importStream(uri, filename, mime, preparation)
-        } catch (error: Exception) {
-            staged?.let(::discardCopy)
-            throw error
+        // Content providers can return a pipe or a subrange of a larger file.
+        // openInputStream preserves the range and the original read grant.
+        importSource(filename, mime, preparation, details?.second) {
+            resolver.openInputStream(uri) ?: throw IOException("Cannot open the selected attachment")
         }
     }
 
@@ -181,34 +175,32 @@ internal class EncryptedObjectStore(
 
     fun discardCopy(manifest: JSONObject) {lifecycle.discard(manifest.getString("object_id"))}
 
-    /** Non-seekable document providers are read twice; no plaintext staging file is made. */
     suspend fun importBytes(bytes: ByteArray,filename: String,mime: String,preparation:ObjectPreparation?=null): JSONObject = withContext(Dispatchers.IO) {
         require(bytes.size.toLong()<=MAXIMUM_SIZE)
-        importSource(filename,mime,preparation) {java.io.ByteArrayInputStream(bytes)}
+        importSource(filename,mime,preparation,bytes.size.toLong()) {java.io.ByteArrayInputStream(bytes)}
     }
-    private fun importStream(uri: Uri, filename: String, mime: String,preparation:ObjectPreparation?): JSONObject = importSource(filename,mime,preparation) {
-        context.contentResolver.openInputStream(uri) ?: error("Cannot open the selected attachment")
-    }
-    private fun importSource(filename: String,mime: String,preparation:ObjectPreparation?,open: () -> java.io.InputStream): JSONObject {
-        var size = 0L
+    private fun importSource(filename: String,mime: String,preparation:ObjectPreparation?,knownSize: Long? = null,open: () -> java.io.InputStream): JSONObject {
         val buffer = ByteArray(65536)
         try {
-            open().use { input ->
+            val size = knownSize ?: open().use { input ->
+                var measured = 0L
                 while (true) {
                     preparation?.check()
                     val read = readSome(input, buffer)
                     if (read < 0) break
-                    size += read
-                    require(size <= MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
+                    measured += read
+                    require(measured <= MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
                 }
+                measured
             }
+            require(size in 0..MAXIMUM_SIZE) { "Attachment exceeds the file size limit" }
             preparation?.check()
             val metadata = create(size, filename, mime)
             val target = path(metadata.getString("object_id"))
             try {
-            preparation?.report(size,0)
-            check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { "Cannot create the encrypted object directory" }
-            check(target.createNewFile()) { "Encrypted object identity collision" }
+                preparation?.report(size,0)
+                check(target.parentFile!!.isDirectory || target.parentFile!!.mkdirs()) { "Cannot create the encrypted object directory" }
+                check(target.createNewFile()) { "Encrypted object identity collision" }
                 val plainHash = MessageDigest.getInstance("SHA-256")
                 val cipherHash = MessageDigest.getInstance("SHA-256")
                 open().use { input ->

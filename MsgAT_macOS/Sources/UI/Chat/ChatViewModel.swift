@@ -753,6 +753,8 @@ public final class ChatViewModel: ObservableObject {
         if messages.contains(where:{$0.messageId==id}) {
             guard (try? MsgDao.shared.hasHistoryAnchor(peer: targetUuid, id: id)) == true else { return false }
             isViewingLatest = false
+            historyAnchor = messages.first
+            currentLimit = messages.count
             return true
         }
         guard let window = try? MsgDao.shared.getMessageWindow(peer: targetUuid, id: id),

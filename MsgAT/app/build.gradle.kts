@@ -97,10 +97,10 @@ tasks.matching { it.name.startsWith("merge") && it.name.endsWith("NativeLibs") }
 }
 
 dependencies {
-    implementation("androidx.camera:camera-camera2:1.5.3")
-    implementation("androidx.camera:camera-lifecycle:1.5.3")
-    implementation("androidx.camera:camera-view:1.5.3")
-    implementation("androidx.camera:camera-video:1.5.3")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("androidx.camera:camera-video:1.6.2")
 
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -154,8 +154,9 @@ dependencies {
     implementation("androidx.paging:paging-compose:3.3.0")
 
     // ExoPlayer for Video Playback
-    implementation("androidx.media3:media3-exoplayer:1.3.1")
-    implementation("androidx.media3:media3-transformer:1.3.1")
-    implementation("androidx.media3:media3-effect:1.3.1")
-    implementation("androidx.media3:media3-ui:1.3.1")
+    implementation("androidx.media3:media3-exoplayer:1.9.4")
+    implementation("androidx.media3:media3-transformer:1.9.4")
+    implementation("androidx.media3:media3-effect:1.9.4")
+    implementation("androidx.media3:media3-muxer:1.9.4")
+    implementation("androidx.media3:media3-ui:1.9.4")
 }

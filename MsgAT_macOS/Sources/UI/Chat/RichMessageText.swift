@@ -393,15 +393,17 @@ struct RichMessageText:View {
 
 @MainActor
 struct MessageSummaryText:View {
+    @Environment(\.interfaceStrings) private var interfaceText
     let text:String
     @State private var renderedSource:String?
     @State private var summary=""
     var body:some View {
         Text(renderedSource==text ? summary : " ")
-            .task(id:text){
+            .task(id:[text, interfaceText("hidden_message_text")]){
                 let source=text
+                let label=interfaceText("hidden_message_text")
                 let result=await Task.detached(priority:.utility){
-                    (try? SecurityCore.call(["operation":"summarize_message_text","text":source,"limit":240])["text"] as? String) ?? "Message"
+                    (try? SecurityCore.call(["operation":"summarize_message_text","text":source,"limit":240,"hidden_label":label])["text"] as? String) ?? "Message"
                 }.value
                 guard !Task.isCancelled else{return};summary=result;renderedSource=source
             }

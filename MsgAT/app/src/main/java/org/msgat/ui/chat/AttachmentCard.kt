@@ -172,8 +172,8 @@ internal fun AttachmentCard(
                     }
                     val imageSize = if (galleryTile) Modifier.matchParentSize()
                     else Modifier.fillMaxWidth().height(if (albumTile) 112.dp else 190.dp)
-                    thumbnail?.let { Image(it.asImageBitmap(), "Video thumbnail", imageSize, contentScale = ContentScale.Crop) }
-                    Icon(Icons.Default.PlayArrow, "Play video", Modifier.size(if (galleryTile) 28.dp else 44.dp), tint = Color.White)
+                    thumbnail?.let { Image(it.asImageBitmap(), null, imageSize, contentScale = ContentScale.Crop) }
+                    Icon(Icons.Default.PlayArrow, uiString(R.string.ui_play_video), Modifier.size(if (galleryTile) 28.dp else 44.dp), tint = Color.White)
                 } else {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(when {

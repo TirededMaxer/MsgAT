@@ -303,7 +303,7 @@ struct RecordingPlaybackBar: View {
                 .disabled(playback.preparing || playback.duration <= 0)
                 if playback.preparing { ProgressView().controlSize(.small) }
                 else {
-                    Text("\(playback.timeText(scrub ?? playback.position)) / \(playback.timeText(playback.duration))")
+                    Text("\(playback.timeText(scrub ?? playback.position)) / \(playback.timeText(playback.duration, duration: true))")
                         .monospacedDigit().font(.caption)
                 }
             }

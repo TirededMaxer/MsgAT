@@ -1,6 +1,6 @@
 # MsgAT for Windows — V2 reconstruction
 
-The native Windows client uses .NET 10 LTS, WPF and WebView2-hosted WebRTC. This branch is unfinished; the published V1 download remains a separate release. See [reconstruction status](../docs/REBUILD_STATUS.md) before using this source.
+The native Windows client uses .NET 10 LTS and WinUI 3 for conversation navigation, chat commands and message editing. The WPF host owns the message timeline and dialogs. WebView2 hosts WebRTC. This branch is unfinished; the published V1 download remains a separate release. See [reconstruction status](../docs/REBUILD_STATUS.md) before using this source.
 
 ## Build and package
 

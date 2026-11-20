@@ -451,6 +451,7 @@ public struct ChatView: View {
                                     }
                                     .frame(maxWidth: .infinity)
                                     .padding(.bottom, entry.joinsNewer ? 2 : 7)
+                                    .id("timeline-row/" + entry.id)
                                 }
 
                                 Color.clear
@@ -2331,15 +2332,14 @@ public struct ChatView: View {
 
     private func scrollToMessage(_ id: String, proxy: ScrollViewProxy, anchor: UnitPoint = .center,
                                  positioningRevision: Int? = nil) {
-        if let lead = viewModel.displayedAlbums[id]?.first?.messageId {
-            proxy.scrollTo("album-row/" + lead, anchor: anchor)
+        let lead = viewModel.displayedAlbums[id]?.first?.messageId ?? id
+        proxy.scrollTo("timeline-row/" + lead, anchor: anchor)
+        if lead != id {
             DispatchQueue.main.async {
                 guard positioningRevision == nil || positioningRevision == historyPositionRevision,
                       viewModel.isChatMounted, AppLockSession.shared.canShowContent else { return }
                 proxy.scrollTo(id, anchor: anchor)
             }
-        } else {
-            proxy.scrollTo(id, anchor: anchor)
         }
     }
 

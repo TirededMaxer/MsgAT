@@ -74,7 +74,7 @@ V1 服务端使用内置数据库密钥，默认在启动目录的 `data/` 保�
 | 路径 | 内容 |
 | --- | --- |
 | `MsgAT/` | Android：Kotlin、Jetpack Compose、Room、SQLCipher |
-| `MsgAT_Windows/` | Windows：C#、.NET 10 LTS、WPF、WebView2 |
+| `MsgAT_Windows/` | Windows：C#、.NET 10 LTS、WinUI 3 会话导航与编辑、WPF 消息时间线与对话框、WebView2 通话 |
 | `MsgAT_macOS/` | macOS：Swift、SwiftUI、原生 WebRTC |
 | `MsgAT_Console/` | 中继：Java 21、Netty、SQLite |
 | `docs/` | 构建、部署和协议说明 |

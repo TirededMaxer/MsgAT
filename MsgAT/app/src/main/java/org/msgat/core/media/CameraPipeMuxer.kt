@@ -21,6 +21,9 @@ import java.nio.channels.Channels
 
 /** CameraX owns the encoder, timestamps and pause/resume. Each fragment drains into encrypted staging. */
 @OptIn(UnstableApi::class)
+// CameraX 1.6.2 restricts both the muxer factory and the interface it requires to the library.
+// Keep this adapter paired with the pinned camera-video version.
+@SuppressLint("RestrictedApi")
 internal class CameraPipeMuxer private constructor() : Muxer {
     private var muxer: FragmentedMp4Muxer? = null
     private fun active() = checkNotNull(muxer)
@@ -59,8 +62,6 @@ internal class CameraPipeMuxer private constructor() : Muxer {
     override fun isInterruptionResilient() = true
 
     companion object {
-        // CameraX 1.6 exposes codec output selection through its version-pinned muxer factory.
-        @SuppressLint("RestrictedApi")
         fun useWith(builder: Recorder.Builder): Recorder.Builder = builder.setMuxerFactory { CameraPipeMuxer() }
     }
 }

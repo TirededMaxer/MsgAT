@@ -8,6 +8,8 @@
     <UseWPF>true</UseWPF>
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- WPF owns Main and the first HWND. The manifest sets DPI before either XAML framework starts. -->
+    <NoWarn>$(NoWarn);WFO0003</NoWarn>
     <AssemblyName>MsgAT</AssemblyName>
     <RootNamespace>MsgAT.Windows</RootNamespace>
     <ApplicationManifest>app.manifest</ApplicationManifest>

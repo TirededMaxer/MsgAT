@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Data;
 using System.Windows.Interop;
 using System.Windows.Media;
 using global::Windows.UI.ViewManagement;
@@ -19,24 +20,25 @@ internal static class WindowAppearance
 
     private static readonly (string Resource, int Rgb)[] LightPalette =
     [
-        ("WindowColor", 0xF6F8FA), ("PanelColor", 0xEDF2F5), ("SurfaceColor", 0xFFFFFF),
-        ("RaisedColor", 0xE0EAF0), ("BorderColor", 0xC3D0DA), ("TextColor", 0x172832),
-        ("MutedColor", 0x4E6371), ("AccentColor", 0xA9E9D3), ("AccentHoverColor", 0x8BDEC1),
-        ("AccentTextColor", 0x08664A), ("ConnectionDotColor", 0x169257), ("ConnectionColor", 0x0B6A45),
+        ("WindowColor", 0xE9EEEB), ("PanelColor", 0xF0F4F2), ("SurfaceColor", 0xFFFFFF),
+        ("RaisedColor", 0xE3EBE7), ("BorderColor", 0xA8B9B0), ("TextColor", 0x182923),
+        ("MutedColor", 0x455B50), ("AccentColor", 0x78C6A8), ("AccentHoverColor", 0x66BA98),
+        ("AccentTextColor", 0x125D40), ("ConnectionDotColor", 0x1F855B), ("ConnectionColor", 0x155D41),
         ("DangerColor", 0xA62339),
-        ("MessagingTimelineColor", 0xF6F8F7), ("MessagingChromeColor", 0xFFFFFF),
-        ("MessagingSidebarColor", 0xEDF2EF), ("MessagingSelectionColor", 0xE4EFE9),
-        ("MessagingDividerColor", 0xD5DFDA), ("MessagingSelectionMarkColor", 0x126741),
-        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xDCEFE4),
-        ("MessagingMetadataColor", 0x4E6159)
+        ("MessagingTimelineColor", 0xEAF0ED), ("MessagingChromeColor", 0xFBFCFB),
+        ("MessagingSidebarColor", 0xDCE7E1), ("MessagingSelectionColor", 0xC5DECF),
+        ("MessagingDividerColor", 0xA5B8AE), ("MessagingSelectionMarkColor", 0x176144),
+        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xD2EADD),
+        ("MessagingMetadataColor", 0x45594F)
     ];
-    private static Color[]? _darkPalette;
+    private static (Color Dark, PaletteColor Source)[]? _palette;
     private static UISettings? _systemSettings;
     private static bool _dark = true;
     public static AppThemeMode Theme { get; private set; }
 
     public static void StartObserving()
     {
+        _palette = BindPalette(Application.Current.Resources);
         try
         {
             _systemSettings = new UISettings();
@@ -69,14 +71,47 @@ internal static class WindowAppearance
         if (dark == _dark) return;
         var app = Application.Current;
         var resources = app.Resources;
-        var darkPalette = _darkPalette ??= LightPalette.Select(entry => (Color)resources[entry.Resource]).ToArray();
+        var palette = _palette ??= BindPalette(resources);
         _dark = dark;
         for (var index = 0; index < LightPalette.Length; index++)
         {
             var (resource, rgb) = LightPalette[index];
-            resources[resource] = dark ? darkPalette[index] : Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+            var (darkColor, source) = palette[index];
+            var color = dark ? darkColor : Color.FromRgb((byte)(rgb >> 16), (byte)(rgb >> 8), (byte)rgb);
+            source.Value = color;
+            resources[resource] = color;
         }
         foreach (Window window in app.Windows) Refresh(window);
+    }
+
+    private static (Color Dark, PaletteColor Source)[] BindPalette(ResourceDictionary resources)
+    {
+        return LightPalette.Select(entry =>
+        {
+            var color = (Color)resources[entry.Resource];
+            var source = new PaletteColor { Value = color };
+            var brush = (SolidColorBrush)resources[entry.Resource[..^5] + "Brush"];
+            // Keep the same brush instances for controls that already resolved their resources.
+            BindingOperations.SetBinding(brush, SolidColorBrush.ColorProperty, new Binding
+            {
+                Path = new PropertyPath(PaletteColor.ValueProperty),
+                Source = source,
+                Mode = BindingMode.OneWay
+            });
+            return (color, source);
+        }).ToArray();
+    }
+
+    private sealed class PaletteColor : DependencyObject
+    {
+        public static readonly DependencyProperty ValueProperty =
+            DependencyProperty.Register(nameof(Value), typeof(Color), typeof(PaletteColor));
+
+        public Color Value
+        {
+            get => (Color)GetValue(ValueProperty);
+            set => SetValue(ValueProperty, value);
+        }
     }
 
     private static bool IsSystemDark()

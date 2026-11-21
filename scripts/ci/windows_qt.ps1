@@ -17,7 +17,7 @@ New-Item -ItemType Directory -Path $runtime | Out-Null
 Copy-Item $exe $staging
 $bridge = Join-Path $build 'msgat_desktop_ui.dll'
 Copy-Item $bridge $runtime
-& (Join-Path $qtRoot 'bin/windeployqt.exe') --dir $runtime --release --nopatchqt --no-translations --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler $bridge
+& (Join-Path $qtRoot 'bin/windeployqt.exe') --dir $runtime --release --no-patchqt --no-translations --no-opengl-sw --no-system-d3d-compiler --no-system-dxc-compiler $bridge
 
 foreach ($asset in 'msgat_desktop_ui.dll', 'Qt6Core.dll', 'Qt6Gui.dll', 'Qt6Widgets.dll', 'platforms/qwindows.dll') {
     if (!(Test-Path (Join-Path $runtime $asset) -PathType Leaf)) {

@@ -1968,7 +1968,7 @@ public struct ChatView: View {
         let model = viewModel
         historyPageTask = Task { @MainActor in
             defer { if !Task.isCancelled { historyPageTask = nil } }
-            func isCurrent() -> Bool {
+            @MainActor func isCurrent() -> Bool {
                 !Task.isCancelled && model.isChatMounted && AppLockSession.shared.canShowContent &&
                     viewModel.targetUuid == peer && historyPositionRevision == revision && !chatContentCovered
             }

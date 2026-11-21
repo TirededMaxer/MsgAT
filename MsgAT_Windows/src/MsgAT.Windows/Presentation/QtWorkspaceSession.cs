@@ -15,6 +15,8 @@ using MsgAT.Windows.ViewModels;
 
 namespace MsgAT.Windows.Presentation;
 
+[System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001:Types that own disposable fields should be disposable",
+    Justification = "Run and Close release the preview on the dispatcher before the native window loses ownership.")]
 internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool> isLocked,
     Action<ConversationItem> choose, Func<string, bool> copyText, Dispatcher dispatcher,
     Action ready, Action closeRequested, Action presenceChanged, Func<bool, Task> startCall,

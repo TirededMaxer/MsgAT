@@ -726,7 +726,7 @@ public final class ChatViewModel: ObservableObject {
         markAsRead()
     }
 
-    func loadHistoryPage(_ direction: HistoryPage, isCurrent: () -> Bool, willApply: () -> Void) async -> Bool {
+    func loadHistoryPage(_ direction: HistoryPage, isCurrent: @MainActor () -> Bool, willApply: @MainActor () -> Void) async -> Bool {
         let older = direction == .older
         guard (older ? hasMoreOlderMessages : hasMoreNewerMessages),
               let edge = older ? messages.first : messages.last else { return false }
@@ -741,7 +741,7 @@ public final class ChatViewModel: ObservableObject {
             try Task.checkCancellation()
             return Self.readHistoryPresentation(rows, peer: peer, local: local, alias: alias, quotedYou: quotedYou)
         }
-        func canApply() -> Bool {
+        @MainActor func canApply() -> Bool {
             isCurrent() && isChatMounted && !Task.isCancelled && refreshRevision == revision &&
                 (older ? messages.first : messages.last)?.messageId == edge.messageId
         }

@@ -288,6 +288,12 @@ internal sealed class RecordingDialog:DialogWindow
         if (_resetTask is { } reset) await reset;
         await CloseAsync(false);
     }
+
+    internal void MaskAndClose()
+    {
+        Opacity = 0;
+        _ = CloseForExitAsync();
+    }
     private async Task CloseCoreAsync(bool accept)
     {
         _closing=true;_timer.Stop();UpdateButtons();_playback?.Dispose();_playback=null;_preview.Children.Clear();

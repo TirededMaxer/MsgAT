@@ -296,6 +296,15 @@ pub fn visible_url(text:&str,url:&str)->Result<bool,String>{
 
 pub fn visible_urls(text: String) -> Result<Value, String> {
     let text = Zeroizing::new(text);
+    if text.len() > 48 * 1024 {
+        return Err("Message text exceeds the supported display size".into());
+    }
+    // All recognized links have a literal scheme or www. prefix in the source.
+    if !text.as_bytes().windows(4).any(|prefix| {
+        prefix.eq_ignore_ascii_case(b"http") || prefix.eq_ignore_ascii_case(b"www.")
+    }) {
+        return Ok(json!({"urls": []}));
+    }
     let mut seen = std::collections::HashSet::new();
     let urls: Vec<String> = blocks(&masked_spoilers(&text))?
         .into_iter()

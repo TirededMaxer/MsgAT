@@ -2,6 +2,24 @@
 
 [打开三端交互原型](V2_UI_PROTOTYPE.html)。原型使用内置示例数据。顶部可选 Android、macOS、Windows、浅深主题、标准或窄窗，以及普通附件或读取失败示例。在第一条会话里向上滚动，再点「模拟收到消息」，即可观察历史位置和最新消息按钮。选择「打开附件后」的来电情景，再点「附件」，可以一边编辑说明，一边接听或拒接。原生实现与实际画面还需按 [三端参考记录](TELEGRAM_UI_RESEARCH.md) 逐项对照。
 
+## Windows 桌面端迁移
+
+Windows 界面以 Qt 6 和 Telegram Desktop 的桌面交互为参照。目标是由同一套 Qt 控件呈现主聊天、搜索、设置、附件确认和来电窗口。现有 WPF／WinUI 3 客户端用于对照已实现的行为。会话栏、气泡、回执和编辑器沿用 MsgAT 的内容层级和绿色强调色。[Telegram Desktop 的技术说明](https://github.com/telegramdesktop/tdesktop#third-party) · [会话行绘制实现](https://github.com/telegramdesktop/tdesktop/blob/dev/Telegram/SourceFiles/dialogs/dialogs_row.cpp)
+
+Qt 开发工作区由 Windows 开发包启动，使用现有的硬件身份、资料目录、应用锁和托盘。聊天列表支持文件夹、未读和归档。Windows Hello 验证使用系统窗口。
+
+Qt 聊天窗口提供单聊语音和视频通话入口，并将会话交给现有通话服务。侧栏菜单打开联系人、添加好友、好友请求、设置和应用锁。主窗口采用既有主题和聊天字号设置。消息菜单支持回复、复制、编辑内容或说明、重试和撤回。编辑保留普通草稿，复制继续使用 Windows 剪贴板的隐私选项。输入区提供静默发送、定时发送、语音消息、联系人名片和位置分享。语音录制、名片与位置详情由既有对话框承载。
+
+Qt 会话菜单支持置顶排序、归档与撤销、已读状态、通知静音和清理操作。菜单按当前文件夹和会话显示，归档撤销与既有窗口共用六秒有效期。消息多选支持鼠标和键盘操作，以及复制、收藏、转发和删除。收藏、共享媒体、置顶列表、发送与转发队列使用既有对话框，回到原消息时在后台读取相应历史窗口并恢复到 Qt 时间线。
+
+Windows Qt 设置页包括主题、聊天字号、语言、关闭到托盘、网络、隐私、通知、存储、附件保存目录、资料编辑和身份重置确认。设置搜索保留关键字，进入子页再返回时保留列表位置。网络页与旧界面共用端口与证书指纹校验及加密保存。页面可保留、替换或清除既有 TURN 密码，只在编辑提交时接收新值。存储页显示接收缓存分类、自动下载额度和清理进度，清理前展示选中用量并要求确认。附件保存目录使用系统目录选择器，支持恢复系统默认。资料编辑继续使用既有裁剪器，确认保存后才更新个人资料。Qt 主窗口保存上次的位置、大小和会话栏宽度。 [Qt 窗口位置恢复](https://doc.qt.io/qt-6/restoring-geometry.html)
+
+Qt 使用独立的通话窗口显示来电、接通状态和当前通话控制。前台来电以非激活窗口出现，后台来电沿用托盘提醒。通话可收起为小窗。音视频仍由现有 WebRTC 服务处理，视频通过原有 WebView2 控件显示在 Qt 子窗口里。窗口以当前屏幕的缩放和工作区计算位置。应用锁隐藏通话窗口并移走视频界面。[Windows 子窗口承载方式](https://learn.microsoft.com/en-us/dotnet/desktop/wpf/advanced/wpf-and-win32-interoperation)
+
+附件确认使用 Qt，照片编辑和视频裁剪沿用现有编辑器。附件预览在 Qt 窗口中显示图片，在子窗口中使用现有私有播放器读取音频、视频和 GIF 的加密对象。主窗口、附件确认、预览和搜索使用 Windows 的窗口捕获限制。应用锁切换以当前 Qt 窗口作为系统 Windows Hello 提示的所有者。[Windows 窗口捕获设置](https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-setwindowdisplayaffinity) · [Windows Hello 验证接口](https://learn.microsoft.com/en-us/windows/win32/api/userconsentverifierinterop/nf-userconsentverifierinterop-iuserconsentverifierinterop-requestverificationforwindowasync)
+
+Windows 客户端继续使用现有 TPM 身份、加密资料库和消息服务。窗口通过进程内接口收发用户操作与显示数据。界面迁移的首次实机验收使用原 QA 账号打开历史会话、发送并收到回执、切换会话恢复草稿。浅深主题分别对照中文和英文的长昵称、两行摘要、文件气泡、时间及输入法候选窗。Windows 11 的 100%、150%、200% 缩放和窄窗口按实际画面验收。
+
 ## 视觉基础
 
 会话栏采用低对比度的冷灰绿表面，聊天阅读区用更浅或更深的连续底色。常态控件保持中性，MsgAT 原有绿色用在当前会话的细标记、主操作和已确认的回执。会话选中同时有底色、边线和位置标记。消息集中在有边界的阅读区，窗体边框、分栏、聊天顶栏和发送操作构成同一布局。背景采用纯色，附件本身提供内容重点。

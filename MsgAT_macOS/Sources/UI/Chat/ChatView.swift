@@ -40,7 +40,6 @@ final class DroppedFileSelection {
 
 private enum ChatDropMode: Equatable { case media, file }
 private enum ChatDroppedItem: Sendable { case file(URL), folder(URL) }
-private enum HistoryPage: Equatable { case older, newer }
 private struct HistoryLookup: Equatable {
     let peer: String
     let day: DateInterval?
@@ -82,7 +81,24 @@ struct ChatHistoryPosition {
     let relativeOffset: CGFloat
 }
 
+private struct ChatHistoryRequest: Equatable {
+    let messageId: String?
+    let generation: Int
+}
+
+// The scroll view reports new rectangles on every movement. Only the visible
+// date, read IDs and navigation affordances participate in view updates.
+private final class ChatTimelineGeometry {
+    var messageFrames: [String: CGRect] = [:]
+    var thumbnailFrames: [String: MediaThumbnailFrame] = [:]
+    var timelineBottom: CGFloat?
+    var timelineDayAnchor: (id: String, offset: CGFloat)?
+    var timelineDayDeadline: ContinuousClock.Instant?
+    var timelineDayHideTask: Task<Void, Never>?
+}
+
 public struct ChatView: View {
+    @State private var timelineGeometry = ChatTimelineGeometry()
     @Environment(\.interfaceStrings) private var interfaceText
     @Environment(\.colorScheme) private var colorScheme
     @StateObject var viewModel: ChatViewModel
@@ -140,6 +156,7 @@ public struct ChatView: View {
     @State private var timelineRowAnchor = UnitPoint.center
     @State private var quoteReturnAnchors: [QuoteReturnAnchor] = []
     @State private var retryingLatestJump = false
+    @State private var historyPageTask: Task<Void, Never>?
     @State private var historyPageToRetry: HistoryPage?
     @State private var requestedQuoteOrigin: (target: String, anchor: QuoteReturnAnchor)?
     @State private var mediaConfirmation:MediaSendRequest?
@@ -151,11 +168,7 @@ public struct ChatView: View {
     private var viewportHeight: CGFloat { viewportSize.height }
     @State private var chatHeight: CGFloat = 0
     @State private var chatWidth: CGFloat = 0
-    @State private var messageFrames:[String:CGRect]=[:]
     @State private var floatingTimelineDay: Date?
-    @State private var timelineDayAnchor: (id: String, offset: CGFloat)?
-    @State private var timelineDayDeadline: ContinuousClock.Instant?
-    @State private var timelineDayHideTask: Task<Void, Never>?
     private var inputText: String {
         get { viewModel.draftText }
         nonmutating set { viewModel.draftText = newValue }
@@ -202,7 +215,6 @@ public struct ChatView: View {
     @State private var inlineAudio = MediaPlaybackModel()
     @State private var previewOrigin: MediaPreviewOrigin?
     @State private var previewFocus = MediaPreviewFocus()
-    @State private var thumbnailFrames: [String: MediaThumbnailFrame] = [:]
     @State private var previewAlbum: [ChatMessage] = []
     @State private var previewAlbumStep = 0
     @State private var previewNeighbors: VisualMediaNeighbors?
@@ -499,13 +511,13 @@ public struct ChatView: View {
                                 .onChange(of: geometry.size) { updateViewportSize($0) }
                         })
                         .onPreferenceChange(MessageFramePreference.self) { frames in
-                            messageFrames = frames
+                            timelineGeometry.messageFrames = frames
                             updateReadVisibility()
                             updateFloatingTimelineDay(frames)
                         }
-                        .onPreferenceChange(MediaThumbnailFramePreference.self) { thumbnailFrames = $0 }
+                        .onPreferenceChange(MediaThumbnailFramePreference.self) { timelineGeometry.thumbnailFrames = $0 }
                         .onPreferenceChange(TimelineBottomPreference.self) { bottom in
-                            timelineBottom = bottom
+                            timelineGeometry.timelineBottom = bottom
                             updateViewingLatest()
                             loadNewerHistoryIfVisible(proxy: proxy)
                         }
@@ -586,8 +598,8 @@ public struct ChatView: View {
                             highlightMessage(id, quote: excerpt)
                             applyInitialHistoryPosition(id, proxy: proxy, animated: true)
                         }
-                        .onChange(of:searchGeneration) {_ in
-                            guard let id=initialMessageId,viewModel.revealMessage(id) else {return}
+                        .onChange(of: ChatHistoryRequest(messageId: initialMessageId, generation: searchGeneration)) { request in
+                            guard let id = request.messageId, viewModel.revealMessage(id) else { return }
                             initializedTimeline = true
                             highlightMessage(id)
                             applyInitialHistoryPosition(id, proxy: proxy)
@@ -599,6 +611,8 @@ public struct ChatView: View {
                             }
                         }
                         .onChange(of: viewModel.targetUuid) { _ in
+                            historyPageTask?.cancel()
+                            historyPageTask = nil
                             historyPositionRevision += 1
                             restoringHistory = false
                             closeInlineAudio()
@@ -1033,6 +1047,8 @@ public struct ChatView: View {
         }
         .onDisappear {
             saveHistoryPosition()
+            historyPageTask?.cancel()
+            historyPageTask = nil
             viewModel.isChatMounted = false
             pendingDrop = nil
             dropMode = nil
@@ -1478,38 +1494,39 @@ public struct ChatView: View {
     private func updateFloatingTimelineDay(_ frames: [String: CGRect]) {
         guard viewportHeight > 0, let top = frames.lazy.filter({ $0.value.maxY > 0 && $0.value.minY < viewportHeight })
             .min(by: { $0.value.minY == $1.value.minY ? $0.key < $1.key : $0.value.minY < $1.value.minY }) else { return }
-        let sameMessage = timelineDayAnchor?.id == top.key
+        let sameMessage = timelineGeometry.timelineDayAnchor?.id == top.key
         let offset = top.value.minY
-        if sameMessage, let previous = timelineDayAnchor?.offset, abs(previous - offset) < 1 { return }
-        let hadAnchor = timelineDayAnchor != nil
-        timelineDayAnchor = (top.key, offset)
+        if sameMessage, let previous = timelineGeometry.timelineDayAnchor?.offset, abs(previous - offset) < 1 { return }
+        let hadAnchor = timelineGeometry.timelineDayAnchor != nil
+        timelineGeometry.timelineDayAnchor = (top.key, offset)
         guard hadAnchor, !viewModel.isViewingLatest, !chatContentCovered else { return }
         if !sameMessage || floatingTimelineDay == nil {
             guard let message = viewModel.messages.first(where: { $0.messageId == top.key }) else { return }
-            floatingTimelineDay = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: Double(message.timestamp) / 1_000))
+            let day = Calendar.current.startOfDay(for: Date(timeIntervalSince1970: Double(message.timestamp) / 1_000))
+            if floatingTimelineDay != day { floatingTimelineDay = day }
         }
         let clock = ContinuousClock()
-        timelineDayDeadline = clock.now.advanced(by: .milliseconds(1600))
-        guard timelineDayHideTask == nil else { return }
-        timelineDayHideTask = Task { @MainActor in
-            while let deadline = timelineDayDeadline {
+        timelineGeometry.timelineDayDeadline = clock.now.advanced(by: .milliseconds(1600))
+        guard timelineGeometry.timelineDayHideTask == nil else { return }
+        timelineGeometry.timelineDayHideTask = Task { @MainActor in
+            while let deadline = timelineGeometry.timelineDayDeadline {
                 do { try await clock.sleep(until: deadline) }
                 catch { return }
                 guard !Task.isCancelled else { return }
-                if timelineDayDeadline == deadline {
+                if timelineGeometry.timelineDayDeadline == deadline {
                     floatingTimelineDay = nil
-                    timelineDayDeadline = nil
+                    timelineGeometry.timelineDayDeadline = nil
                 }
             }
-            timelineDayHideTask = nil
+            timelineGeometry.timelineDayHideTask = nil
         }
     }
 
     private func clearFloatingTimelineDay() {
-        timelineDayHideTask?.cancel()
-        timelineDayHideTask = nil
-        timelineDayDeadline = nil
-        timelineDayAnchor = nil
+        timelineGeometry.timelineDayHideTask?.cancel()
+        timelineGeometry.timelineDayHideTask = nil
+        timelineGeometry.timelineDayDeadline = nil
+        timelineGeometry.timelineDayAnchor = nil
         floatingTimelineDay = nil
     }
 
@@ -1649,7 +1666,7 @@ public struct ChatView: View {
     }
 
     private func previewReturnFrame(_ id: String) -> CGRect? {
-        guard let frame = thumbnailFrames[id], !frame.inChat.isEmpty,
+        guard let frame = timelineGeometry.thumbnailFrames[id], !frame.inChat.isEmpty,
               frame.inTimeline.minY >= 0, frame.inTimeline.maxY <= viewportHeight else { return nil }
         return frame.inChat
     }
@@ -1900,7 +1917,6 @@ public struct ChatView: View {
         .accessibilityHidden(true)
     }
 
-    @State private var timelineBottom: CGFloat?
 
     private func updateViewportSize(_ size: CGSize) {
         guard viewportSize != size else { return }
@@ -1911,13 +1927,13 @@ public struct ChatView: View {
 
     private func updateViewingLatest() {
         guard viewModel.historyLoaded, !restoringHistory else { return }
-        let nearBottom = !viewModel.hasMoreNewerMessages && (timelineBottom.map { $0 <= viewportHeight + 48 && $0 >= 0 } ?? false)
+        let nearBottom = !viewModel.hasMoreNewerMessages && (timelineGeometry.timelineBottom.map { $0 <= viewportHeight + 48 && $0 >= 0 } ?? false)
         viewModel.setViewingLatest(nearBottom)
     }
 
     private func updateReadVisibility(){
         guard !restoringHistory, !viewportReflowing else {viewModel.setVisibleMessages([]);return}
-        let ids=Set(messageFrames.compactMap {id,frame -> String? in
+        let ids=Set(timelineGeometry.messageFrames.compactMap {id,frame -> String? in
             let overlap=min(frame.maxY,viewportHeight)-max(frame.minY,0)
             return frame.height>0 && overlap>=min(frame.height,48) ? id : nil
         })
@@ -1925,14 +1941,14 @@ public struct ChatView: View {
     }
 
     private func saveHistoryPosition() {
-        guard initializedTimeline,!restoringHistory,!messageFrames.isEmpty else {return}
+        guard initializedTimeline,!restoringHistory,!timelineGeometry.messageFrames.isEmpty else {return}
         if viewModel.isViewingLatest {onSaveHistoryPosition(nil);return}
         if let position = captureHistoryPosition() { onSaveHistoryPosition(position) }
     }
 
     private func captureHistoryPosition() -> ChatHistoryPosition? {
         let valid = Set(viewModel.messages.filter {$0.isRevoked == 0}.map(\.messageId))
-        let visible = messageFrames.filter {
+        let visible = timelineGeometry.messageFrames.filter {
             valid.contains($0.key) && $0.value.maxY > 0 && $0.value.minY < viewportHeight
         }
         let fullyVisible = visible.filter { $0.value.minY >= 0 && $0.value.maxY <= viewportHeight }
@@ -1946,30 +1962,39 @@ public struct ChatView: View {
     }
 
     private func loadHistoryPage(_ page: HistoryPage, proxy: ScrollViewProxy) {
-        guard !restoringHistory else { return }
-        let position = captureHistoryPosition()
-        let first = viewModel.messages.first?.messageId
-        let last = viewModel.messages.last?.messageId
-        let count = viewModel.messages.count
-        switch page {
-        case .older: viewModel.loadMoreMessages()
-        case .newer: viewModel.loadNewerMessages()
-        }
-        historyPageToRetry = viewModel.historyLoadFailed ? page : nil
-        guard count != viewModel.messages.count || first != viewModel.messages.first?.messageId ||
-                last != viewModel.messages.last?.messageId else { return }
-        if let position, viewModel.messages.contains(where: { $0.messageId == position.messageId }) {
-            applyInitialHistoryPosition(position.messageId, proxy: proxy,
-                                        anchor: UnitPoint(x: 0.5, y: position.relativeOffset))
-        } else if let edge = page == .newer ? last : first {
-            applyInitialHistoryPosition(edge, proxy: proxy, anchor: page == .newer ? .bottom : .top)
+        guard !restoringHistory, historyPageTask == nil else { return }
+        let revision = historyPositionRevision
+        let peer = viewModel.targetUuid
+        let model = viewModel
+        historyPageTask = Task { @MainActor in
+            defer { if !Task.isCancelled { historyPageTask = nil } }
+            func isCurrent() -> Bool {
+                !Task.isCancelled && model.isChatMounted && AppLockSession.shared.canShowContent &&
+                    viewModel.targetUuid == peer && historyPositionRevision == revision && !chatContentCovered
+            }
+            guard isCurrent() else { return }
+            var position: ChatHistoryPosition?
+            var edge: String?
+            let changed = await model.loadHistoryPage(page, isCurrent: isCurrent) {
+                position = captureHistoryPosition()
+                edge = (page == .older ? model.messages.first : model.messages.last)?.messageId
+            }
+            guard isCurrent() else { return }
+            historyPageToRetry = model.historyLoadFailed ? page : nil
+            guard changed else { return }
+            if let position {
+                applyInitialHistoryPosition(position.messageId, proxy: proxy,
+                                            anchor: UnitPoint(x: 0.5, y: position.relativeOffset))
+            } else if let edge {
+                applyInitialHistoryPosition(edge, proxy: proxy, anchor: page == .newer ? .bottom : .top)
+            }
         }
     }
 
     private func loadNewerHistoryIfVisible(proxy: ScrollViewProxy) {
         guard initializedTimeline, !restoringHistory, !chatContentCovered,
               viewModel.hasMoreNewerMessages, !viewModel.historyLoadFailed,
-              viewportHeight > 0, let bottom = timelineBottom, bottom >= 0, bottom <= viewportHeight + 1 else { return }
+              viewportHeight > 0, let bottom = timelineGeometry.timelineBottom, bottom >= 0, bottom <= viewportHeight + 1 else { return }
         loadHistoryPage(.newer, proxy: proxy)
     }
 
@@ -2253,7 +2278,7 @@ public struct ChatView: View {
         editingMessage = target
         editFocusRevision += 1
         if revealTarget {
-            if let frame = messageFrames[target.messageId], frame.maxY > 0 && frame.minY < viewportHeight {
+            if let frame = timelineGeometry.messageFrames[target.messageId], frame.maxY > 0 && frame.minY < viewportHeight {
                 highlightMessage(target.messageId)
             } else {
                 showHistoryMessage(target.messageId)
@@ -2335,7 +2360,7 @@ public struct ChatView: View {
                 if delay > 0 { try? await Task.sleep(for: .milliseconds(delay)) }
                 guard navigation == historyPositionRevision, generation == highlightGeneration,
                       viewModel.isChatMounted, AppLockSession.shared.canShowContent else { return }
-                if attempt > 0, let frame = messageFrames[id], frame.maxY > 0, frame.minY < viewportHeight { return }
+                if attempt > 0, let frame = timelineGeometry.messageFrames[id], frame.maxY > 0, frame.minY < viewportHeight { return }
                 withAnimation(attempt == 0 && animated && !reduceMotion ? .easeOut(duration: 0.2) : nil) {
                     scrollToMessage(id, proxy: proxy, anchor: anchor, positioningRevision: navigation)
                 }
@@ -2362,7 +2387,7 @@ public struct ChatView: View {
     }
 
     private func requestQuotedMessage(_ target: String, source: String? = nil, quote: String? = nil, openingQuote: Bool = false) {
-        let visible = messageFrames.filter { $0.key != target && $0.value.maxY > 0 && $0.value.minY < viewportHeight }
+        let visible = timelineGeometry.messageFrames.filter { $0.key != target && $0.value.maxY > 0 && $0.value.minY < viewportHeight }
         let originId = source.flatMap { visible[$0] == nil ? nil : $0 } ?? visible.min { lhs, rhs in
             abs(lhs.value.minY) < abs(rhs.value.minY)
         }?.key

@@ -11,7 +11,16 @@ namespace MsgAT.Windows.Media;
 
 internal static class AttachmentThumbnail
 {
+    private static readonly SemaphoreSlim DecodeSlots = new(2);
+
     internal static async Task<BitmapSource?> LoadAsync(MessageItem message, int photoEdge, CancellationToken token)
+    {
+        await DecodeSlots.WaitAsync(token).ConfigureAwait(false);
+        try { return await LoadOwnedAsync(message, photoEdge, token).ConfigureAwait(false); }
+        finally { DecodeSlots.Release(); }
+    }
+
+    private static async Task<BitmapSource?> LoadOwnedAsync(MessageItem message, int photoEdge, CancellationToken token)
     {
         var edge = message.IsVideo ? VideoThumbnail.MaximumEdge : photoEdge;
         var store = EncryptedObjectStore.IsReference(message.Content) ? message.ThumbnailStore : null;

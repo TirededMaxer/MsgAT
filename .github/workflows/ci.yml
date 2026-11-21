@@ -85,6 +85,23 @@ jobs:
           if-no-files-found: error
           retention-days: 7
           compression-level: 0
+      - name: Install Qt for the Windows acceptance build
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125
+        with:
+          version: '6.10.3'
+          arch: win64_msvc2022_64
+          archives: qtbase
+          cache: false
+      - name: Compile and package the Qt workspace
+        shell: pwsh
+        run: ./scripts/ci/windows_qt.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: development-windows-qt
+          path: ${{ runner.temp }}/MsgAT-Windows-Qt-development.zip
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
 
   macos:
     runs-on: macos-26

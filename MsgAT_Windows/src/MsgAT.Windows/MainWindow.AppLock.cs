@@ -104,6 +104,7 @@ public partial class MainWindow
 
     private void ApplyAppLockVisibility()
     {
+        if (_appLocked || _exiting) MaskQtWorkspace();
         if (_exiting)
         {
             LayoutGrid.Visibility = Visibility.Collapsed;
@@ -138,9 +139,10 @@ public partial class MainWindow
 
     private async void AppUnlock_Click(object sender, RoutedEventArgs e) => await AuthenticateAppLockAsync();
 
-    private async Task AuthenticateAppLockAsync(bool? enable = null)
+    private async Task AuthenticateAppLockAsync(bool? enable = null, nint nativeOwner = 0)
     {
-        if (!_appLockLoaded || _authenticating || _exiting || !IsActive || _services is not { } services) return;
+        var active = nativeOwner == 0 ? IsActive : _qtWorkspace is { IsActive: true } workspace && workspace.HostWindow == nativeOwner;
+        if (!_appLockLoaded || _authenticating || _exiting || !active || _services is not { } services) return;
         if (enable is not null && _appLocked) return;
         if (!OperatingSystem.IsWindowsVersionAtLeast(10, 0, 22000))
         {
@@ -161,7 +163,7 @@ public partial class MainWindow
                 return;
             }
 
-            var hwnd = new WindowInteropHelper(this).Handle;
+            var hwnd = nativeOwner == 0 ? new WindowInteropHelper(this).Handle : nativeOwner;
             var result = await UserConsentVerifierInterop.RequestVerificationForWindowAsync(hwnd, AppStrings.Get("UiVerifyApp"));
             if (_exiting || generation != _appLockGeneration) return;
             if (result != UserConsentVerificationResult.Verified)
@@ -177,6 +179,7 @@ public partial class MainWindow
                     return;
                 }
                 _appLockEnabled = value;
+                _qtWorkspace?.SetAppLockEnabled(value);
                 if (value && generation != _appLockGeneration) LockApp();
                 if (!value && generation == _appLockGeneration) _appLocked = false;
             }
@@ -192,6 +195,7 @@ public partial class MainWindow
             if (_appLocked || _exiting) return;
             if (services.Calls.IsIncoming) Calls_ShowRequested(services.Calls, EventArgs.Empty);
             OpenDeferredNotification();
+            ScheduleQtWorkspace();
         }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException or OperationCanceledException)
         {
@@ -215,6 +219,6 @@ public partial class MainWindow
     private void AppLockFeedback(string message)
     {
         if (_appLocked) AppLockError.Text = message;
-        else TransientNotice.Show(this, message);
+        else ShowWorkspaceNotice(message);
     }
 }

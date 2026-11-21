@@ -34,7 +34,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.msgat.R
 import org.msgat.core.media.AttachmentDownloadIntent
@@ -168,7 +167,7 @@ internal fun AttachmentCard(
                     } else null, pauseStickerPlayback = pauseStickerPlayback)
                 } else if (media?.available == true && media.isVideo) {
                     val thumbnail by produceState<Bitmap?>(null, media.reference) {
-                        value = withContext(Dispatchers.IO) { videoThumbnail(org.msgat.MsgATApp.instance.nettyClient.objects, media) }
+                        value = withContext(encryptedImageWorkers) { videoThumbnail(org.msgat.MsgATApp.instance.nettyClient.objects, media) }
                     }
                     val imageSize = if (galleryTile) Modifier.matchParentSize()
                     else Modifier.fillMaxWidth().height(if (albumTile) 112.dp else 190.dp)

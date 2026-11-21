@@ -6,6 +6,16 @@ import ImageIO
 import UniformTypeIdentifiers
 
 enum EncryptedMediaWork {
+    private final class Cancellation: @unchecked Sendable {
+        private let gate = NSLock()
+        private var cancelled = false
+
+        func cancel() { gate.withLock { cancelled = true } }
+        func check() throws {
+            if gate.withLock({ cancelled }) { throw CancellationError() }
+        }
+    }
+
     private static let admission = NSLock()
     private static let playbackReads = DispatchGroup()
     private static var stopping = false
@@ -14,6 +24,18 @@ enum EncryptedMediaWork {
         value.name = "org.msgat.media-decode"; value.maxConcurrentOperationCount = 2; value.qualityOfService = .userInitiated
         return value
     }()
+    static func runWhileVisible<T>(_ operation: @escaping () throws -> T) async throws -> T {
+        let cancellation = Cancellation()
+        return try await withTaskCancellationHandler {
+            try await run {
+                try cancellation.check()
+                return try operation()
+            }
+        } onCancel: {
+            cancellation.cancel()
+        }
+    }
+
     static func run<T>(_ operation: @escaping () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             admission.withLock {
@@ -457,12 +479,14 @@ struct EncryptedAttachmentCard: View {
         let message = message
         failed = false
         do {
-            let value = try await EncryptedMediaWork.run { try EncryptedObjectStore.shared.metadata(message.content, messageID: message.messageId) }
+            let value = try await EncryptedMediaWork.runWhileVisible {
+                try EncryptedObjectStore.shared.metadata(message.content, messageID: message.messageId)
+            }
             guard !Task.isCancelled else { return }
             media = value; progress = SecureMessaging.shared.attachmentProgress(message.messageId)
             if value?.available != true { image = nil }
             if let value, value.available, value.isImage, !value.isSticker {
-                let decoded = try await EncryptedMediaWork.run { try encryptedMediaThumbnail(value, edge: 640) }
+                let decoded = try await EncryptedMediaWork.runWhileVisible { try encryptedMediaThumbnail(value, edge: 640) }
                 guard !Task.isCancelled else { return }; image = decoded
             }
         } catch { if !Task.isCancelled { failed = true } }

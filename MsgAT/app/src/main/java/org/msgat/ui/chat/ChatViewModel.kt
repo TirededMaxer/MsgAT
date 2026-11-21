@@ -109,7 +109,7 @@ class ChatViewModel(
             pagingSourceFactory = { msgDao.getPagingMessages(targetUuid, System.currentTimeMillis()) }
         ).flow.map { pagingData ->
             val conversation = msgDao.getConversationByUuid(targetUuid)
-            pagingData.map { messageUi(it, conversation) }
+            pagingData.map { row -> messageUi(row.message, conversation, row) }
         })
     }}.cachedIn(viewModelScope)
 
@@ -171,16 +171,24 @@ class ChatViewModel(
         msgDao.getMessageAtDate(targetUuid, dayStart, nextDayStart, System.currentTimeMillis())
     suspend fun firstUnreadMessage():String? = msgDao.getFirstUnreadId(targetUuid)
 
-    private suspend fun messageUi(message: ChatMessage, conversation: Conversation?): MessageUIModel {
-        val original = message.replyToId?.let { msgDao.getMessageById(it) }?.takeIf { it.conversationUuid == targetUuid }
-        val author = original?.let { if (it.isMine) securePrefs.myUuid else targetUuid }
+    private suspend fun messageUi(message: ChatMessage, conversation: Conversation?, history: MsgDao.HistoryRow? = null): MessageUIModel {
+        val originalMine = if (history != null) history.originalMine else
+            message.replyToId?.let { msgDao.getMessageById(it) }?.takeIf { it.conversationUuid == targetUuid }?.isMine
+        val author = originalMine?.let { if (it) securePrefs.myUuid else targetUuid }
             ?: message.replyToSender?.takeIf { it == securePrefs.myUuid || it == targetUuid }
         val attachment = if (message.ext == "attachment") kotlinx.coroutines.withContext(Dispatchers.IO) {
             nettyClient.objects.metadata(message.content, message.messageId)
         } else null
-        val presentation = if (message.isRevoked == 0) msgDao.getMessagePresentation(targetUuid, message.messageId) else null
-        val account = if (message.ext == "contact" && message.isRevoked == 0)
-            msgDao.getContactCardAccount(targetUuid, message.messageId) else null
+        val presentation = when {
+            message.isRevoked != 0 -> null
+            history != null -> history.presentation
+            else -> msgDao.getMessagePresentation(targetUuid, message.messageId)
+        }
+        val account = when {
+            history != null -> history.contactAccount
+            message.ext == "contact" && message.isRevoked == 0 -> msgDao.getContactCardAccount(targetUuid, message.messageId)
+            else -> null
+        }
         return MessageUIModel(message.messageId, message.isMine, message.content, message.ext, message.timestamp,
             if (message.isMine) securePrefs.myAvatarPath ?: "" else conversation?.avatarPath ?: "", message.isRead,
             message.replyToId, author, message.replyToContent, message.status,

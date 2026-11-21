@@ -50,6 +50,13 @@ interface MsgDao {
             originalAt?.let { ForwardedMessageInfo(forwardName, it) }
     }
 
+    data class HistoryRow(
+        @Embedded val message: ChatMessage,
+        @Embedded val presentation: MessagePresentation?,
+        val originalMine: Boolean?,
+        val contactAccount: String?
+    )
+
     @RawQuery
     suspend fun readMessagePresentation(query: androidx.sqlite.db.SupportSQLiteQuery): MessagePresentation?
 
@@ -83,7 +90,7 @@ interface MsgDao {
     suspend fun getMessageOffset(peer: String, id: String, at: Long): Int =
         readMessageOffset(androidx.sqlite.db.SimpleSQLiteQuery("""
             SELECT COUNT(*) FROM messages m JOIN messages t ON t.messageId=? AND t.conversationUuid=?2
-            WHERE m.conversationUuid=?2 AND (m.timestamp>t.timestamp OR (m.timestamp=t.timestamp AND m.messageId>t.messageId))
+            WHERE m.conversationUuid=?2 AND (m.timestamp,m.messageId)>(t.timestamp,t.messageId)
               AND NOT EXISTS(SELECT 1 FROM message_expiration e WHERE e.message_id=m.messageId AND e.expires_at<=?3)
               AND ${historyWithinLocalRetention(3)}
             """, arrayOf(id, peer, at)))
@@ -189,14 +196,20 @@ interface MsgDao {
     suspend fun getMessageListByConversation(uuid: String): List<ChatMessage>
 
     @RawQuery(observedEntities = [ChatMessage::class])
-    fun readPagingMessages(query: androidx.sqlite.db.SupportSQLiteQuery): androidx.paging.PagingSource<Int, ChatMessage>
+    fun readPagingMessages(query: androidx.sqlite.db.SupportSQLiteQuery): androidx.paging.PagingSource<Int, HistoryRow>
 
-    fun getPagingMessages(uuid: String, at: Long): androidx.paging.PagingSource<Int, ChatMessage> =
+    fun getPagingMessages(uuid: String, at: Long): androidx.paging.PagingSource<Int, HistoryRow> =
         readPagingMessages(androidx.sqlite.db.SimpleSQLiteQuery("""
-            SELECT m.* FROM messages m WHERE conversationUuid=?
-              AND NOT EXISTS(SELECT 1 FROM message_expiration e WHERE e.message_id=m.messageId AND e.expires_at<=?2)
+            SELECT m.*, source.isMine AS originalMine, f.name AS forwardName, f.original_at AS originalAt,
+                   e.expires_at AS expiresAt, c.account AS contactAccount
+            FROM messages m
+            LEFT JOIN messages source ON source.messageId=m.replyToId AND source.conversationUuid=m.conversationUuid
+            LEFT JOIN message_forwards f ON f.message_id=m.messageId AND m.isRevoked=0
+            LEFT JOIN message_expiration e ON e.message_id=m.messageId
+            LEFT JOIN message_contact_cards c ON c.message_id=m.messageId AND m.ext='contact' AND m.isRevoked=0
+            WHERE m.conversationUuid=?1 AND (e.expires_at IS NULL OR e.expires_at>?2)
               AND ${historyWithinLocalRetention(2)}
-            ORDER BY timestamp DESC,messageId DESC
+            ORDER BY m.timestamp DESC,m.messageId DESC
             """, arrayOf(uuid, at)))
 
     suspend fun getNewestMessageId(uuid: String): String? =

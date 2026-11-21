@@ -768,7 +768,7 @@ public sealed class SettingsDialog : DialogWindow
         networkIssue.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         void Validate()
         {
-            var issue = NetworkValidationIssue();
+            var issue = NetworkDraft(includePassword: false).ValidationIssue();
             save.IsEnabled = issue is null;
             networkIssue.Visibility = save.Visibility == Visibility.Visible && issue is not null
                 ? Visibility.Visible : Visibility.Collapsed;
@@ -992,29 +992,17 @@ public sealed class SettingsDialog : DialogWindow
 
     public SecureSettings? Result { get; private set; }
     public bool ResetRequested { get; private set; }
-    private string NormalizedPin => _certificate.Text.Replace(":", "", StringComparison.Ordinal).Replace(" ", "", StringComparison.Ordinal).ToLowerInvariant();
-    private string? NetworkValidationIssue()
-    {
-        if (string.IsNullOrWhiteSpace(_server.Text)) return "UiNetworkAddressRequired";
-        if (!ValidPort(_port.Text, out _)) return "UiNetworkServerPortRange";
-        if (!string.IsNullOrWhiteSpace(_turnServer.Text) && !ValidPort(_turnPort.Text, out _))
-            return "UiNetworkTurnPortRange";
-        var pin = NormalizedPin;
-        if (pin.Length != 0 && !Regex.IsMatch(pin, "\\A[a-f0-9]{64}\\z", RegexOptions.CultureInvariant))
-            return "UiNetworkFingerprintLength";
-        return null;
-    }
+    private NetworkSettingsInput NetworkDraft(bool includePassword) => new(_server.Text, _port.Text, _turnServer.Text, _turnPort.Text,
+        _turnUser.Text, includePassword ? _turnPassword.Password : "", _turnTls.IsChecked == true,
+        _certificate.Text, _developmentCertificate.IsChecked == true);
+
     private void Save()
     {
-        if (NetworkValidationIssue() is not null) return;
-        _ = ValidPort(_port.Text, out var serverPort); var turnPort = ValidPort(_turnPort.Text, out var port) ? port : 3478;
-        Result = _original with { ServerAddress = _server.Text.Trim(), ServerPort = serverPort, TurnServer = EmptyToNull(_turnServer.Text), TurnPort = turnPort,
-            TurnUsername = EmptyToNull(_turnUser.Text), TurnPassword = string.IsNullOrEmpty(_turnPassword.Password) ? null : _turnPassword.Password,
-            TurnUseTls = _turnTls.IsChecked == true, ServerCertificateSha256 = EmptyToNull(NormalizedPin), AllowDevelopmentCertificate = _developmentCertificate.IsChecked == true };
+        var draft = NetworkDraft(includePassword: true);
+        if (draft.ValidationIssue() is not null) return;
+        Result = draft.ApplyTo(_original);
         DialogResult = true;
     }
-    private static bool ValidPort(string value, out int port) => int.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out port) && port is > 0 and <= 65535;
-    private static string? EmptyToNull(string value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
 public sealed class FriendRequestsDialog : DialogWindow
@@ -1269,6 +1257,17 @@ public sealed class AvatarCropDialog : DialogWindow
 
 internal sealed class MessageNotificationsDialog : DialogWindow
 {
+    internal static bool TryOpenSystemSettings()
+    {
+        try
+        {
+            using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:notifications")
+                { UseShellExecute = true });
+            return true;
+        }
+        catch (Exception error) when (error is System.ComponentModel.Win32Exception or InvalidOperationException) { return false; }
+    }
+
     internal MessageNotificationsDialog(AppServices services)
     {
         var initial = services.Messaging.NotificationSettings;
@@ -1288,18 +1287,7 @@ internal sealed class MessageNotificationsDialog : DialogWindow
         systemError.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         var systemSettings = IdentitySetupDialog.ActionButton(AppStrings.Get("UiOpenNotificationSystemSettings"), () =>
         {
-            systemError.Visibility = Visibility.Collapsed;
-            try
-            {
-                using var process = System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:notifications")
-                {
-                    UseShellExecute = true
-                });
-            }
-            catch (Exception failure) when (failure is System.ComponentModel.Win32Exception or InvalidOperationException)
-            {
-                systemError.Visibility = Visibility.Visible;
-            }
+            systemError.Visibility = TryOpenSystemSettings() ? Visibility.Collapsed : Visibility.Visible;
         }, Brushes.Gray);
         systemSettings.HorizontalAlignment = HorizontalAlignment.Left;
         systemSettings.Margin = new Thickness(0, 0, 0, 6);
@@ -1612,14 +1600,14 @@ internal sealed class AttachmentCacheDialog : DialogWindow
         });
     }
 
-    private static string Size(long bytes) => bytes switch
+    internal static string Size(long bytes) => bytes switch
     {
         < 1_000_000 => string.Format(CultureInfo.CurrentCulture, "{0:N1} KB", bytes / 1_000d),
         < 1_000_000_000 => string.Format(CultureInfo.CurrentCulture, "{0:N1} MB", bytes / 1_000_000d),
         _ => string.Format(CultureInfo.CurrentCulture, "{0:N1} GB", bytes / 1_000_000_000d)
     };
 
-    private static string CategoryLabel(AttachmentCacheCategory category) => AppStrings.Get(category switch
+    internal static string CategoryLabel(AttachmentCacheCategory category) => AppStrings.Get(category switch
     {
         AttachmentCacheCategory.Photos => "UiSharedMediaPhotos",
         AttachmentCacheCategory.Videos => "UiSharedMediaVideos",
@@ -1633,7 +1621,7 @@ internal sealed class AttachmentCacheDialog : DialogWindow
     private void UpdateClearButton() => _clear.IsEnabled =
         !_loading && !_confirming && !_clearing && !_savingLimit && _bytesByCategory.Keys.Any(IsSelected);
 
-    private static string LimitLabel(long bytes) => bytes switch
+    internal static string LimitLabel(long bytes) => bytes switch
     {
         0 => AppStrings.Get("UiCacheNoLimit"),
         < 1_000_000_000 => string.Format(CultureInfo.CurrentCulture, "{0:N0} MB", bytes / 1_000_000d),

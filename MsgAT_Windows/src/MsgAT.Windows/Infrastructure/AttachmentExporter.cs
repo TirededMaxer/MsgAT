@@ -72,6 +72,10 @@ internal static class AttachmentExporter
             TransientNotice.Show(owner, AppStrings.Get(result == Result.Saved ? "UiAttachmentExported" : "UiSharedMediaSaveFailed"));
     }
 
+    internal static async Task<bool> ExportToAsync(MessageItem item, string destination, Func<bool> allowed,
+        CancellationToken token) =>
+        await Task.Run(() => WriteAsync(item, destination, allowed, _ => { }, token)) == Result.Saved;
+
     private static async Task<Result> WriteAsync(MessageItem item, string destination, Func<bool>? allowed,
         Action<long> report, CancellationToken token)
     {

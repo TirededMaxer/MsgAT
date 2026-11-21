@@ -117,12 +117,7 @@ internal sealed class ConversationRow : Grid
         var label = AppStrings.Get("UiHiddenMessageText");
         if (_renderedPreview != (source, label))
         {
-            try
-            {
-                var summary = Core.Crypto.SecurityCore.Call(new { operation = "summarize_message_text", text = source, limit = 240, hidden_label = label });
-                _preview.Text = summary.GetProperty("text").GetString() ?? "";
-            }
-            catch (InvalidOperationException) { _preview.Text = AppStrings.Get("UiNewMessage"); }
+            _preview.Text = ConversationSummary.Render(source, label);
             _renderedPreview = (source, label);
         }
         _time.Text = item.ActivityTime;
@@ -132,7 +127,7 @@ internal sealed class ConversationRow : Grid
         _pin.Visibility = item.IsPinned ? Visibility.Visible : Visibility.Collapsed;
         _count.Text = item.UnreadLabel;
         _badge.Visibility = item.HasUnread ? Visibility.Visible : Visibility.Collapsed;
-        _status.Text = item.Receipt.ReceiptStatus switch { -1 => "!", 0 => "◷", 1 => "✓", 2 or 3 => "✓✓", _ => "" };
+        _status.Text = ConversationSummary.ReceiptMark(item.Receipt);
         if (!System.Windows.SystemParameters.HighContrast)
             _status.Foreground = WorkspaceHost.ColorBrush(item.Receipt.ReceiptStatus switch
             { -1 => "DangerColor", 3 => "MessagingSelectionMarkColor", _ => "MutedColor" });

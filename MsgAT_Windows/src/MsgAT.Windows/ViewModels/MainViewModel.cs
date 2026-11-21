@@ -10,6 +10,7 @@ using MsgAT.Windows.Infrastructure;
 namespace MsgAT.Windows.ViewModels;
 
 internal readonly record struct ChatHistoryPosition(string MessageId, double Offset);
+internal enum HistoryPage { Older, Newer, Latest }
 
 internal static class CallSummaryText
 {
@@ -294,7 +295,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         get => _initialHistoryLoading;
         private set => SetProperty(ref _initialHistoryLoading, value);
     }
-    internal Task InitialHistoryLoadCompletion => _initialHistoryLoad;
+    private CancellationTokenSource? _historyPageCancellation;
+    private Task<bool> _historyPageLoad = Task.FromResult(false);
+    public bool HistoryPageLoading => _historyPageCancellation is not null;
+    internal Task WorkspaceSearchCompletion { get; set; } = Task.CompletedTask;
+    internal Task WorkspaceAttachmentCompletion { get; set; } = Task.CompletedTask;
+    internal Task WorkspaceMessageActionCompletion { get; set; } = Task.CompletedTask;
+    internal Task HistoryLoadCompletion => Task.WhenAll(_initialHistoryLoad, _historyPageLoad,
+        WorkspaceSearchCompletion, WorkspaceAttachmentCompletion, WorkspaceMessageActionCompletion);
     private bool _hasNewerMessages;
     private MessageItem? _replyTarget;
     private bool _disposed;
@@ -828,7 +836,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public Task SendMediaAsync(string path) => CaptureMediaSender()?.Invoke(path) ?? Task.CompletedTask;
 
-    private static bool CanSelectMessage(MessageItem item) =>
+    internal static bool CanSelectMessage(MessageItem item) =>
         !item.IsRevoked && item.Extension is ("txt" or "attachment" or "contact" or "location");
 
     public void ToggleSelection(MessageItem item, bool extending = false)
@@ -1243,9 +1251,14 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public async Task RevokeAsync(MessageItem item)
     {
-        if (SelectedConversation is null || !item.IsMine || item.IsRevoked) { return; }
-        try { await _services.Messaging.RevokeMessageAsync(SelectedConversation.Uuid, item.MessageId); }
-        catch (InvalidOperationException) { ErrorRequested?.Invoke(this, "The message change could not be sent."); }
+        var peer = item.Source.ConversationUuid;
+        if (_disposed || _services.IsDisposed || SelectedConversation?.Uuid != peer || !item.CanModify) return;
+        try { await _services.Messaging.RevokeMessageAsync(peer, item.MessageId); }
+        catch (OperationCanceledException) when (_disposed || _services.IsDisposed) { }
+        catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            if (!_disposed) ErrorRequested?.Invoke(this, AppStrings.Get("UiRevokeFailed"));
+        }
     }
 
     public void SetReply(MessageItem item) { if (CanCompose && !item.IsRevoked && item.Source.ConversationUuid == SelectedConversation?.Uuid) { ReplyTarget = item; } }
@@ -1304,6 +1317,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool _savingEdit;
 
     public bool HasMessageEdit => _editingMessage is not null;
+    internal bool EditingAttachment => _editingMessage?.IsAttachment == true;
     public bool CanEditText => HasMessageEdit && HasComposer && !_savingEdit;
     public bool IsSavingEdit => _savingEdit;
     public bool CanCancelEdit => HasMessageEdit && !_savingEdit;
@@ -1377,68 +1391,112 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         else ErrorRequested?.Invoke(this, AppStrings.Get("UiEditFailed"));
     }
 
-    public void LoadOlderMessages()
+    internal Task<bool> LoadHistoryPageAsync(HistoryPage direction, Action retry,
+        Action? willApply = null, Action? loaded = null)
     {
-        if (SelectedConversation is null || !HasOlderMessages) { return; }
-        if(Messages.FirstOrDefault() is not { } anchor) return;
-        if (!TryReadHistory(() => _services.Database.GetMessagesBefore(anchor.Source, PageSize),
-                LoadOlderMessages, out var older)) return;
-        for (var index = older.Count - 1; index >= 0; index--)
-        {
-            Messages.Insert(0, CreateMessageItem(older[index]));
-        }
-        RefreshAlbumPresentation();
-        HasOlderMessages = older.Count == PageSize;
-    }
+        var latest = direction == HistoryPage.Latest;
+        var older = direction == HistoryPage.Older;
+        if (_disposed || !IsChatContentVisible || HistoryPageLoading || InitialHistoryLoading ||
+            SelectedConversation is not { } conversation || (!latest && !(older ? HasOlderMessages : HasNewerMessages)))
+            return Task.FromResult(false);
+        var anchor = (older ? Messages.FirstOrDefault() : Messages.LastOrDefault())?.Source;
+        if (!latest && anchor is null) return Task.FromResult(false);
+        var peer = conversation.Uuid;
+        var navigation = HistoryNavigationVersion;
+        var alias = conversation.Alias;
+        var quotedMessage = AppStrings.Get("UiQuotedMessage");
+        var quotedYou = AppStrings.Get("UiQuotedYou");
+        var owner = new CancellationTokenSource();
+        _historyPageCancellation = owner;
+        OnPropertyChanged(nameof(HistoryPageLoading));
+        _historyPageLoad = LoadAsync();
+        return _historyPageLoad;
 
-    public void LoadNewerMessages()
-    {
-        if(SelectedConversation is null || !HasNewerMessages || Messages.LastOrDefault() is not { } anchor) return;
-        if (!TryReadHistory(() => _services.Database.GetMessagesAfter(anchor.Source,PageSize),
-                LoadNewerMessages, out var newer)) return;
-        foreach(var row in newer) Messages.Add(CreateMessageItem(row));
-        RefreshAlbumPresentation();
-        HasNewerMessages=Messages.LastOrDefault() is { } last && _services.Database.GetMessagesAfter(last.Source,1).Count>0;
+        async Task<bool> LoadAsync()
+        {
+            var token = owner.Token;
+            bool IsCurrent() => !token.IsCancellationRequested && !_disposed && IsChatContentVisible &&
+                HistoryNavigationVersion == navigation && SelectedConversation?.Uuid == peer &&
+                (latest || (older ? Messages.FirstOrDefault() : Messages.LastOrDefault())?.MessageId == anchor?.MessageId);
+            try
+            {
+                while (IsCurrent())
+                {
+                    var revision = Volatile.Read(ref _changeRevision);
+                    var page = await Task.Run(() =>
+                    {
+                        var rows = direction switch
+                        {
+                            HistoryPage.Older => _services.Database.GetMessagesBefore(anchor!, PageSize + 1),
+                            HistoryPage.Newer => _services.Database.GetMessagesAfter(anchor!, PageSize + 1),
+                            _ => _services.Database.GetMessages(peer, PageSize + 1)
+                        };
+                        var shown = (direction == HistoryPage.Newer ? rows.Take(PageSize) : rows.TakeLast(PageSize)).ToArray();
+                        var metadata = _services.Database.GetHistoryMetadata(shown);
+                        var items = new List<MessageItem>(shown.Length);
+                        foreach (var row in shown)
+                        {
+                            token.ThrowIfCancellationRequested();
+                            items.Add(ReadMessageItem(row, metadata.GetValueOrDefault(row.MessageId),
+                                alias, quotedYou, quotedMessage));
+                        }
+                        return (Items: items, HasMore: rows.Count > PageSize);
+                    }, token);
+                    if (!IsCurrent()) return false;
+                    if (revision != Volatile.Read(ref _changeRevision)) continue;
+                    HistoryLoadFailed = false;
+                    _retryHistoryLoad = null;
+                    if (latest)
+                    {
+                        ++HistoryNavigationVersion;
+                        InitialScrollTarget = null;
+                        InitialHistoryPosition = null;
+                        Messages.Clear();
+                        HasNewerMessages = false;
+                        IsViewingLatest = true;
+                    }
+                    var changed = latest || page.Items.Count != 0;
+                    if (changed)
+                    {
+                        willApply?.Invoke();
+                        foreach (var item in page.Items) ApplyMessageUiState(item);
+                        if (older)
+                            for (var i = page.Items.Count - 1; i >= 0; i--) Messages.Insert(0, page.Items[i]);
+                        else
+                            foreach (var item in page.Items) Messages.Add(item);
+                        RefreshAlbumPresentation();
+                    }
+                    if (direction == HistoryPage.Newer) HasNewerMessages = page.HasMore;
+                    else HasOlderMessages = page.HasMore;
+                    if (latest) InitialMessagesLoaded?.Invoke(this, EventArgs.Empty);
+                    if (changed) loaded?.Invoke();
+                    return changed;
+                }
+                return false;
+            }
+            catch (OperationCanceledException) when (token.IsCancellationRequested) { return false; }
+            catch (Exception error) when (error is IOException or Microsoft.Data.Sqlite.SqliteException)
+            {
+                if (IsCurrent())
+                {
+                    _retryHistoryLoad = retry;
+                    HistoryLoadFailed = true;
+                }
+                return false;
+            }
+            finally
+            {
+                _historyPageCancellation = null;
+                owner.Dispose();
+                OnPropertyChanged(nameof(HistoryPageLoading));
+            }
+        }
     }
 
     public void RetryHistoryLoad() => _retryHistoryLoad?.Invoke();
 
-    private bool TryReadHistory<T>(Func<T> read, Action retry, out T value)
-    {
-        try
-        {
-            value = read();
-            HistoryLoadFailed = false;
-            _retryHistoryLoad = null;
-            return true;
-        }
-        catch (Exception error) when (error is IOException or Microsoft.Data.Sqlite.SqliteException)
-        {
-            value = default!;
-            _retryHistoryLoad = retry;
-            HistoryLoadFailed = true;
-            return false;
-        }
-    }
-
-    public void LoadLatestMessages(Action? loaded = null)
-    {
-        if (SelectedConversation is not { } conversation) return;
-        var version = HistoryNavigationVersion;
-        if (!TryReadHistory(() => _services.Database.GetMessages(conversation.Uuid, PageSize),
-                () =>
-                {
-                    if (HistoryNavigationVersion == version && SelectedConversation?.Uuid == conversation.Uuid)
-                        LoadLatestMessages(loaded);
-                }, out var rows)) return;
-
-        ++HistoryNavigationVersion;
-        CancelInitialHistoryLoad();
-        InitialScrollTarget = null;
-        InitialHistoryPosition = null;
-        ApplyLatestMessages(rows);
-        loaded?.Invoke();
-    }
+    public void LoadLatestMessages(Action? loaded = null) =>
+        _ = LoadHistoryPageAsync(HistoryPage.Latest, () => LoadLatestMessages(loaded), loaded: loaded);
 
     private string? _unreadTimelineAnchor;
 
@@ -1503,11 +1561,74 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ++HistoryNavigationVersion;
         CancelInitialHistoryLoad();
         IsViewingLatest=false;
+        var metadata = _services.Database.GetHistoryMetadata(window.Messages);
         Messages.Clear();
-        foreach(var row in window.Messages) Messages.Add(CreateMessageItem(row));
+        foreach(var row in window.Messages) Messages.Add(CreateMessageItem(row, metadata));
         RefreshAlbumPresentation();
         HasOlderMessages=window.HasOlder;HasNewerMessages=window.HasNewer;
         return Messages.FirstOrDefault(message=>message.MessageId==messageId);
+    }
+
+    internal MessageSearchPage SearchMessages(string query, string? peer, MessageSearchCursor? before,
+        MessageSearchKind kind, DateTime? day, int limit) =>
+        _services.Search.Search(query, peer, before, kind, limit, day: day);
+
+    internal bool CanReadAttachment(MessageItem item) => !_disposed && !_services.IsDisposed &&
+        _services.Database.HasHistoryAnchor(item.Source.ConversationUuid, item.MessageId, includeRevoked: false);
+
+    internal bool CanExportAttachment(MessageItem item) => !_disposed && !_services.IsDisposed &&
+        _services.Database.CanExportAttachment(item.Source);
+
+    internal Task<bool> ChangeAttachmentDownloadAsync(MessageItem item, bool download, CancellationToken token) =>
+        download ? _services.Messaging.RequestAttachmentDownloadAsync(item.Source.ConversationUuid, item.MessageId, token)
+            : _services.Messaging.PauseAttachmentDownloadAsync(item.Source.ConversationUuid, item.MessageId, token);
+
+    internal async Task<bool> RevealWorkspaceMessageAsync(string peer, string id, Func<bool> isCurrent,
+        Action<ConversationItem> choose)
+    {
+        if (!isCurrent() || Conversations.FirstOrDefault(row => row.Uuid == peer) is not { } conversation)
+            return false;
+        var alias = conversation.Alias;
+        var quotedYou = AppStrings.Get("UiQuotedYou");
+        var quotedMessage = AppStrings.Get("UiQuotedMessage");
+        while (!_disposed && isCurrent())
+        {
+            var revision = Volatile.Read(ref _changeRevision);
+            var snapshot = await Task.Run(() =>
+            {
+                var window = _services.Database.GetMessageWindow(peer, id);
+                if (window is null || !window.Messages.Any(row => row.MessageId == id && !row.IsRevoked))
+                    return (Window: (MessageHistoryWindow?)null, Items: Array.Empty<MessageItem>());
+                var metadata = _services.Database.GetHistoryMetadata(window.Messages);
+                var items = window.Messages.Select(row => ReadMessageItem(row,
+                    metadata.GetValueOrDefault(row.MessageId), alias, quotedYou, quotedMessage)).ToArray();
+                return (Window: (MessageHistoryWindow?)window, Items: items);
+            });
+            if (_disposed || !isCurrent()) return false;
+            if (revision != Volatile.Read(ref _changeRevision)) continue;
+            if (snapshot.Window is not { } window) return false;
+            if (SelectedConversation?.Uuid != peer) choose(conversation);
+            if (_disposed || !isCurrent() || SelectedConversation?.Uuid != peer) return false;
+            CancelInitialHistoryLoad();
+            ++HistoryNavigationVersion;
+            InitialScrollTarget = id;
+            InitialHistoryPosition = null;
+            IsViewingLatest = false;
+            HistoryLoadFailed = false;
+            _retryHistoryLoad = null;
+            SetJumpHighlight(id);
+            Messages.Clear();
+            foreach (var item in snapshot.Items)
+            {
+                ApplyMessageUiState(item);
+                Messages.Add(item);
+            }
+            RefreshAlbumPresentation();
+            HasOlderMessages = window.HasOlder;
+            HasNewerMessages = window.HasNewer;
+            return true;
+        }
+        return false;
     }
 
     public void Dispose()
@@ -1515,6 +1636,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (_disposed) { return; }
         _disposed = true;_dataRefreshTimer.Stop();_conversationClock.Stop();CancelWebPreview();_preparationTimer.Stop();foreach(var value in _preparing.Values)value.Owner.Cancel();
         _initialHistoryCancellation?.Cancel();
+        _historyPageCancellation?.Cancel();
         ++_draftGeneration;
         _services.Database.Changed -= DatabaseChanged;
         _services.Messaging.ContactsChanged -= ContactsChanged;
@@ -1525,25 +1647,24 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         _services.Drafts.SaveFailed -= DraftSaveFailed;
     }
 
-    private MessageItem CreateMessageItem(ChatMessage message)
+    private MessageItem CreateMessageItem(ChatMessage message, IReadOnlyDictionary<string, HistoryMetadata>? metadata = null)
     {
         var quotedMessage = AppStrings.Get("UiQuotedMessage");
-        var item = ReadMessageItem(message, SelectedConversation?.Alias ?? quotedMessage, AppStrings.Get("UiQuotedYou"), quotedMessage);
+        metadata ??= _services.Database.GetHistoryMetadata([message]);
+        var item = ReadMessageItem(message, metadata.GetValueOrDefault(message.MessageId), SelectedConversation?.Alias ?? quotedMessage, AppStrings.Get("UiQuotedYou"), quotedMessage);
         ApplyMessageUiState(item);
         return item;
     }
 
-    private MessageItem ReadMessageItem(ChatMessage message, string peerAlias, string quotedYou, string quotedMessage)
+    private MessageItem ReadMessageItem(ChatMessage message, HistoryMetadata metadata, string peerAlias, string quotedYou, string quotedMessage)
     {
-        var original = message.ReplyToId is { } id ? _services.Database.GetMessage(id) : null;
-        if (original?.ConversationUuid != message.ConversationUuid) original = null;
-        var author = original is null ? message.ReplyToSender : original.IsMine ? MyUuid : message.ConversationUuid;
+        var author = metadata.OriginalIsMine is bool mine
+            ? (mine ? MyUuid : message.ConversationUuid) : message.ReplyToSender;
         var displayAuthor = message.ReplyToId is null ? "" : author == MyUuid ? quotedYou :
             author == message.ConversationUuid ? peerAlias : quotedMessage;
         var info=message.Extension=="attachment"?_services.Objects.Metadata(message.Content,message.MessageId):null;
         Func<Stream>? reader=info is null?null:()=>_services.Objects.OpenRead(message.Content);
-        var forward = message.IsRevoked ? null : _services.Database.GetForwardInfo(message.MessageId);
-        var item = new MessageItem(message, displayAuthor, info, reader, forwardInfo: forward,
+        var item = new MessageItem(message, displayAuthor, info, reader, forwardInfo: metadata.Forward,
             readSticker: () => _services.Objects.ReadStickerBytes(message.Content), thumbnailStore: _services.Objects);
         if (item.IsLiveLocation) item.SetLiveSnapshot(_services.Messaging.LiveLocation(message.ConversationUuid, message.MessageId));
         return item;
@@ -1564,6 +1685,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private void CancelInitialHistoryLoad()
     {
         _initialHistoryCancellation?.Cancel();
+        _historyPageCancellation?.Cancel();
         InitialHistoryLoading = false;
         _historyRefreshPending = false;
     }
@@ -1611,11 +1733,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                     if (window is not null && !window.Messages.Any(message => message.MessageId == target && !message.IsRevoked))
                         window = null;
                     var rows = window?.Messages ?? _services.Database.GetMessages(peer, PageSize);
+                    var metadata = _services.Database.GetHistoryMetadata(rows);
                     var items = new List<MessageItem>(rows.Count);
                     foreach (var row in rows)
                     {
                         token.ThrowIfCancellationRequested();
-                        items.Add(ReadMessageItem(row, alias, quotedYou, quotedMessage));
+                        items.Add(ReadMessageItem(row, metadata.GetValueOrDefault(row.MessageId), alias, quotedYou, quotedMessage));
                     }
                     return (Items: items, Target: window is null ? null : target, Unread: unread,
                         HasOlder: window?.HasOlder ?? rows.Count == PageSize, HasNewer: window?.HasNewer == true);
@@ -1664,17 +1787,6 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 owner.Dispose();
             }
         }
-    }
-
-    private void ApplyLatestMessages(IReadOnlyList<ChatMessage> rows)
-    {
-        Messages.Clear();
-        HasNewerMessages = false;
-        IsViewingLatest = true;
-        foreach (var message in rows) { Messages.Add(CreateMessageItem(message)); }
-        RefreshAlbumPresentation();
-        HasOlderMessages = rows.Count == PageSize;
-        InitialMessagesLoaded?.Invoke(this, EventArgs.Empty);
     }
 
     private void DatabaseChanged(object? sender, EventArgs args)
@@ -1795,6 +1907,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         if (historyStart is not null && rows.Count == 0)
             rows = _services.Database.GetMessages(SelectedConversation.Uuid, limit);
 
+        var metadata = _services.Database.GetHistoryMetadata(rows);
         var rowIds = rows.Select(row => row.MessageId).ToHashSet(StringComparer.Ordinal);
         for (var index = Messages.Count - 1; index >= 0; index--)
         {
@@ -1816,7 +1929,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var arrivalTime = Environment.TickCount64;
         for (var index = 0; index < rows.Count; index++)
         {
-            var candidate = CreateMessageItem(rows[index]);
+            var candidate = CreateMessageItem(rows[index], metadata);
             previousItems.TryGetValue(candidate.MessageId, out var existing);
             if (existing is null)
             {
@@ -1891,10 +2004,11 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         });
     }
 
-    public async Task<bool> MarkVisibleMessagesReadAsync(IReadOnlyCollection<string> visibleIds)
+    public async Task<bool> MarkVisibleMessagesReadAsync(IReadOnlyCollection<string> visibleIds, Func<bool>? isSurfaceActive = null)
     {
         if(_disposed || _services.IsDisposed || InitialHistoryLoading || !IsChatContentVisible || SelectedConversation is null ||
-           System.Windows.Application.Current.MainWindow is not {IsActive:true,IsVisible:true}) return true;
+           !(isSurfaceActive?.Invoke() ??
+             (System.Windows.Application.Current.MainWindow is { IsActive: true, IsVisible: true }))) return true;
         var wanted=visibleIds.ToHashSet(StringComparer.Ordinal);
         var peer=SelectedConversation.Uuid;
         var ids=Messages.Where(m=>wanted.Contains(m.MessageId) && !m.IsMine && !m.IsRead && !m.IsRevoked && m.Source.ConversationUuid==peer)
@@ -2333,6 +2447,7 @@ public sealed class MessageItem(ChatMessage source, string replyAuthor = "User",
         : "";
     private bool _joinsOlder;
     private bool _joinsNewer;
+    internal bool JoinsOlder => _joinsOlder;
     public bool JoinsNewer => _joinsNewer;
     public Thickness TimelineSpacing => new(0, 0, 0, _joinsNewer ? 2 : 7);
     public CornerRadius TimelineCorners => new(

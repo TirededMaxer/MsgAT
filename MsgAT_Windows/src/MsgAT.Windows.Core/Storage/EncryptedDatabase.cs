@@ -7,6 +7,8 @@ namespace MsgAT.Windows.Core.Storage;
 public sealed record MessageHistoryWindow(IReadOnlyList<ChatMessage> Messages, bool HasOlder, bool HasNewer);
 public sealed record ForwardedMessageInfo(string? Name,long OriginalAt);
 
+public readonly record struct HistoryMetadata(bool? OriginalIsMine, ForwardedMessageInfo? Forward);
+
 public sealed class MessageDeliveryChangedEventArgs(string conversationUuid, string messageId) : EventArgs
 {
     public string ConversationUuid { get; } = conversationUuid;
@@ -278,6 +280,33 @@ public sealed class EncryptedDatabase : IDisposable
     public IReadOnlyList<ChatMessage> GetMessagesBefore(ChatMessage anchor,int limit=50) =>
         ProtocolTransaction(db=>SeekMessages(db,anchor,newer:false,inclusive:false,limit));
 
+    public IReadOnlyDictionary<string, HistoryMetadata> GetHistoryMetadata(IReadOnlyList<ChatMessage> rows)
+    {
+        var metadata = new Dictionary<string, HistoryMetadata>(rows.Count, StringComparer.Ordinal);
+        if (rows.Count == 0) return metadata;
+        var peer = rows[0].ConversationUuid;
+        return ProtocolTransaction(db =>
+        {
+            foreach (var page in rows.Chunk(100))
+            {
+                var parameters = new object?[page.Length + 1];
+                parameters[0] = peer;
+                for (var index = 0; index < page.Length; index++) parameters[index + 1] = page[index].MessageId;
+                var placeholders = string.Join(",", Enumerable.Range(1, page.Length).Select(index => $"$p{index}"));
+                var result = db.Query($"""
+                    SELECT m.messageId, source.isMine, f.name, f.original_at FROM messages m
+                    LEFT JOIN messages source ON source.messageId=m.replyToId AND source.conversationUuid=m.conversationUuid
+                    LEFT JOIN message_forwards f ON f.message_id=m.messageId AND m.isRevoked=0
+                    WHERE m.conversationUuid=$p0 AND m.messageId IN ({placeholders})
+                    """, r => (Id: r.GetString(0), Info: new HistoryMetadata(
+                        r.IsDBNull(1) ? null : r.GetBoolean(1), r.IsDBNull(3) ? null :
+                        new ForwardedMessageInfo(r.IsDBNull(2) ? null : r.GetString(2), r.GetInt64(3)))), parameters);
+                foreach (var entry in result) metadata[entry.Id] = entry.Info;
+            }
+            return metadata;
+        });
+    }
+
     public ForwardedMessageInfo? GetForwardInfo(string id) => ProtocolTransaction(db=>db.Query(
         "SELECT name,original_at FROM message_forwards WHERE message_id=$p0",r=>new ForwardedMessageInfo(r.IsDBNull(0)?null:r.GetString(0),r.GetInt64(1)),id).FirstOrDefault());
 
@@ -424,15 +453,14 @@ public sealed class EncryptedDatabase : IDisposable
     private static IReadOnlyList<ChatMessage> SeekMessages(VaultTransaction db,ChatMessage anchor,bool newer,bool inclusive,int limit,long? at = null)
     {
         ArgumentOutOfRangeException.ThrowIfLessThan(limit,1);
-        var comparison=newer?">":"<";
-        var idComparison=inclusive?comparison+"=":comparison;
+        var strictComparison = newer ? ">" : "<";
+        var comparison = inclusive ? strictComparison + "=" : strictComparison;
         var direction=newer?"ASC":"DESC";
         var rows=db.Query($"""
             SELECT messageId,conversationUuid,isMine,content,ext,timestamp,isRead,
              replyToId,replyToSender,replyToContent,status,isRevoked,isEdited,e.expires_at
             FROM messages m LEFT JOIN message_expiration e ON e.message_id=m.messageId
-            WHERE conversationUuid=$p0 AND
-             (timestamp {comparison} $p1 OR (timestamp=$p1 AND messageId {idComparison} $p2))
+            WHERE m.conversationUuid=$p0 AND (m.timestamp,m.messageId) {comparison} ($p1,$p2)
               AND (e.expires_at IS NULL OR e.expires_at>$p4)
               AND NOT EXISTS(SELECT 1 FROM conversation_retention r WHERE r.peer=m.conversationUuid
                   AND (m.isMine=0 OR m.status>=2) AND m.timestamp<=$p4-r.duration_ms)

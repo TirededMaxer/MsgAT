@@ -90,6 +90,9 @@
     <sys:String x:Key="UiNoUnreadChats">No unread chats</sys:String>
     <sys:String x:Key="UiNoArchivedChats">No archived chats</sys:String>
     <sys:String x:Key="UiHistoryLoadFailed">Could not load chat history</sys:String>
+    <sys:String x:Key="UiQtWorkspaceUnavailable">Could not start the Qt workspace. Check the Windows development package and its Qt runtime.</sys:String>
+    <sys:String x:Key="UiOlderHistory">Older messages</sys:String>
+    <sys:String x:Key="UiNewerHistory">Newer messages</sys:String>
     <sys:String x:Key="UiMessageEdited">(edited)</sys:String>
     <sys:String x:Key="UiReceiptFailed">Delivery stopped. Receipt is unconfirmed.</sys:String>
     <sys:String x:Key="UiReceiptSending">Sending</sys:String>
@@ -282,6 +285,8 @@
     <sys:String x:Key="UiForwardTaskSourceDownloadUnavailable">A required attachment or link preview is unavailable from the relay.</sys:String>
     <sys:String x:Key="UiArchive">Archive</sys:String>
     <sys:String x:Key="UiAllChats">All chats</sys:String>
+    <sys:String x:Key="UiConversationList">Conversations</sys:String>
+    <sys:String x:Key="UiBackToConversations">Back to conversations</sys:String>
     <sys:String x:Key="UiUnreadChats">Unread</sys:String>
     <sys:String x:Key="UiMessagePlaceholder">Message…</sys:String>
     <sys:String x:Key="UiSend">Send</sys:String>
@@ -429,6 +434,7 @@
     <sys:String x:Key="UiOpenContactCard">Open contact card</sys:String>
     <sys:String x:Key="UiSaveMessage">Save message</sys:String>
     <sys:String x:Key="UiRevoke">Revoke</sys:String>
+    <sys:String x:Key="UiRevokeFailed">The message could not be revoked.</sys:String>
     <sys:String x:Key="UiPhotoVideo">Photos and videos</sys:String>
     <sys:String x:Key="UiFiles">Files</sys:String>
     <sys:String x:Key="UiAudio">Audio</sys:String>
@@ -800,6 +806,8 @@
     <sys:String x:Key="UiTurnPort">TURN port</sys:String>
     <sys:String x:Key="UiTurnUsername">TURN username</sys:String>
     <sys:String x:Key="UiTurnPassword">TURN password</sys:String>
+    <sys:String x:Key="UiTurnKeepPassword">Keep saved TURN password</sys:String>
+    <sys:String x:Key="UiSettingsSaveFailed">Could not save the settings.</sys:String>
     <sys:String x:Key="UiTurnTls">Use TLS (turns://)</sys:String>
     <sys:String x:Key="UiCertificatePin">TLS SHA-256 certificate pin</sys:String>
     <sys:String x:Key="UiAllowDevelopmentCertificate">Allow untrusted development certificate</sys:String>

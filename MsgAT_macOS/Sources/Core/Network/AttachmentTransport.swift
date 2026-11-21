@@ -95,17 +95,20 @@ final class AttachmentTransport: @unchecked Sendable {
             try output.truncate(atOffset: UInt64(start * 65552)); try output.seek(toOffset: UInt64(start * 65552))
             let count = try number(manifest, "chunk_count")
             if start < count {
+                let objectID = try string(manifest, "object_id")
+                let key = try string(manifest, "key")
+                let size = try number(manifest, "size")
                 guard let capability = Data(base64Encoded: try string(manifest, "read_token")), capability.count == 32 else { throw unavailable() }
                 let (id, connection) = try connection(endpoint)
                 defer { finish(id, connection) }
                 for index in start..<count {
                     try checkpoint()
-                    let response = try connection.exchange(packet(.typeObjectGet, try string(manifest, "object_id"), capability, index: index), expecting: .typeObjectData)
+                    let response = try connection.exchange(packet(.typeObjectGet, objectID, capability, index: index), expecting: .typeObjectData)
                     guard let bytes = response.encryptedData, bytes.count == 65552 else { throw unavailable() }
-                    _ = try SecurityCore.call(["operation": "check_object_chunk", "chunk": ["key": try string(manifest, "key"),
-                        "object_id": try string(manifest, "object_id"), "size": try number(manifest, "size"), "index": index, "data": bytes.base64EncodedString()]])
+                    _ = try SecurityCore.call(["operation": "check_object_chunk", "chunk": ["key": key,
+                        "object_id": objectID, "size": size, "index": index, "data": bytes.base64EncodedString()]])
                     try output.write(contentsOf: bytes); try output.synchronize()
-                    progress(min((index + 1) * 65536, try number(manifest, "size")))
+                    progress(min((index + 1) * 65536, size))
                 }
             }
             try output.close()

@@ -342,7 +342,10 @@ public partial class MainWindow : Window
             _services.Messaging.MessagesRemoved += Messaging_MessagesRemoved;
             _services.Messaging.AttachmentProgressChanged += Messaging_MediaDownloadProgress;
             _services.Messaging.PeerActivityChanged += Messaging_PeerActivityChanged;
-            _services.Calls.NoticeRequested += (_, message) => { if (!_appLocked) TransientNotice.Show(this, message); };
+            _services.Calls.NoticeRequested += (_, message) =>
+            {
+                if (!_appLocked && _qtWorkspace?.ShowCallNotice(message) != true) ShowWorkspaceNotice(message);
+            };
             if (!_appLocked)
             {
                 InitializeUnlockedWorkspace();
@@ -404,6 +407,7 @@ public partial class MainWindow : Window
         _archiveUndoTimer.Stop();
         _archiveUndo = null;
         var version = ++_archiveUndoAnimation;
+        _qtWorkspace?.PresentArchiveUndo(version);
         ArchiveUndoBanner.IsEnabled = false;
         if (!animate || !UseSidebarMotion || !ArchiveUndoBanner.IsVisible)
         {
@@ -440,11 +444,12 @@ public partial class MainWindow : Window
         if (_appLocked || _exiting || generation != _appLockGeneration || !ReferenceEquals(services, _services)) return;
         if (!changed)
         {
-            TransientNotice.Show(this, AppStrings.Get("UiArchiveChangeFailed"));
+            ShowWorkspaceNotice(AppStrings.Get("UiArchiveChangeFailed"));
             return;
         }
         if (!showUndo) return;
         _archiveUndo = (peer, archived);
+        PresentQtArchiveUndo();
         ArchiveUndoText.SetResourceReference(TextBlock.TextProperty, archived ? "UiChatArchived" : "UiChatUnarchived");
         ArchiveUndoBanner.IsEnabled = true;
         ArchiveUndoBanner.Visibility = Visibility.Visible;
@@ -515,7 +520,7 @@ public partial class MainWindow : Window
         }
         if (_exiting || _appLocked) { return; }
         _viewModel = new MainViewModel(services, Dispatcher);
-        _viewModel.ErrorRequested += (_, message) => { if (!_appLocked) TransientNotice.Show(this, message); };
+        _viewModel.ErrorRequested += (_, message) => ShowWorkspaceNotice(message);
         _viewModel.Messages.CollectionChanged += (_, _) =>
         {
             if (MediaOverlayHost.Content is MediaOverlay viewer && !ReferenceEquals(viewer, _galleryPreview) &&
@@ -561,7 +566,11 @@ public partial class MainWindow : Window
     private async Task LoadWorkspaceAsync(MainViewModel model)
     {
         await model.LoadInitialWorkspaceAsync();
-        if (!_exiting && !_appLocked && ReferenceEquals(_viewModel, model)) OpenDeferredNotification();
+        if (!_exiting && !_appLocked && ReferenceEquals(_viewModel, model))
+        {
+            OpenDeferredNotification();
+            ScheduleQtWorkspace();
+        }
     }
 
     private async void RetryWorkspace_Click(object sender, RoutedEventArgs e)
@@ -617,7 +626,7 @@ public partial class MainWindow : Window
             model.MessagesRefreshed -= ChatTimelineChanged;
             model.VisibleReadsApplied -= ChatTimelineChanged;
             model.Dispose();
-            workspace = Task.WhenAll(model.InitialWorkspaceLoadCompletion, model.InitialHistoryLoadCompletion);
+            workspace = Task.WhenAll(model.InitialWorkspaceLoadCompletion, model.HistoryLoadCompletion);
         }
         if (_callWindow is not null) { _callWindow.IsEnabled = false; _callWindow.Visibility = Visibility.Collapsed; _callWindow.Dispose(); }
         try
@@ -866,33 +875,38 @@ public partial class MainWindow : Window
     }
 
     private void CancelPreparation_Click(object sender,RoutedEventArgs e){if(sender is FrameworkElement{Tag:string id})_viewModel?.CancelPreparation(id);}
-    private void OpenSendQueue(string? peer = null)
+    private void OpenSendQueue(string? peer = null, nint owner = 0)
     {
         if (_services is not { } services || _viewModel is not { } model || _exiting || _appLocked) return;
-        var dialog = new SendQueueDialog(services, peer) { Owner = this };
+        var dialog = new SendQueueDialog(services, peer);
         dialog.ConfirmOpenChat = account => ConfirmConversationNavigation(model, account, dialog);
-        if (dialog.ShowDialog() == true && dialog.OpenChatPeer is { } account && !_exiting && !_appLocked &&
+        if (ShowWorkspaceDialog(dialog, owner) && dialog.OpenChatPeer is { } account && !_exiting && !_appLocked &&
             ReferenceEquals(_viewModel, model))
         {
+            if (owner != 0 && dialog.OpenMessageId is { } target)
+            {
+                _qtWorkspace?.RevealConfirmedMessage(account, target, "UiQueueStale");
+                return;
+            }
             try
             {
                 OpenConfirmedContactConversation(model, account);
             }
             catch (Exception error) when (error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
             {
-                TransientNotice.Show(this, AppStrings.Get("UiHistoryLoadFailed"));
+                ShowWorkspaceNotice(AppStrings.Get("UiHistoryLoadFailed"));
                 return;
             }
             if (model.SelectedConversation?.Uuid != account)
             {
-                TransientNotice.Show(this, AppStrings.Get("UiQueueStale"));
+                ShowWorkspaceNotice(AppStrings.Get("UiQueueStale"));
                 return;
             }
             if (dialog.OpenMessageId is { } id) JumpWithinChat(id);
         }
     }
 
-    private void OpenForwardingQueue()
+    private void OpenForwardingQueue(nint owner = 0)
     {
         if (_appLocked || _exiting || _services is not { } services || _viewModel is not { } model) return;
         (string Peer, string Id)? destination = null;
@@ -903,11 +917,16 @@ public partial class MainWindow : Window
                 !services.Database.HasHistoryAnchor(peer, id, includeRevoked: false)) return false;
             destination = (peer, id);
             return true;
-        }) { Owner = this };
+        });
         dialog.ConfirmOpenChat = peer => ConfirmConversationNavigation(model, peer, dialog);
-        if (dialog.ShowDialog() != true || destination is not { } target ||
+        if (!ShowWorkspaceDialog(dialog, owner) || destination is not { } target ||
             _appLocked || _exiting || !ReferenceEquals(_viewModel, model) ||
             model.Conversations.FirstOrDefault(item => item.Uuid == target.Peer) is not { } conversation) return;
+        if (owner != 0)
+        {
+            _qtWorkspace?.RevealConfirmedMessage(target.Peer, target.Id, "UiSearchTargetUnavailable");
+            return;
+        }
         if (model.SelectedConversation?.Uuid != target.Peer) model.SelectedConversation = conversation;
         JumpWithinChat(target.Id);
     }
@@ -919,17 +938,18 @@ public partial class MainWindow : Window
     private async void SendOptions_Click(object sender, RoutedEventArgs e) => await OpenSendOptionsAsync(scheduleDraft: false);
     private async void ScheduleNextMessage_Click(object sender, RoutedEventArgs e) => await OpenSendOptionsAsync(scheduleDraft: true);
 
-    private async Task OpenSendOptionsAsync(bool scheduleDraft)
+    private async Task OpenSendOptionsAsync(bool scheduleDraft, nint owner = 0)
     {
         if (_exiting || _appLocked || _viewModel is not { CanCompose: true, HasMessageEdit: false, SelectedConversation: { } peer } model) return;
         var lockGeneration = _appLockGeneration;
-        var dialog = new SendOptionsDialog(model.SendOptions, startScheduled: scheduleDraft) { Owner = this };
-        if (dialog.ShowDialog() == true && !_exiting && !_appLocked &&
+        var dialog = new SendOptionsDialog(model.SendOptions, startScheduled: scheduleDraft);
+        if (ShowWorkspaceDialog(dialog, owner) && !_exiting && !_appLocked &&
             _appLockGeneration == lockGeneration && model.CanCompose && !model.HasMessageEdit &&
             _callWindow?.CoversChat != true &&
             ReferenceEquals(_viewModel, model) && ReferenceEquals(model.SelectedConversation, peer))
         {
-            if (scheduleDraft) await SendComposerDraftAsync(model, dialog.Result);
+            if (scheduleDraft && owner != 0) await TrackWorkspaceSend(owner, model.SendDraftAsync(dialog.Result));
+            else if (scheduleDraft) await SendComposerDraftAsync(model, dialog.Result);
             else model.SetSendOptions(dialog.Result);
         }
         if (CanRestoreComposerFocus(model, peer.Uuid)) Composer.Focus();
@@ -973,27 +993,33 @@ public partial class MainWindow : Window
         if (CanRestoreComposerFocus(model, model.SelectedConversation?.Uuid)) Composer.Focus();
     }
 
-    private bool ConfirmDiscardMessageEdit(MainViewModel model, Window? owner = null)
+    private bool ConfirmDiscardMessageEdit(MainViewModel model, Window? owner = null, nint nativeOwner = 0)
     {
         if (!model.HasUnsavedEdit) return true;
         var peer = model.SelectedConversation?.Uuid;
         var target = model.EditTargetId;
         var generation = _appLockGeneration;
         var dialog = new ConfirmationDialog(AppStrings.Get("UiDiscardMessageEdit"), title: model.EditingTitle,
-            dismissLabel: AppStrings.Get("UiKeepEditing"), confirmLabel: AppStrings.Get("UiDiscard")) { Owner = owner ?? this };
-        var discard = dialog.ShowDialog() == true;
+            dismissLabel: AppStrings.Get("UiKeepEditing"), confirmLabel: AppStrings.Get("UiDiscard"));
+        var discard = nativeOwner != 0 ? ShowWorkspaceDialog(dialog, nativeOwner) : ShowWithManagedOwner();
         if (generation != _appLockGeneration || _appLocked || _exiting || !ReferenceEquals(_viewModel, model) ||
             !model.IsChatContentVisible || model.SelectedConversation?.Uuid != peer ||
             model.EditTargetId != target || !model.CanCancelEdit) return false;
         if (!discard && IsActive) EditComposer.Focus();
         return discard;
+
+        bool ShowWithManagedOwner()
+        {
+            dialog.Owner = owner ?? this;
+            return dialog.ShowDialog() == true;
+        }
     }
 
-    private bool ConfirmConversationNavigation(MainViewModel model, string peer, Window? owner = null)
+    private bool ConfirmConversationNavigation(MainViewModel model, string peer, Window? owner = null, nint nativeOwner = 0)
     {
         if (_exiting || _appLocked || _callWindow?.CoversChat == true || !ReferenceEquals(_viewModel, model)) return false;
         if (model.SelectedConversation?.Uuid == peer || !model.HasMessageEdit) return true;
-        return model.CanCancelEdit && ConfirmDiscardMessageEdit(model, owner);
+        return model.CanCancelEdit && ConfirmDiscardMessageEdit(model, owner, nativeOwner);
     }
 
     private void OpenConfirmedContactConversation(MainViewModel model, string peer)
@@ -1450,21 +1476,42 @@ public partial class MainWindow : Window
         catch (InvalidOperationException exception) { TransientNotice.Show(this, exception.Message); }
     }
 
-    private void ShareContact_Click(object sender, RoutedEventArgs e)
+    private void ShareContact_Click(object sender, RoutedEventArgs e) => OpenShareContact();
+
+    private void OpenShareContact(nint owner = 0)
     {
-        if (_exiting || _services is null || _viewModel?.SelectedConversation is not { } peer ||
-            _viewModel.CaptureContactCardSender() is not { } send) return;
-        _viewModel.ShowAttachments = false;
-        new ContactCardPickerDialog(_services, peer.Alias, _viewModel.SendOptions, send) { Owner = this }.ShowDialog();
+        if (_exiting || _appLocked || _services is not { } services ||
+            _viewModel is not { SelectedConversation: { } peer } model ||
+            model.CaptureContactCardSender() is not { } send) return;
+        model.ShowAttachments = false;
+        var generation = _appLockGeneration;
+        var dialog = new ContactCardPickerDialog(services, peer.Alias, model.SendOptions,
+            (account, name, options) => SubmitSharedCard(model, peer, generation, owner, () => send(account, name, options)));
+        ShowWorkspaceDialog(dialog, owner);
     }
 
-    private void ShareLocation_Click(object sender, RoutedEventArgs e)
+    private void ShareLocation_Click(object sender, RoutedEventArgs e) => OpenShareLocation();
+
+    private void OpenShareLocation(nint owner = 0)
     {
-        if (_exiting || _appLocked || _viewModel?.SelectedConversation is not { } peer ||
-            _viewModel.CaptureLocationSender() is not { } send ||
-            _viewModel.CaptureLiveLocationSender() is not { } share) return;
-        _viewModel.ShowAttachments = false;
-        new LocationSendDialog(peer.Alias, _viewModel.SendOptions, send, share) { Owner = this }.ShowDialog();
+        if (_exiting || _appLocked || _viewModel is not { SelectedConversation: { } peer } model ||
+            model.CaptureLocationSender() is not { } send || model.CaptureLiveLocationSender() is not { } share) return;
+        model.ShowAttachments = false;
+        var generation = _appLockGeneration;
+        var dialog = new LocationSendDialog(peer.Alias, model.SendOptions,
+            (point, label, options) => SubmitSharedCard(model, peer, generation, owner, () => send(point, label, options)),
+            (point, duration, label, silent) => SubmitSharedCard(model, peer, generation, owner, () => share(point, duration, label, silent)));
+        ShowWorkspaceDialog(dialog, owner);
+    }
+
+    private Task<bool> SubmitSharedCard(MainViewModel model, ConversationItem peer, long generation, nint owner, Func<Task<bool>> send) =>
+        _exiting || _appLocked || generation != _appLockGeneration || !ReferenceEquals(_viewModel, model) ||
+        !ReferenceEquals(model.SelectedConversation, peer) ? Task.FromResult(false) : TrackWorkspaceSend(owner, send());
+
+    private Task<bool> TrackWorkspaceSend(nint owner, Task<bool> operation)
+    {
+        if (owner != 0) _qtWorkspace?.TrackMessageAction(operation);
+        return operation;
     }
 
     private async void StopLiveLocation_Click(object sender, RoutedEventArgs e)
@@ -1483,27 +1530,33 @@ public partial class MainWindow : Window
 
     private void MessageCard_Click(object sender, RoutedEventArgs e)
     {
-        if (_exiting || _services is not { } services || _viewModel is not { IsSelecting: false } model ||
-            sender is not FrameworkElement { DataContext: MessageItem message }) return;
+        if (sender is FrameworkElement { DataContext: MessageItem message }) OpenMessageCard(message);
+    }
+
+    private void OpenMessageCard(MessageItem message, nint owner = 0)
+    {
+        if (_exiting || _appLocked || _services is not { } services || _viewModel is not { IsSelecting: false } model ||
+            model.SelectedConversation?.Uuid != message.Source.ConversationUuid) return;
         if (message.IsLiveLocation)
         {
             var peer = message.Source.ConversationUuid;
             var id = message.MessageId;
-            new LocationDetailsDialog(message.Content, services.Database, () => services.Messaging.LiveLocation(peer, id),
+            var dialog = new LocationDetailsDialog(message.Content, services.Database, () => services.Messaging.LiveLocation(peer, id),
                 message.IsMine ? () => services.LiveLocations.Foreground && services.LiveLocations.Current(peer)?.MessageId == id : null,
-                message.IsMine ? () => services.LiveLocations.StopAsync(peer, id) : null) { Owner = this }.ShowDialog();
+                message.IsMine ? () => TrackWorkspaceSend(owner, services.LiveLocations.StopAsync(peer, id)) : null);
+            ShowWorkspaceDialog(dialog, owner);
             return;
         }
         if (message.IsLocation)
         {
-            new LocationDetailsDialog(message.Content, () =>
-                services.Database.GetLocationPoint(message.Source.ConversationUuid, message.MessageId)) { Owner = this }.ShowDialog();
+            ShowWorkspaceDialog(new LocationDetailsDialog(message.Content, () =>
+                services.Database.GetLocationPoint(message.Source.ConversationUuid, message.MessageId)), owner);
             return;
         }
         if (!message.IsContactCard) return;
-        var detail = new ContactCardDetailsDialog(services, message.Source.ConversationUuid, message.MessageId, message.Content) { Owner = this };
+        var detail = new ContactCardDetailsDialog(services, message.Source.ConversationUuid, message.MessageId, message.Content);
         detail.ConfirmOpenChat = account => ConfirmConversationNavigation(model, account, detail);
-        if (detail.ShowDialog() == true && detail.OpenAccount is { } account) OpenConfirmedContactConversation(model, account);
+        if (ShowWorkspaceDialog(detail, owner) && detail.OpenAccount is { } account) OpenConfirmedContactConversation(model, account);
     }
 
     private void ReviewMedia(IReadOnlyList<string> paths, ConversationItem peer, SendOptions options,
@@ -1543,13 +1596,14 @@ public partial class MainWindow : Window
         }));
     }
 
-    private async void AddFriend_Click(object sender, RoutedEventArgs e)
+    private async void AddFriend_Click(object sender, RoutedEventArgs e) => await OpenAddFriendAsync();
+
+    private async Task OpenAddFriendAsync(nint owner = 0)
     {
-        _ = sender;
-        _ = e;
-        if (_viewModel is null) { return; }
-        var dialog = new TextPromptDialog(AppStrings.Get("UiAddFriend"), AppStrings.Get("UiContactPublicId"), myUuid: _viewModel.MyUuid) { Owner = this };
-        if (dialog.ShowDialog() == true) { await _viewModel.AddFriendAsync(dialog.Value); }
+        if (_appLocked || _exiting || _viewModel is not { } model) return;
+        var dialog = new TextPromptDialog(AppStrings.Get("UiAddFriend"), AppStrings.Get("UiContactPublicId"), myUuid: model.MyUuid);
+        if (ShowWorkspaceDialog(dialog, owner) && !_appLocked && !_exiting && ReferenceEquals(_viewModel, model))
+            await model.AddFriendAsync(dialog.Value);
     }
 
     private void Requests_Click(object sender, RoutedEventArgs e)
@@ -1575,7 +1629,8 @@ public partial class MainWindow : Window
         var current = services.Settings.Snapshot;
         var editor = new IdentitySetupDialog((name, avatar, remove) => SaveProfileAsync(services, name, avatar, remove),
             current.Nickname ?? "", current.AvatarPath, editing: true) { Owner = owner };
-        return editor.ShowDialog() == true && !_appLocked && !_exiting ? services.Settings.Snapshot : null;
+        var accepted = editor.ShowDialog() == true;
+        return accepted && !_appLocked && !_exiting ? services.Settings.Snapshot : null;
     }
 
     private Task<bool> SaveProfileAsync(AppServices services, string nickname, ReadOnlyMemory<byte>? avatar, bool remove) =>
@@ -1583,64 +1638,78 @@ public partial class MainWindow : Window
             ? Task.FromResult(false)
             : services.Messaging.UpdateProfileAsync(nickname, avatar, remove);
 
-    private async void Settings_Click(object sender, RoutedEventArgs e)
+    private async void Settings_Click(object sender, RoutedEventArgs e) => await OpenSettingsAsync();
+
+    private async Task OpenSettingsAsync(nint owner = 0)
     {
-        _ = sender;
-        _ = e;
-        if (_viewModel is null || _services is null) { return; }
-        var services = _services;
+        if (_appLocked || _exiting || _viewModel is null || _services is not { } services) return;
         var dialog = new SettingsDialog(services.Settings.Snapshot, services.Settings.MyUuid, EditProfile,
-            owner => new ReadReceiptPrivacyDialog(services) { Owner = owner }.ShowDialog(), OpenStorageDialog,
-            _chatTextPercentage, percentage =>
-            {
-                ApplyChatTextPercentage(percentage);
-                SaveWindowPlacement();
-            }, mode =>
-            {
-                WindowAppearance.SetTheme(mode);
-                SaveWindowPlacement();
-            }, language =>
-            {
-                AppStrings.SetLanguage(language);
-                _viewModel?.RefreshFolderChoices();
-                _viewModel?.RefreshMessageLanguage();
-                if (FloatingTimelineDate.Tag is DateTime timelineDate)
-                    FloatingTimelineDate.Content = AppStrings.TimelineDate(timelineDate);
-                _viewModel?.RefreshSendOptionsLanguage();
-                SaveWindowPlacement();
-            }, openNotifications: owner => new MessageNotificationsDialog(services) { Owner = owner }.ShowDialog(),
-            closeToTray: _closeToTray, changeCloseToTray: SetCloseToTray, openExportFolder: owner =>
+            parent => new ReadReceiptPrivacyDialog(services) { Owner = parent }.ShowDialog(), OpenStorageDialog,
+            _chatTextPercentage, SetInterfaceTextSize, SetInterfaceTheme, SetInterfaceLanguage,
+            openNotifications: parent => new MessageNotificationsDialog(services) { Owner = parent }.ShowDialog(),
+            closeToTray: _closeToTray, changeCloseToTray: SetCloseToTray, openExportFolder: parent =>
             {
                 if (!_appLocked && !_exiting && ReferenceEquals(_services, services))
-                    new AttachmentExportFolderDialog(services.Settings) { Owner = owner }.ShowDialog();
-            }) { Owner = this };
-        var accepted = dialog.ShowDialog() == true;
-        if (_exiting) { return; }
+                    new AttachmentExportFolderDialog(services.Settings) { Owner = parent }.ShowDialog();
+            });
+        var accepted = ShowWorkspaceDialog(dialog, owner);
+        if (_exiting || _appLocked || !ReferenceEquals(_services, services)) return;
         try
         {
-            if (dialog.ResetRequested)
-            {
-                if (Confirm(AppStrings.Get("UiResetWarningRestart")))
-                {
-                    IsEnabled = false;
-                    await _services.ResetIdentityAndRestartAsync();
-                }
-            }
+            if (dialog.ResetRequested) await ResetIdentityFromSettingsAsync(services, owner);
             else if (accepted && dialog.Result is not null)
             {
-                await _services.SaveNetworkSettingsAsync(dialog.Result);
+                await services.SaveNetworkSettingsAsync(dialog.Result);
             }
         }
         catch (Exception exception)
         {
             Trace.TraceError("Settings operation failed: {0}", exception);
             if (!_exiting) { TransientNotice.Show(this, exception.Message); }
-            if (_services.IsDisposed) { ((App)System.Windows.Application.Current).ExitApplication(); }
+            if (services.IsDisposed) { ((App)System.Windows.Application.Current).ExitApplication(); }
         }
         finally
         {
             if (!_exiting) { IsEnabled = true; }
         }
+    }
+
+    private void SetInterfaceTextSize(int percentage)
+    {
+        ApplyChatTextPercentage(percentage);
+        SaveWindowPlacement();
+    }
+
+    private void SetInterfaceTheme(AppThemeMode mode)
+    {
+        WindowAppearance.SetTheme(mode);
+        SaveWindowPlacement();
+    }
+
+    private void SetInterfaceLanguage(AppLanguage language)
+    {
+        AppStrings.SetLanguage(language);
+        _viewModel?.RefreshFolderChoices();
+        _viewModel?.RefreshMessageLanguage();
+        if (FloatingTimelineDate.Tag is DateTime timelineDate)
+            FloatingTimelineDate.Content = AppStrings.TimelineDate(timelineDate);
+        _viewModel?.RefreshSendOptionsLanguage();
+        SaveWindowPlacement();
+    }
+
+    private async Task ResetIdentityFromSettingsAsync(AppServices services, nint owner)
+    {
+        var generation = _appLockGeneration;
+        if (!ShowWorkspaceDialog(new ConfirmationDialog(AppStrings.Get("UiResetWarningRestart")), owner) ||
+            _exiting || _appLocked || generation != _appLockGeneration || !ReferenceEquals(_services, services)) return;
+        await CommitIdentityResetAsync(services);
+    }
+
+    private async Task CommitIdentityResetAsync(AppServices services)
+    {
+        IsEnabled = false;
+        try { await services.ResetIdentityAndRestartAsync(); }
+        finally { if (!_exiting) IsEnabled = true; }
     }
 
     private ContextMenu? CreateConversationMenu(ConversationItem conversation)
@@ -2059,7 +2128,7 @@ public partial class MainWindow : Window
         return true;
     }
 
-    private async Task CancelQueuedSendAsync(MessageItem item)
+    private async Task CancelQueuedSendAsync(MessageItem item, nint owner = 0)
     {
         if (_sendCancellationPending || _exiting || _appLocked || _services is not { } services) return;
         var peer = item.Source.ConversationUuid;
@@ -2072,18 +2141,18 @@ public partial class MainWindow : Window
             if (_exiting || _appLocked || _viewModel?.SelectedConversation?.Uuid != peer) return;
             if (rows.Count == 0 || !rows[0].CanCancel)
             {
-                TransientNotice.Show(this, unavailable);
+                ShowWorkspaceNotice(unavailable);
                 return;
             }
             var confirm = new ConfirmationDialog(AppStrings.Get("UiSendCancelMessage"), AppStrings.Get("UiSendCancelTitle"),
-                dismissLabel: AppStrings.Get("UiSendCancelKeep"), confirmLabel: AppStrings.Get("UiSendCancelConfirm")) { Owner = this };
-            if (confirm.ShowDialog() != true || _exiting || _appLocked || _viewModel?.SelectedConversation?.Uuid != peer) return;
+                dismissLabel: AppStrings.Get("UiSendCancelKeep"), confirmLabel: AppStrings.Get("UiSendCancelConfirm"));
+            if (!ShowWorkspaceDialog(confirm, owner) || _exiting || _appLocked || _viewModel?.SelectedConversation?.Uuid != peer) return;
             if (!await services.Messaging.ManageSendAsync(item.MessageId, "cancel", expectedPeer: peer) && !_exiting && !_appLocked)
-                TransientNotice.Show(this, unavailable);
+                ShowWorkspaceNotice(unavailable);
         }
         catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException or OperationCanceledException)
         {
-            if (!_exiting && !_appLocked) TransientNotice.Show(this, unavailable);
+            if (!_exiting && !_appLocked) ShowWorkspaceNotice(unavailable);
         }
         finally { _sendCancellationPending = false; }
     }
@@ -2104,11 +2173,11 @@ public partial class MainWindow : Window
         try
         {
             if (!await services.Messaging.ManageSendAsync(item.MessageId, "retry", expectedPeer: peer) && !_exiting && !_appLocked)
-                TransientNotice.Show(this, AppStrings.Get("UiSendRetryUnavailable"));
+                ShowWorkspaceNotice(AppStrings.Get("UiSendRetryUnavailable"));
         }
         catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException or OperationCanceledException)
         {
-            if (!_exiting && !_appLocked) TransientNotice.Show(this, AppStrings.Get("UiSendRetryUnavailable"));
+            if (!_exiting && !_appLocked) ShowWorkspaceNotice(AppStrings.Get("UiSendRetryUnavailable"));
         }
         finally
         {
@@ -2294,12 +2363,13 @@ public partial class MainWindow : Window
             TransientNotice.Show(this, AppStrings.Get("UiHistoryLoadFailed"));
         }
     }
-    private void OpenSharedMedia(string peer, SharedMediaCategory initialCategory = SharedMediaCategory.Media)
+    private void OpenSharedMedia(string peer, SharedMediaCategory initialCategory = SharedMediaCategory.Media, nint owner = 0)
     {
         if (_appLocked || _exiting || _services is null || _viewModel?.SelectedConversation?.Uuid != peer) return;
-        var dialog = new SharedMediaDialog(_services, peer, initialCategory) { Owner = this };
-        if (dialog.ShowDialog() != true || dialog.SelectedId is not { } id || _viewModel.SelectedConversation?.Uuid != peer) return;
-        RevealMediaMessage(peer, id);
+        var dialog = new SharedMediaDialog(_services, peer, initialCategory);
+        if (!ShowWorkspaceDialog(dialog, owner) || dialog.SelectedId is not { } id || _viewModel.SelectedConversation?.Uuid != peer) return;
+        if (owner != 0) _qtWorkspace?.RevealConfirmedMessage(peer, id, "UiSearchTargetUnavailable");
+        else RevealMediaMessage(peer, id);
     }
 
     private void RevealMediaMessage(string peer, string id)
@@ -2307,12 +2377,13 @@ public partial class MainWindow : Window
         if (_viewModel?.SelectedConversation?.Uuid == peer) JumpWithinChat(id);
     }
 
-    private void OpenPinnedMessages(string peer)
+    private void OpenPinnedMessages(string peer, nint owner = 0)
     {
-        if(_services is null || _viewModel is null || _exiting)return;
-        var dialog=new PinnedMessagesDialog(_services,peer){Owner=this};
-        if (dialog.ShowDialog() == true && dialog.SelectedId is { } id && _viewModel.SelectedConversation?.Uuid == peer)
-            JumpWithinChat(id);
+        if (_services is not { } services || _viewModel?.SelectedConversation?.Uuid != peer || _appLocked || _exiting) return;
+        var dialog = new PinnedMessagesDialog(services, peer);
+        if (!ShowWorkspaceDialog(dialog, owner) || dialog.SelectedId is not { } id || _viewModel?.SelectedConversation?.Uuid != peer) return;
+        if (owner != 0) _qtWorkspace?.RevealConfirmedMessage(peer, id, "UiSearchTargetUnavailable");
+        else JumpWithinChat(id);
     }
 
     private async void OpenContactProfile_Click(object sender, RoutedEventArgs e)
@@ -2338,17 +2409,17 @@ public partial class MainWindow : Window
 
     private void SearchChat_Click(object sender, RoutedEventArgs e) => OpenMessageSearch();
 
-    private async Task OpenCallHistoryAsync()
+    private async Task OpenCallHistoryAsync(nint owner = 0)
     {
         if (_appLocked || _exiting || _services is not { } services || _viewModel is not { } model) return;
-        var dialog = new CallHistoryDialog(services.Messaging) { Owner = this };
+        var dialog = new CallHistoryDialog(services.Messaging);
         dialog.ConfirmOpenChat = peer => ConfirmConversationNavigation(model, peer, dialog);
-        if (dialog.ShowDialog() != true || _appLocked || _exiting || dialog.SelectedCall is not { } entry) return;
+        if (!ShowWorkspaceDialog(dialog, owner) || _appLocked || _exiting || dialog.SelectedCall is not { } entry) return;
         if (!dialog.Redial) { OpenConfirmedContactConversation(model, entry.Peer); return; }
         try { await services.Calls.StartOutgoingAsync(entry.Peer,entry.Video); }
         catch (Exception error) when (error is InvalidOperationException or IOException or OperationCanceledException)
         {
-            if (!_appLocked && !_exiting) TransientNotice.Show(this,AppStrings.Get("UiCallFailed"));
+            if (!_appLocked && !_exiting) ShowWorkspaceNotice(AppStrings.Get("UiCallFailed"));
         }
     }
 
@@ -2754,6 +2825,7 @@ public partial class MainWindow : Window
     }
 
     private (string Peer, CapturedRecording Capture, Action<CapturedRecording> Review)? _interruptedRecording;
+    private bool _reviewingRecording;
 
     private void DiscardInterruptedRecording()
     {
@@ -2764,18 +2836,23 @@ public partial class MainWindow : Window
 
     private void ReviewInterruptedRecording()
     {
-        if (_exiting || _appLocked || !IsActive || _callWindow?.CoversChat == true ||
+        if (_exiting || _appLocked || !IsWorkspaceActive || _callWindow?.CoversChat == true ||
             _services?.Calls.State is not (CallState.Idle or CallState.Ended) ||
             _interruptedRecording is not { } pending) return;
         _interruptedRecording = null;
         using (pending.Capture) pending.Review(pending.Capture);
     }
 
-    private void RecordVoice_Click(object sender, RoutedEventArgs e)
+    private void RecordVoice_Click(object sender, RoutedEventArgs e) => OpenVoiceRecorder();
+
+    private void OpenVoiceRecorder(nint owner = 0)
     {
-        if (_exiting || _appLocked || _recordingDialog is not null || _interruptedRecording is not null || _services is not { } services ||
+        if (_exiting || _appLocked || _recordingDialog is not null || _reviewingRecording ||
+            _interruptedRecording is not null || _services is not { } services ||
             _viewModel is not { CanCompose: true, SelectedConversation: { } peer } model ||
             StickerHost.Child is StickerLibraryPanel { IsBusy: true }) return;
+        var qtSession = owner == 0 ? null : _qtWorkspace;
+        if (owner != 0 && qtSession is not { IsOpen: true }) return;
         CloseStickerPanel(immediate: true);
         var lockGeneration = _appLockGeneration;
         bool IsCurrent() => !_exiting && !_appLocked && lockGeneration == _appLockGeneration &&
@@ -2784,17 +2861,21 @@ public partial class MainWindow : Window
         bool CanRecord() => IsCurrent() && services.Calls.State is CallState.Idle or CallState.Ended;
         if (!CanRecord())
         {
-            TransientNotice.Show(this, AppStrings.Get("UiRecordingCallActive"));
+            ShowWorkspaceNotice(AppStrings.Get("UiRecordingCallActive"));
             return;
         }
         if (model.CaptureConfirmedRecordingSender() is not { } send) return;
         var options = model.SendOptions;
         model.ShowAttachments = false;
-        var dialog = new RecordingDialog(services.Objects.Captures, CanRecord) { Owner = this };
+        var dialog = new RecordingDialog(services.Objects.Captures, CanRecord);
         bool accepted;
         _recordingDialog = dialog;
-        try { accepted = dialog.ShowDialog() == true; }
-        finally { _recordingDialog = null; }
+        try { accepted = ShowWorkspaceDialog(dialog, owner); }
+        finally
+        {
+            _recordingDialog = null;
+            if (qtSession is not null) Dispatcher.BeginInvoke(new Action(ScheduleQtWorkspace));
+        }
         if (dialog.YieldedToCall || services.Calls.State is not (CallState.Idle or CallState.Ended))
         {
             if (accepted && dialog.Result is { } interrupted)
@@ -2804,7 +2885,7 @@ public partial class MainWindow : Window
             }
             Dispatcher.BeginInvoke(new Action(() =>
             {
-                if (IsActive && services.Calls.IncomingCallId is { } id) FocusIncomingCall(id);
+                if (IsWorkspaceActive && services.Calls.IncomingCallId is { } id) FocusIncomingCall(id);
                 else ReviewInterruptedRecording();
             }));
             return;
@@ -2814,11 +2895,32 @@ public partial class MainWindow : Window
 
         void Review(CapturedRecording capture)
         {
+            if (!IsCurrent() || _reviewingRecording) return;
+            var nativeOwner = IsVisible ? 0 : qtSession?.HostWindow ?? 0;
+            if (!IsVisible && nativeOwner == 0) return;
+            string? preparation = null;
+            _reviewingRecording = true;
+            try
+            {
+                MediaSendDialog.ReviewAndSendRecording(this, capture.File, peer.Alias, options, Submit, model,
+                    show: nativeOwner == 0 ? null : window => ShowWorkspaceDialog(window, nativeOwner));
+            }
+            finally
+            {
+                _reviewingRecording = false;
+                if (!IsCurrent() && preparation is not null) model.CancelPreparation(preparation);
+            }
             if (!IsCurrent()) return;
-            MediaSendDialog.ReviewAndSendRecording(this, capture.File, peer.Alias, options,
-                (choice, started) => IsCurrent() ? send(capture.File, choice, started) : Task.FromResult(PreparationSendResult.Cancelled),
-                model);
-            if (IsCurrent()) RestoreComposerAfterAttachment(model, peer.Uuid, lockGeneration);
+            if (nativeOwner == 0) RestoreComposerAfterAttachment(model, peer.Uuid, lockGeneration);
+            if (qtSession is not null) ScheduleQtWorkspace();
+
+            Task<PreparationSendResult> Submit(MediaSendChoice choice, Action<string> started)
+            {
+                if (!IsCurrent()) return Task.FromResult(PreparationSendResult.Cancelled);
+                var operation = send(capture.File, choice, id => { preparation = id; started(id); });
+                qtSession?.TrackAttachmentWork(operation);
+                return operation;
+            }
         }
     }
 
@@ -3370,7 +3472,7 @@ public partial class MainWindow : Window
     private async void SaveSelected_Click(object sender,RoutedEventArgs e) {if(_viewModel?.CanKeepSelection==true)await SaveMessagesAsync(_viewModel.SelectedMessageIds);}
     private async void CopySelected_Click(object sender, RoutedEventArgs e) => await CopySelectedMessagesAsync();
 
-    private async Task CopySelectedMessagesAsync()
+    private async Task CopySelectedMessagesAsync(nint owner = 0)
     {
         if (_appLocked || _exiting || _services is not { } services ||
             _viewModel is not { CanUseSelection: true, SelectedConversation: { } peer } model) return;
@@ -3387,13 +3489,14 @@ public partial class MainWindow : Window
                 .Select(value => MessageTextBlock.CopyableText(value, placeholder, []))
                 .Where(value => value.Length > 0)));
             if (!CanPublish()) return;
-            if (text.Length == 0) TransientNotice.Show(this, AppStrings.Get("UiSelectedMessagesNoText"));
-            else MessageTextBlock.CopyToClipboard(text, this);
+            if (text.Length == 0) ShowWorkspaceNotice(AppStrings.Get("UiSelectedMessagesNoText"));
+            else if (!MessageTextBlock.CopyToClipboard(text, this, showSuccess: owner == 0) && owner != 0)
+                ShowWorkspaceNotice(AppStrings.Get("UiMessageCopyFailed"));
         }
         catch (Exception error) when (error is InvalidOperationException or JsonException or KeyNotFoundException
                                       or IOException or Microsoft.Data.Sqlite.SqliteException)
         {
-            if (CanPublish()) TransientNotice.Show(this, AppStrings.Get("UiMessageCopyFailed"));
+            if (CanPublish()) ShowWorkspaceNotice(AppStrings.Get("UiMessageCopyFailed"));
         }
     }
     private async void DeleteSelected_Click(object sender, RoutedEventArgs e)
@@ -3404,7 +3507,7 @@ public partial class MainWindow : Window
 
     private bool _checkingLocalDeletion;
 
-    private async Task DeleteLocalMessagesAsync(string peer, IReadOnlyList<string> ids, bool fromSelection = false)
+    private async Task DeleteLocalMessagesAsync(string peer, IReadOnlyList<string> ids, bool fromSelection = false, nint owner = 0)
     {
         if (_exiting || _appLocked || _checkingLocalDeletion || _services is null ||
             _viewModel is not { CanChangeSelection: true } model ||
@@ -3423,36 +3526,38 @@ public partial class MainWindow : Window
             if (!IsCurrent()) return;
             if (canRevoke is null)
             {
-                TransientNotice.Show(this, unavailable);
+                ShowWorkspaceNotice(unavailable);
                 return;
             }
             Window confirm = fromSelection && canRevoke == true ? new DeleteMessagesDialog() :
                 new ConfirmationDialog(AppStrings.Get("UiLocalDeleteMessage"), AppStrings.Get("UiLocalDeleteTitle"),
                     confirmLabel: AppStrings.Get("UiLocalDelete"));
-            confirm.Owner = this;
-            if (confirm.ShowDialog() != true || !IsCurrent()) return;
+            if (!ShowWorkspaceDialog(confirm, owner) || !IsCurrent()) return;
             var revokeForBoth = confirm is DeleteMessagesDialog { RevokeForBoth: true };
             if (revokeForBoth) unavailable = AppStrings.Get("UiRevokeSelectedUnavailable");
             if (!await model.DeleteMessagesAsync(peer, targets.ToArray(), revokeForBoth) && !_exiting && !_appLocked)
-                TransientNotice.Show(this, unavailable);
+                ShowWorkspaceNotice(unavailable);
         }
         catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException or OperationCanceledException)
         {
-            if (!_exiting && !_appLocked) TransientNotice.Show(this, unavailable);
+            if (!_exiting && !_appLocked) ShowWorkspaceNotice(unavailable);
         }
         finally { _checkingLocalDeletion = false; }
     }
     private async Task SaveMessagesAsync(IReadOnlyList<string> ids)
     {
-        if(_viewModel is not null && await _viewModel.SaveMessagesAsync(ids) && !_exiting)TransientNotice.Show(this,"Saved");
+        if (_viewModel is { } model && await model.SaveMessagesAsync(ids))
+            ShowWorkspaceNotice(AppStrings.Get("UiSharedMediaSaved"));
     }
-    private void ForwardMessages(IReadOnlyList<string> ids)
+    private void ForwardMessages(IReadOnlyList<string> ids, nint owner = 0)
     {
-        if(_services is null || _viewModel?.SelectedConversation is not { } peer || _exiting)return;
-        var version=_viewModel.SelectionVersion;var clearSelection=_viewModel.SelectedMessageIds.ToHashSet(StringComparer.Ordinal).SetEquals(ids);
-        if(new ForwardMessagesDialog(_services,peer.Uuid,ids){Owner=this}.ShowDialog()!=true)return;
-        if(clearSelection && _viewModel.SelectedConversation?.Uuid==peer.Uuid)_viewModel.ClearSelectionIfCurrent(version);
-        if (!_exiting) TransientNotice.Show(this, AppStrings.Get("UiForwardingQueued"));
+        if (_services is not { } services || _viewModel is not { SelectedConversation: { } peer } model || _appLocked || _exiting) return;
+        var version = model.SelectionVersion;
+        var clearSelection = model.SelectedMessageIds.ToHashSet(StringComparer.Ordinal).SetEquals(ids);
+        if (!ShowWorkspaceDialog(new ForwardMessagesDialog(services, peer.Uuid, ids), owner) || _appLocked || _exiting ||
+            !ReferenceEquals(_viewModel, model)) return;
+        if (clearSelection && model.SelectedConversation?.Uuid == peer.Uuid) model.ClearSelectionIfCurrent(version);
+        ShowWorkspaceNotice(AppStrings.Get("UiForwardingQueued"));
     }
 
     private void ForwardChatMedia(string peer, string id)
@@ -3483,12 +3588,17 @@ public partial class MainWindow : Window
         model.SetReply(new MessageItem(message));
         Composer.Focus();
     }
-    private void OpenSavedMessages()
+    private void OpenSavedMessages(nint owner = 0)
     {
         if (_services is not { } services || _viewModel is not { } model || _exiting || _appLocked) return;
         var dialog = new SavedMessagesDialog(services, item =>
         {
             if (_appLocked || _exiting || !ReferenceEquals(_viewModel, model)) return;
+            if (owner != 0)
+            {
+                _qtWorkspace?.RevealConfirmedMessage(item.SourcePeer, item.SourceId, "UiSavedOriginalUnavailable");
+                return;
+            }
             var conversation = model.Conversations.FirstOrDefault(peer => peer.Uuid == item.SourcePeer);
             if (conversation is null || !services.Database.HasHistoryAnchor(item.SourcePeer, item.SourceId, includeRevoked: false))
             {TransientNotice.Show(this,AppStrings.Get("UiSavedOriginalUnavailable"));return;}
@@ -3499,9 +3609,9 @@ public partial class MainWindow : Window
             _restoringHistoryVersion = model.HistoryNavigationVersion;
             ResetVisibleReadCandidates();
             ShowJumpTarget(target, finishInitialRestore: true);
-        }, openContact: account => OpenConfirmedContactConversation(model, account)) { Owner = this };
+        }, openContact: account => OpenConfirmedContactConversation(model, account));
         dialog.ConfirmOpenChat = peer => ConfirmConversationNavigation(model, peer, dialog);
-        dialog.ShowDialog();
+        ShowWorkspaceDialog(dialog, owner);
     }
 
     private (ScrollViewer Viewport, long Navigation, double Offset)? _wheelTarget;
@@ -3545,7 +3655,7 @@ public partial class MainWindow : Window
 
     private void MessageList_ScrollChanged(object sender, ScrollChangedEventArgs e)
     {
-        if (IsRestoringHistory || e.OriginalSource is not ScrollViewer viewport ||
+        if (_qtWorkspace is { IsOpen: true } && !IsVisible || IsRestoringHistory || e.OriginalSource is not ScrollViewer viewport ||
             !ReferenceEquals(viewport, GetScrollViewer(MessageList))) return;
 
         var viewportResized = e.ViewportHeightChange != 0 || e.ViewportWidthChange != 0;
@@ -3669,6 +3779,11 @@ public partial class MainWindow : Window
     private void ActivityAppDeactivated(object? sender, EventArgs args)
     {
         CloseInlineAudio();
+        if (_qtWorkspace is { IsOpen: true })
+        {
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(UpdateActivityForeground));
+            return;
+        }
         UpdateAppLockPresence(false);
         _services?.Messaging.SetForeground(false);
         _services?.LiveLocations.SetForeground(false);
@@ -3677,8 +3792,9 @@ public partial class MainWindow : Window
     private void UpdateActivityForeground()
     {
         if (_services is not { } services) return;
-        var present = !_exiting && IsVisible && WindowState != WindowState.Minimized &&
-            System.Windows.Application.Current.Windows.Cast<Window>().Any(window => window.IsActive);
+        var present = !_exiting && (_qtWorkspace?.IsForeground == true || HasActiveQtWorkspaceDialog() ||
+            IsVisible && WindowState != WindowState.Minimized &&
+            System.Windows.Application.Current.Windows.Cast<Window>().Any(window => window.IsActive));
         UpdateAppLockPresence(present);
         var foreground = present && !_appLocked;
         services.Messaging.SetForeground(foreground);
@@ -3688,7 +3804,7 @@ public partial class MainWindow : Window
     private void UpdateChatActivity(bool typing=false,bool force=false)
     {
         if(_exiting || _services is null || _viewModel is null)return;
-        var peer = !_appLocked && IsActive && IsVisible && WindowState != WindowState.Minimized &&
+        var peer = !_appLocked && (_qtWorkspace?.IsActive == true || IsActive && IsVisible && WindowState != WindowState.Minimized) &&
             _viewModel.IsChatContentVisible && !IsDropCoveringChat && !IsComposerSendMenuOpen
             ? _viewModel.SelectedConversation?.Uuid : null;
         if(peer==_reportedActivityPeer && !typing && !force)return;
@@ -3872,23 +3988,23 @@ public partial class MainWindow : Window
 
     private void LoadOlderMessagesAtTop() => LoadHistoryPage(newer: false);
 
-    private void LoadHistoryPage(bool newer)
+    private async void LoadHistoryPage(bool newer)
     {
         if (_loadingOlderMessages || IsRestoringHistory || _exiting || _appLocked ||
             _viewModel is not { IsChatContentVisible: true } model ||
             !(newer ? model.HasNewerMessages : model.HasOlderMessages)) return;
 
         _wheelTarget = null;
-        var anchor = CaptureHistoryViewport();
+        ChatHistoryPosition? anchor = null;
         var edge = newer ? model.Messages.LastOrDefault() : model.Messages.FirstOrDefault();
-        var previousCount = model.Messages.Count;
         var version = model.HistoryNavigationVersion;
         _loadingOlderMessages = true;
         try
         {
-            if (newer) model.LoadNewerMessages();
-            else model.LoadOlderMessages();
-            if (model.HistoryNavigationVersion != version || model.Messages.Count == previousCount) return;
+            var changed = await model.LoadHistoryPageAsync(newer ? HistoryPage.Newer : HistoryPage.Older,
+                () => LoadHistoryPage(newer),
+                () => anchor = CaptureHistoryViewport());
+            if (!changed || _appLocked || _exiting || model.HistoryNavigationVersion != version) return;
             if (anchor is { } position &&
                 model.Messages.FirstOrDefault(item => item.MessageId == position.MessageId) is { } target)
             {
@@ -4136,6 +4252,7 @@ public partial class MainWindow : Window
                     lockedCallId, calls.IsVideoCall, () => calls.IncomingCallId == lockedCallId);
             return;
         }
+        if (TryPresentQtCall(calls)) return;
         if (_callWindow is null)
         {
             CloseReplyQuotePicker();
@@ -4160,6 +4277,7 @@ public partial class MainWindow : Window
     internal void FocusIncomingCall(string id)
     {
         if (_exiting || _appLocked || _services is not { } services || services.Calls.IncomingCallId != id) return;
+        if (TryPresentQtCall(services.Calls, activate: true)) return;
         ExitMediaFullScreen();
         Calls_ShowRequested(services.Calls, EventArgs.Empty);
         _ = Dispatcher.InvokeAsync(() =>
@@ -4206,7 +4324,7 @@ public partial class MainWindow : Window
         if (owner is null) return false;
         var ancestor = owner.Owner;
         while (ancestor is not null && !ReferenceEquals(ancestor, this)) ancestor = ancestor.Owner;
-        if (ancestor is null) return false;
+        if (ancestor is null && !IsQtWorkspaceDialog(owner)) return false;
 
         CloseModalCallWindow();
         var alert = new ModalCallWindow(owner, calls, id,
@@ -4302,6 +4420,7 @@ public partial class MainWindow : Window
             _peerBeforeCallOverlay = null;
             if (_deferredNotification is not null) Dispatcher.BeginInvoke(new Action(OpenDeferredNotification));
             if (_interruptedRecording is not null) Dispatcher.BeginInvoke(new Action(ReviewInterruptedRecording));
+            if (UseQtDevelopmentWorkspace) Dispatcher.BeginInvoke(new Action(ScheduleQtWorkspace));
         }
         if (!_viewModel.IsChatContentVisible) { ClearFloatingTimelineDate(); CloseInlineAudio(); }
         if (!_viewModel.IsChatContentVisible)
@@ -4365,6 +4484,8 @@ public partial class MainWindow : Window
             if (value is null) return;
             _chatTextPercentage = value.ChatTextPercentage;
             _closeToTray = value.CloseToTray ?? true;
+            _qtWindowGeometry = value.QtGeometry;
+            _qtSidebarWidth = value.QtSidebarWidth;
             WindowAppearance.SetTheme(value.Theme);
             AppStrings.SetLanguage(value.Language);
             if (!double.IsFinite(value.Width) || !double.IsFinite(value.Height) ||
@@ -4396,6 +4517,8 @@ public partial class MainWindow : Window
 
     private bool SaveWindowPlacement()
     {
+        if (_qtWorkspace?.CaptureWindowPlacement() is { } qt)
+            (_qtWindowGeometry, _qtSidebarWidth) = (qt.Geometry, qt.SidebarWidth);
         var bounds = _mediaFullScreen?.Bounds ?? (WindowState == WindowState.Normal ? new Rect(Left, Top, ActualWidth, ActualHeight) : RestoreBounds);
         if (bounds.IsEmpty || bounds.Width < MinWidth || bounds.Height < MinHeight ||
             !double.IsFinite(bounds.X) || !double.IsFinite(bounds.Y)) return false;
@@ -4406,7 +4529,8 @@ public partial class MainWindow : Window
             var temporary = path + ".tmp";
             var sidebarWidth = Math.Clamp(bounds.Width * _preferredSidebarRatio, SidebarColumn.MinWidth, MaximumSidebarWidth);
             File.WriteAllText(temporary, JsonSerializer.Serialize(new WindowPlacement(bounds.X, bounds.Y, bounds.Width, bounds.Height,
-                sidebarWidth, _chatTextPercentage, WindowAppearance.Theme, AppStrings.Language, _closeToTray, _preferredSidebarRatio)));
+                sidebarWidth, _chatTextPercentage, WindowAppearance.Theme, AppStrings.Language, _closeToTray, _preferredSidebarRatio,
+                _qtWindowGeometry, _qtSidebarWidth)));
             File.Move(temporary, path, overwrite: true);
             return true;
         }
@@ -4428,6 +4552,7 @@ public partial class MainWindow : Window
         _chatTextPercentage = SettingsDialog.ChatTextPercentages.Contains(percentage) ? percentage : 100;
         Resources["ChatMessageFontSize"] = 14 * _chatTextPercentage / 100d;
         Resources["ChatComposerFontSize"] = 16 * _chatTextPercentage / 100d;
+        _qtWorkspace?.SetChatTextPercentage(_chatTextPercentage);
     }
 
     private void ApplySidebarWidth(double layoutWidth)
@@ -4442,5 +4567,6 @@ public partial class MainWindow : Window
     private static string PlacementPath() => Path.Combine(MsgAT.Windows.Core.Storage.RuntimePaths.DataDirectory, "window-v2.json");
     private sealed record WindowPlacement(double Left, double Top, double Width, double Height,
         double? SidebarWidth = null, int ChatTextPercentage = 100, AppThemeMode Theme = AppThemeMode.System,
-        AppLanguage Language = AppLanguage.System, bool? CloseToTray = null, double? SidebarRatio = null);
+        AppLanguage Language = AppLanguage.System, bool? CloseToTray = null, double? SidebarRatio = null,
+        string? QtGeometry = null, int QtSidebarWidth = 0);
 }

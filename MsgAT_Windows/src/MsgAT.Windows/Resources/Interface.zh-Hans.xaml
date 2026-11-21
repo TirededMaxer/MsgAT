@@ -87,6 +87,9 @@
     <sys:String x:Key="UiNoMessagesInConversation">此会话暂无消息</sys:String>
     <sys:String x:Key="UiNoMessagesOnDate">这一天没有消息</sys:String>
     <sys:String x:Key="UiHistoryLoadFailed">无法加载聊天记录</sys:String>
+    <sys:String x:Key="UiQtWorkspaceUnavailable">无法启动 Qt 工作区。请检查 Windows 开发包及其中的 Qt 运行时。</sys:String>
+    <sys:String x:Key="UiOlderHistory">更早的消息</sys:String>
+    <sys:String x:Key="UiNewerHistory">更新的消息</sys:String>
     <sys:String x:Key="UiMessageEdited">（已编辑）</sys:String>
     <sys:String x:Key="UiReceiptFailed">已停止投递，送达状态未确认。</sys:String>
     <sys:String x:Key="UiReceiptSending">正在发送</sys:String>
@@ -255,6 +258,8 @@
     <sys:String x:Key="UiForwardCanceling">正在取消…</sys:String>
     <sys:String x:Key="UiArchive">归档</sys:String>
     <sys:String x:Key="UiAllChats">全部聊天</sys:String>
+    <sys:String x:Key="UiConversationList">会话列表</sys:String>
+    <sys:String x:Key="UiBackToConversations">返回会话列表</sys:String>
     <sys:String x:Key="UiUnreadChats">未读</sys:String>
     <sys:String x:Key="UiMessagePlaceholder">输入消息…</sys:String>
     <sys:String x:Key="UiSend">发送</sys:String>
@@ -401,6 +406,7 @@
     <sys:String x:Key="UiOpenContactCard">打开联系人名片</sys:String>
     <sys:String x:Key="UiSaveMessage">收藏消息</sys:String>
     <sys:String x:Key="UiRevoke">撤回</sys:String>
+    <sys:String x:Key="UiRevokeFailed">无法撤回这条消息。</sys:String>
     <sys:String x:Key="UiPhotoVideo">照片和视频</sys:String>
     <sys:String x:Key="UiFiles">文件</sys:String>
     <sys:String x:Key="UiAudio">音频</sys:String>
@@ -796,6 +802,8 @@
     <sys:String x:Key="UiTurnPort">TURN 端口</sys:String>
     <sys:String x:Key="UiTurnUsername">TURN 用户名</sys:String>
     <sys:String x:Key="UiTurnPassword">TURN 密码</sys:String>
+    <sys:String x:Key="UiTurnKeepPassword">保留已保存的 TURN 密码</sys:String>
+    <sys:String x:Key="UiSettingsSaveFailed">无法保存设置。</sys:String>
     <sys:String x:Key="UiTurnTls">使用 TLS（turns://）</sys:String>
     <sys:String x:Key="UiCertificatePin">TLS 证书 SHA-256 指纹</sys:String>
     <sys:String x:Key="UiAllowDevelopmentCertificate">允许不受信任的开发证书</sys:String>

@@ -24,15 +24,20 @@ struct InterfaceStrings {
     private let localized: Bundle?
     let locale: Locale
     private static let english = load("en")
+    private static let simplifiedChinese = load("zh-Hans")
 
     init(_ language: AppLanguage = .system) {
-        localized = Self.load(language.localization)
+        localized = language.localization == "zh-Hans" ? Self.simplifiedChinese : Self.english
         locale = language == .system ? .current : Locale(identifier: language.localization)
     }
 
     func callAsFunction(_ key: String) -> String {
-        let fallback = Self.english?.localizedString(forKey: key, value: key, table: "Interface") ?? key
-        return localized?.localizedString(forKey: key, value: fallback, table: "Interface") ?? fallback
+        if let localized, localized !== Self.english {
+            let missing = "\u{F8FF}msgat.missing"
+            let result = localized.localizedString(forKey: key, value: missing, table: "Interface")
+            if result != missing { return result }
+        }
+        return Self.english?.localizedString(forKey: key, value: key, table: "Interface") ?? key
     }
 
     func format(_ key: String, _ arguments: CVarArg...) -> String {

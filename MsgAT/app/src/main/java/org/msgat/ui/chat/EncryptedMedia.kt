@@ -31,8 +31,6 @@ import androidx.media3.datasource.DataSpec
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.msgat.R
 import org.msgat.core.media.AttachmentMetadata
@@ -46,6 +44,8 @@ import java.nio.ByteBuffer
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
+
+internal val encryptedImageWorkers = Dispatchers.IO.limitedParallelism(2)
 
 internal data class AttachmentMetadataRead(
     val metadata: AttachmentMetadata?,
@@ -111,10 +111,10 @@ internal fun EncryptedImage(
         if (!media.available) return@LaunchedEffect
         var pending: DecodedMedia? = null
         try {
-            withContext(Dispatchers.IO) {
+            withContext(encryptedImageWorkers) {
                 val edge = if (fullSize) 4096 else thumbnailEdge
                 pending = if (media.isSticker && !playStickerAnimation) {
-                    stickerThumbnailDecoders.withPermit { decodeImage(store, media, edge, animate = false, playStickerAnimation = false) }
+                    decodeImage(store, media, edge, animate = false, playStickerAnimation = false)
                 } else if (!fullSize && !media.isSticker) {
                     val bitmap = stillThumbnail(store, media, edge) ?: throw IOException("Cannot decode the encrypted thumbnail")
                     DecodedMedia(BitmapDrawable(context.resources, bitmap))
@@ -212,8 +212,6 @@ private object StickerAnimationSlots {
     @Synchronized fun release(value: AnimatedImageDrawable){active.remove(value)}
 }
 
-private val stickerThumbnailDecoders = Semaphore(2)
-
 private class DecodedMedia(val drawable: Drawable, private val encoded: ByteArray? = null) : AutoCloseable {
     override fun close() { (drawable as? AnimatedImageDrawable)?.stop(); encoded?.fill(0) }
 }
@@ -305,7 +303,7 @@ internal fun rememberAlbumThumbnail(media: AttachmentMetadata?): State<Bitmap?> 
     val store = org.msgat.MsgATApp.instance.nettyClient.objects
     return produceState<Bitmap?>(null, media?.reference, media?.available) {
         value = null
-        if (media?.available == true) value = withContext(Dispatchers.IO) {
+        if (media?.available == true) value = withContext(encryptedImageWorkers) {
             try {
                 if (media.isVideo) videoThumbnail(store, media, 128)
                 else if (media.isImage && !media.isSticker) stillThumbnail(store, media, 128)

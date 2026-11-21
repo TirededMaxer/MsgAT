@@ -29,9 +29,11 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
     private readonly bool _inlineAudio;
     private readonly bool _autoplay;
     private readonly Action<int>? _movePreview;
+    private readonly HashSet<Task> _resourceReads = [];
     internal Action? TogglePreviewFullScreen { get; set; }
     internal Action<bool>? ReportViewerActivity { get; set; }
     internal bool ShowsPlaybackStatus => _status is not null;
+    internal Task ResourceReadsCompletion => Task.WhenAll(_resourceReads);
     private sealed class PlaybackSession(FrameworkElement surface)
     {
         internal FrameworkElement Surface { get; } = surface;
@@ -315,6 +317,16 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
     }
 
     private async void ResourceRequested(PlaybackSession session, CoreWebView2Environment environment,
+        CoreWebView2WebResourceRequestedEventArgs e)
+    {
+        var read = ReadResourceAsync(session, environment, e);
+        if (read.IsCompletedSuccessfully) return;
+        _resourceReads.Add(read);
+        try { await read; }
+        finally { _resourceReads.Remove(read); }
+    }
+
+    private async Task ReadResourceAsync(PlaybackSession session, CoreWebView2Environment environment,
         CoreWebView2WebResourceRequestedEventArgs e)
     {
         if (!IsCurrent(session)) return;

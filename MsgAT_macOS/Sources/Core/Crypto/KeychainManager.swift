@@ -33,6 +33,7 @@ public final class KeychainManager: ObservableObject {
 
     private let defaults = RuntimePaths.defaults
     private let identityLock = NSRecursiveLock()
+    private var publicIdentityId: String?
 
     private init() {
         if !defaults.bool(forKey: "relay_tls_security_v2") {
@@ -109,8 +110,15 @@ public final class KeychainManager: ObservableObject {
     }
 
     public var myUuid: String {
-        let pubKey = ed25519PrivateKey.publicKey.rawRepresentation
-        return SHA256.hash(data: pubKey).map { String(format: "%02x", $0) }.joined()
+        identityLock.lock()
+        defer { identityLock.unlock() }
+        if let publicIdentityId { return publicIdentityId }
+        var seed = getOrCreateSeed()
+        defer { seed.resetBytes(in: seed.startIndex..<seed.endIndex) }
+        let publicKey = try! Curve25519.Signing.PrivateKey(rawRepresentation: seed).publicKey.rawRepresentation
+        let id = SHA256.hash(data: publicKey).map { String(format: "%02x", $0) }.joined()
+        publicIdentityId = id
+        return id
     }
 
     public var myMailboxId: String {
@@ -238,6 +246,7 @@ public final class KeychainManager: ObservableObject {
 
     func destroyIdentityProtection() throws {
         identityLock.lock(); defer { identityLock.unlock() }
+        publicIdentityId = nil
         try SecureEnclaveSeedEnvelope.destroyDeviceKey()
         let keyQuery: [String: Any] = [kSecClass as String:kSecClassKey,kSecAttrApplicationTag as String:wrappingKeyTag]
         let keyStatus=SecItemDelete(keyQuery as CFDictionary)

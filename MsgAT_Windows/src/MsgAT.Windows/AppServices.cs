@@ -9,13 +9,6 @@ using MsgAT.Windows.Infrastructure;
 
 namespace MsgAT.Windows;
 
-internal sealed class IdentityStartupException(Exception cause, bool canReset) : Exception(cause.Message, cause)
-{
-    public bool CanReset { get; } = canReset;
-}
-
-internal sealed class VaultStartupException(Exception cause) : Exception(cause.Message, cause) { }
-
 public sealed class AppServices : IAsyncDisposable
 {
     private readonly string _dataDirectory;
@@ -92,28 +85,7 @@ public sealed class AppServices : IAsyncDisposable
     public static async Task<AppServices> CreateAsync(Dispatcher dispatcher, WebView2CompositionControl webView)
     {
         var dataDirectory = RuntimePaths.DataDirectory;
-        Directory.CreateDirectory(dataDirectory);
-        var opened=await Task.Run(() =>
-        {
-            MsgAT.Windows.Core.Crypto.SecurityCore.RequireAvailable();
-            SecureSettingsStore identity;
-            try { identity = new SecureSettingsStore(dataDirectory); }
-            catch (Exception error) when (error is IOException or InvalidDataException or UnauthorizedAccessException or
-                InvalidOperationException or ArgumentException or System.Security.Cryptography.CryptographicException or System.Text.Json.JsonException)
-            {
-                throw new IdentityStartupException(error, IdentityLifecycle.CanDiscardUnreadableIdentity(dataDirectory));
-            }
-            var key=identity.DatabaseKey;
-            try { return (Settings:identity,Database:new EncryptedDatabase(Path.Combine(dataDirectory,"msgat_v2_vault.db"),key)); }
-            catch (Exception error) when (error is IOException or UnauthorizedAccessException or InvalidOperationException or
-                ArgumentException or System.Security.Cryptography.CryptographicException or Microsoft.Data.Sqlite.SqliteException)
-            {
-                throw new VaultStartupException(error);
-            }
-            finally { System.Security.Cryptography.CryptographicOperations.ZeroMemory(key); }
-        });
-        var settings = opened.Settings;
-        var database = opened.Database;
+        var (settings, database) = await Task.Run(() => ClientVault.Open(dataDirectory));
         RelayClient? relay = null;
         MessagingService? messaging = null;
         AppServices? services = null;

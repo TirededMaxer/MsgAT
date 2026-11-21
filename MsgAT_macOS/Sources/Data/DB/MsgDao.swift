@@ -187,6 +187,23 @@ public final class MsgDao: Sendable {
             """, values: [.text(messageId)], map: message).first
     }
 
+    func replyOwners(in peer: String, ids: Set<String>) throws -> [String: Bool] {
+        let keys = Array(ids)
+        var result: [String: Bool] = [:]
+        for start in stride(from: 0, to: keys.count, by: 100) {
+            let batch = keys[start..<min(start + 100, keys.count)]
+            let placeholders = Array(repeating: "?", count: batch.count).joined(separator: ",")
+            let rows = try database.query("""
+                SELECT messageId,isMine FROM messages
+                WHERE conversationUuid=? AND messageId IN (\(placeholders))
+                """, values: [.text(peer)] + batch.map { .text($0) }) { row in
+                    (databaseText(row, 0), sqlite3_column_int(row, 1) != 0)
+                }
+            for (id, mine) in rows { result[id] = mine }
+        }
+        return result
+    }
+
     func canQuoteText(_ value: ChatMessage) throws -> Bool {
         try !database.query("""
             SELECT 1 FROM messages m WHERE m.messageId=? AND m.conversationUuid=? AND m.ext='txt' AND m.isRevoked=0
@@ -318,20 +335,19 @@ public final class MsgDao: Sendable {
     private func seekMessages(_ db: AppDatabase.Transaction, anchor: ChatMessage, newer: Bool, inclusive: Bool, limit: Int,
                               at: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) throws -> [ChatMessage] {
         guard limit>0 else {throw MsgATDatabaseError(operation:"History",detail:"Invalid page size.")}
-        let comparison=newer ? ">" : "<"
-        let idComparison=inclusive ? comparison+"=" : comparison
+        let strictComparison = newer ? ">" : "<"
+        let comparison = inclusive ? strictComparison + "=" : strictComparison
         let direction=newer ? "ASC" : "DESC"
         let rows=try db.query("""
             SELECT messageId,conversationUuid,isMine,content,ext,timestamp,isRead,
              replyToId,replyToSender,replyToContent,status,isRevoked,isEdited,e.expires_at
             FROM messages m LEFT JOIN message_expiration e ON e.message_id=m.messageId
-            WHERE conversationUuid=? AND
-             (timestamp \(comparison) ? OR (timestamp=? AND messageId \(idComparison) ?))
-              AND (e.expires_at IS NULL OR e.expires_at>?5)
+            WHERE m.conversationUuid=? AND (m.timestamp,m.messageId) \(comparison) (?,?)
+              AND (e.expires_at IS NULL OR e.expires_at>?4)
               AND NOT EXISTS(SELECT 1 FROM conversation_retention r WHERE r.peer=m.conversationUuid
-                  AND (m.isMine=0 OR m.status>=2) AND m.timestamp<=?5-r.duration_ms)
+                  AND (m.isMine=0 OR m.status>=2) AND m.timestamp<=?4-r.duration_ms)
             ORDER BY timestamp \(direction),messageId \(direction) LIMIT ?
-            """,values:[.text(anchor.conversationUuid),.integer(anchor.timestamp),.integer(anchor.timestamp),
+            """,values:[.text(anchor.conversationUuid),.integer(anchor.timestamp),
                         .text(anchor.messageId),.integer(at),.integer(Int64(limit))],map:message)
         return newer ? rows : Array(rows.reversed())
     }

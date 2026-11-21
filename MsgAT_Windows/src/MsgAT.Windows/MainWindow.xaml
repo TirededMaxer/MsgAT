@@ -1382,7 +1382,7 @@
                 </StackPanel>
             </Border>
         </Grid>
-        <Grid Width="1" Height="1" Opacity="0" HorizontalAlignment="Left" VerticalAlignment="Top"
+        <Grid x:Name="WebRtcParkingHost" Width="1" Height="1" Opacity="0" HorizontalAlignment="Left" VerticalAlignment="Top"
               IsHitTestVisible="False">
             <wv2:WebView2CompositionControl x:Name="WebRtcView" IsHitTestVisible="False" Focusable="False" />
         </Grid>

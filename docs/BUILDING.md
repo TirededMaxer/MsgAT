@@ -16,6 +16,8 @@ V2 仍在重构中。云端编译和打包成功只证明构建链路；硬件�
 
 V2 开发分支的 CI 提供 `development-android`、`development-windows`、`development-macos` 和 `development-relay` 附件，保留七天，供实际客户端验收。Android 使用 `org.msgat.development` 独立包名；Windows 使用 development 资料目录；Mac 附件包含独立的 QA One／QA Two 应用。它们不是正式 Release。Windows 发布目录显式指定到 runner 临时目录，避免 MSVC 环境变量改变默认输出路径后漏传 EXE。
 
+Windows Qt 验收附件为 `development-windows-qt`。将 ZIP 完整解压后打开 `Open MsgAT Qt.cmd`，程序使用开发版的独立资料目录。Qt 的 DLL、平台插件、对应 Qt Base 源码和许可证随附件提供。若系统缺少 MSVC x64 运行时，使用 Qt 部署目录里的 Microsoft VC++ Redistributable。正式 Windows EXE 的切换以功能迁移和验收完成为准。 [Qt Windows 部署文档](https://doc.qt.io/qt-6/windows-deployment.html)
+
 Android 开发包使用单独的 Actions Secrets `ANDROID_DEVELOPMENT_KEYSTORE_BASE64`、`ANDROID_DEVELOPMENT_STORE_PASSWORD`，用于跨构建覆盖更新并验证身份连续性。公开证书指纹与别名位于 `scripts/ci/development-signing.json`，私钥不进入源码、日志或附件。当前开发证书 SHA-256 为 `b90eb5dc5b74b8f77d6cefc5896ce82013574c59cd03cc8234ce8102e4695cc1`。Fork／外部 PR 未获得该签名时使用临时 SDK debug 证书，不能作为原开发包的覆盖更新。正式包继续使用下述原发布证书。
 
 ## 生成安装包

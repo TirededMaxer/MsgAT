@@ -12,6 +12,7 @@ V2 附件加密使用 RustCrypto 的 aes-gcm-siv 0.12.1（MIT 或 Apache-2.0 双
 | --- | --- | --- |
 | Android | AndroidX / Jetpack Compose、Kotlin、Room、SQLCipher、Netty、Bouncy Castle、WebRTC、Coil、ZXing Core 3.5.4（Apache-2.0） | `MsgAT/gradle/libs.versions.toml`、`MsgAT/app/build.gradle.kts` |
 | Windows | .NET / WPF、WebView2、Microsoft.Data.Sqlite、SQLitePCLRaw SQLCipher、Bouncy Castle、SkiaSharp（MIT，Skia 保留其 BSD 等声明）、ZXing.Net 0.16.11（Apache-2.0） | `MsgAT_Windows/Directory.Packages.props` |
+| Windows Qt 开发附件 | Qt Base 6.10.3（Qt Core、Gui、Widgets 与 Windows 平台插件，动态链接，LGPL-3.0） | [Qt Base 6.10.3 源码](https://download.qt.io/official_releases/qt/6.10/6.10.3/submodules/qtbase-everywhere-src-6.10.3.tar.xz) |
 | macOS | SQLCipher.swift、WebRTC、BLAKE2b 实现 | `MsgAT_macOS/Package.swift`、`Package.resolved`、`Sources/CBlake2/` |
 | 服务端 | Netty、Bouncy Castle、SLF4J、Logback、Gson、SQLite JDBC | `MsgAT_Console/pom.xml` |
 

@@ -31,15 +31,18 @@ internal sealed class AttachmentTransport(SecureSettingsStore settings)
         SecurityCore.Call(new { operation = "validate_object_manifest", manifest });checkpoint?.Invoke();
         await using var connection = await Connection.OpenAsync(settings, endpoint, token).ConfigureAwait(false);
         var id = Text(manifest, "object_id");
-        var begin = new JsonObject { ["cipher_size"] = Number(manifest,"cipher_size"),
+        var cipherSize = Number(manifest, "cipher_size");
+        var size = Number(manifest, "size");
+        var begin = new JsonObject { ["cipher_size"] = cipherSize,
             ["cipher_sha256"] = Text(manifest,"cipher_sha256"), ["read_token_hash"] = Text(manifest,"read_token_hash") };
         checkpoint?.Invoke();
         var status = Status(await connection.ExchangeAsync(Packet(GhostPacket.ObjectBegin,id,Json(begin)),GhostPacket.ObjectStatus,token).ConfigureAwait(false));
         var count = Number(manifest,"chunk_count");
         CheckProgress(status, count);
         if (status.Complete) return status.Expiry;
-        await using var source = new FileStream(encryptedPath,FileMode.Open,FileAccess.Read,FileShare.Read,65552,FileOptions.Asynchronous|FileOptions.RandomAccess);
-        if(source.Length!=Number(manifest,"cipher_size")) throw new InvalidDataException("Encrypted attachment has an incorrect size.");
+        await using var source = new FileStream(encryptedPath,FileMode.Open,FileAccess.Read,FileShare.Read,
+            EncryptedObjectStore.ChunkBytes,FileOptions.Asynchronous|FileOptions.SequentialScan);
+        if(source.Length!=cipherSize) throw new InvalidDataException("Encrypted attachment has an incorrect size.");
         source.Position=status.Next*EncryptedObjectStore.ChunkBytes;
         var buffer=new byte[EncryptedObjectStore.ChunkBytes];
         try
@@ -50,7 +53,7 @@ internal sealed class AttachmentTransport(SecureSettingsStore settings)
                 checkpoint?.Invoke();
                 status=Status(await connection.ExchangeAsync(Packet(GhostPacket.ObjectPut,id,buffer,index),GhostPacket.ObjectStatus,token).ConfigureAwait(false));
                 if(status.Next!=index+1 || status.Complete) throw new InvalidDataException("Invalid attachment progress acknowledgement.");
-                progress?.Report(Math.Min((index+1)*65536,Number(manifest,"size")));
+                progress?.Report(Math.Min((index+1)*65536,size));
             }
             checkpoint?.Invoke();
             status=Status(await connection.ExchangeAsync(Packet(GhostPacket.ObjectFinish,id,[]),GhostPacket.ObjectStatus,token).ConfigureAwait(false));
@@ -85,18 +88,21 @@ internal sealed class AttachmentTransport(SecureSettingsStore settings)
                 var count = Number(manifest, "chunk_count");
                 if (start < count)
                 {
+                    var id = Text(manifest, "object_id");
+                    var key = Text(manifest, "key");
+                    var size = Number(manifest, "size");
                     await using var connection = await Connection.OpenAsync(settings, endpoint, token).ConfigureAwait(false);
                     for (var index = start; index < count; index++)
                     {
                         checkpoint?.Invoke();
-                        var packet = await connection.ExchangeAsync(Packet(GhostPacket.ObjectGet, Text(manifest, "object_id"), capability, index), GhostPacket.ObjectData, token).ConfigureAwait(false);
+                        var packet = await connection.ExchangeAsync(Packet(GhostPacket.ObjectGet, id, capability, index), GhostPacket.ObjectData, token).ConfigureAwait(false);
                         if (packet.EncryptedData.Length != EncryptedObjectStore.ChunkBytes) throw new InvalidDataException("Invalid encrypted attachment chunk size.");
                         SecurityCore.Call(new { operation = "check_object_chunk", chunk = new {
-                            key = Text(manifest, "key"), object_id = Text(manifest, "object_id"), size = Number(manifest, "size"), index,
+                            key, object_id = id, size, index,
                             data = Convert.ToBase64String(packet.EncryptedData) } });
                         await output.WriteAsync(packet.EncryptedData, token).ConfigureAwait(false);
                         output.Flush(flushToDisk: true);
-                        progress?.Report(Math.Min((index + 1) * 65536, Number(manifest, "size")));
+                        progress?.Report(Math.Min((index + 1) * 65536, size));
                     }
                 }
             }

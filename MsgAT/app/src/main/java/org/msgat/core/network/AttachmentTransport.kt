@@ -59,6 +59,7 @@ internal class AttachmentTransport(private val prefs: SecurePrefs) : Closeable {
             checkpoint()
             var status = status(connection.exchange(packet(GhostPacket.TYPE_OBJECT_BEGIN, id, json(request)), GhostPacket.TYPE_OBJECT_STATUS))
             val count = manifest.getLong("chunk_count")
+            val size = manifest.getLong("size")
             checkProgress(status, count)
             if (status.complete) return@withContext status.expiry
             val bytes = ByteArray(CHUNK_BYTES)
@@ -71,7 +72,7 @@ internal class AttachmentTransport(private val prefs: SecurePrefs) : Closeable {
                         checkpoint()
                         status = status(connection.exchange(packet(GhostPacket.TYPE_OBJECT_PUT, id, bytes, index), GhostPacket.TYPE_OBJECT_STATUS))
                         check(!status.complete && status.next == index + 1) { "Invalid attachment progress acknowledgement" }
-                        progress(minOf((index + 1) * 65536, manifest.getLong("size")))
+                        progress(minOf((index + 1) * 65536, size))
                     }
                 }
                 checkpoint()
@@ -108,16 +109,19 @@ internal class AttachmentTransport(private val prefs: SecurePrefs) : Closeable {
                 val count = manifest.getLong("chunk_count")
                 output.setLength(start * CHUNK_BYTES); output.seek(output.length())
                 if (start < count) open(endpoint).use { connection ->
+                    val id = manifest.getString("object_id")
+                    val key = manifest.getString("key")
+                    val size = manifest.getLong("size")
                     for (index in start until count) {
                         checkpoint()
-                        val response = connection.exchange(packet(GhostPacket.TYPE_OBJECT_GET, manifest.getString("object_id"), token, index), GhostPacket.TYPE_OBJECT_DATA)
+                        val response = connection.exchange(packet(GhostPacket.TYPE_OBJECT_GET, id, token, index), GhostPacket.TYPE_OBJECT_DATA)
                         val bytes = response.encryptedData ?: throw IOException("Missing attachment chunk")
                         check(bytes.size == CHUNK_BYTES) { "Invalid encrypted attachment chunk size" }
-                        val chunk = JSONObject().put("key", manifest.getString("key")).put("object_id", manifest.getString("object_id"))
-                            .put("size", manifest.getLong("size")).put("index", index).put("data", encode(bytes))
+                        val chunk = JSONObject().put("key", key).put("object_id", id)
+                            .put("size", size).put("index", index).put("data", encode(bytes))
                         SecurityCore.call(JSONObject().put("operation", "check_object_chunk").put("chunk", chunk))
                         output.write(bytes); output.fd.sync()
-                        progress(minOf((index + 1) * 65536, manifest.getLong("size")))
+                        progress(minOf((index + 1) * 65536, size))
                     }
                 }
             }

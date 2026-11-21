@@ -1201,7 +1201,8 @@ public sealed class MediaSendDialog : DialogWindow
         new(Path.GetFileName(path), 0, null, path, Mime: EncryptedObjectStore.MimeForPath(path), Pending: true);
 
     public static void ReviewAndSendRecording(Window owner, EncryptedCaptureFile file, string recipient, SendOptions initial,
-        Func<MediaSendChoice, Action<string>, Task<PreparationSendResult>> send, MainViewModel preparationModel)
+        Func<MediaSendChoice, Action<string>, Task<PreparationSendResult>> send, MainViewModel preparationModel,
+        Action<Window>? show = null)
     {
         if (!owner.IsLoaded) return;
         var dialog = new MediaSendDialog(owner, [new Attachment(file.Filename, file.Size, null, Mime: file.Mime)],
@@ -1214,7 +1215,8 @@ public sealed class MediaSendDialog : DialogWindow
             },
             _preparationModel = preparationModel
         };
-        dialog.ShowDialog();
+        if (show is null) dialog.ShowDialog();
+        else show(dialog);
     }
 
 }

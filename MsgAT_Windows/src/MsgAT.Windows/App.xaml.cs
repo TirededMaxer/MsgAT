@@ -36,6 +36,9 @@ public partial class App : System.Windows.Application
             Presentation.DesktopXamlRuntime.Start();
             Infrastructure.WindowAppearance.StartObserving();
             _mainWindow = new MainWindow();
+#if DEBUG
+            _mainWindow.UseQtDevelopmentWorkspace = e.Args.Contains("--qt-workspace", StringComparer.Ordinal);
+#endif
             MainWindow = _mainWindow;
             ConfigureTray();
             _mainWindow.Show();
@@ -71,7 +74,7 @@ public partial class App : System.Windows.Application
     {
         var settings = getSettings();
         bool CanNotify() => !_exiting && _mainWindow is { } window &&
-            (!window.IsActive || window.IsAppLocked) && getSettings().Enabled;
+            (!window.IsWorkspaceActive || window.IsAppLocked) && getSettings().Enabled;
         if (!CanNotify()) return;
         _trayIcon?.ShowNotification(Infrastructure.AppStrings.Get(notification.Pinned ? "UiMessagePinned" : "UiNewMessage"),
             notification.Silent || !settings.PlaySound,
@@ -88,7 +91,7 @@ public partial class App : System.Windows.Application
     {
         if (_exiting) return;
         _trayIcon?.ShowNotification(Infrastructure.AppStrings.Get(video ? "UiIncomingVideoCall" : "UiIncomingVoiceCall"), true,
-            () => !_exiting && _mainWindow is { } window && (!window.IsActive || window.IsAppLocked) && isStillRinging(),
+            () => !_exiting && _mainWindow is { } window && (!window.IsWorkspaceActive || window.IsAppLocked) && isStillRinging(),
             () => Dispatcher.BeginInvoke(() =>
             {
                 if (_exiting || !isStillRinging()) return;
@@ -123,6 +126,7 @@ public partial class App : System.Windows.Application
         finally
         {
             _mainWindow?.AllowClose();
+            _mainWindow?.StopQtWorkspace();
             Shutdown();
         }
     }
@@ -145,6 +149,7 @@ public partial class App : System.Windows.Application
     private void ShowMainWindow()
     {
         if (_exiting || _mainWindow is null) { return; }
+        if (_mainWindow.TryShowQtWorkspace()) return;
         _mainWindow.Show();
         if (_mainWindow.WindowState == WindowState.Minimized)
             _mainWindow.WindowState = WindowState.Normal;

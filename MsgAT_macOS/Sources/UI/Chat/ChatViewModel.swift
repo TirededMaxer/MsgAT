@@ -3,6 +3,8 @@ import AppKit
 import Combine
 import SwiftUI
 
+enum HistoryPage: Equatable, Sendable { case older, newer }
+
 @MainActor
 public final class ChatViewModel: ObservableObject {
     public let targetUuid: String
@@ -128,7 +130,7 @@ public final class ChatViewModel: ObservableObject {
     @Published private(set) var textSendPending = false
     private var draftSaveErrorReported = false
 
-    @Published public var currentLimit: Int = 50
+    private var currentLimit = 50
     @Published public var hasMoreOlderMessages: Bool = true
     @Published public private(set) var hasMoreNewerMessages = false
     private var historyAnchor: ChatMessage?
@@ -621,11 +623,11 @@ public final class ChatViewModel: ObservableObject {
         if canCyclePinnedPreview != canCycle { canCyclePinnedPreview = canCycle }
     }
 
-    private func loadMessages(jumpToLatest: Bool, from requestedStart: ChatMessage? = nil, limit requestedLimit: Int? = nil) -> Bool {
+    private func loadMessages(jumpToLatest: Bool) -> Bool {
         do {
             try refreshPinnedPreview()
-            let limit = jumpToLatest ? 50 : requestedLimit ?? currentLimit
-            let start = jumpToLatest ? nil : requestedStart ?? historyAnchor ?? (isViewingLatest ? nil : messages.first)
+            let limit = jumpToLatest ? 50 : currentLimit
+            let start = jumpToLatest ? nil : historyAnchor ?? (isViewingLatest ? nil : messages.first)
             var msgs: [ChatMessage]
             if let start {
                 msgs = try MsgDao.shared.getMessagesFrom(start, limit: limit)
@@ -682,13 +684,13 @@ public final class ChatViewModel: ObservableObject {
         }
         let visible = rows.filter { $0.isRevoked == 0 }
         let forwards = try? MsgDao.shared.getForwardInfo(ids: visible.map(\.messageId))
+        let replyOwners = (try? MsgDao.shared.replyOwners(in: peer, ids: Set(rows.compactMap(\.replyToId)))) ?? [:]
         var authors: [String: String] = [:]
         for message in rows {
             guard let replyID = message.replyToId else { continue }
-            let original = try? MsgDao.shared.getMessageById(replyID)
             let author: String?
-            if let original, original.conversationUuid == peer {
-                author = original.isMine ? local : peer
+            if let mine = replyOwners[replyID] {
+                author = mine ? local : peer
             } else {
                 author = message.replyToSender
             }
@@ -719,29 +721,53 @@ public final class ChatViewModel: ObservableObject {
         if replyAuthors != presentation.authors { replyAuthors = presentation.authors }
         if albumItems != presentation.albums { albumItems = presentation.albums }
         if messages != presentation.rows { messages = presentation.rows }
-        hasMoreOlderMessages = presentation.hasOlder
-        hasMoreNewerMessages = presentation.hasNewer
+        if hasMoreOlderMessages != presentation.hasOlder { hasMoreOlderMessages = presentation.hasOlder }
+        if hasMoreNewerMessages != presentation.hasNewer { hasMoreNewerMessages = presentation.hasNewer }
         markAsRead()
     }
 
-    public func loadMoreMessages() {
-        guard hasMoreOlderMessages, let first = messages.first else { return }
-        do {
-            let older = try MsgDao.shared.getMessagesBefore(first)
-            guard let start = older.first else {
-                hasMoreOlderMessages = false
-                historyLoadFailed = false
-                return
-            }
-            _ = loadMessages(jumpToLatest: false, from: start, limit: currentLimit + older.count)
-        } catch {
-            historyLoadFailed = true
+    func loadHistoryPage(_ direction: HistoryPage, isCurrent: () -> Bool, willApply: () -> Void) async -> Bool {
+        let older = direction == .older
+        guard (older ? hasMoreOlderMessages : hasMoreNewerMessages),
+              let edge = older ? messages.first : messages.last else { return false }
+        let peer = targetUuid
+        let local = KeychainManager.shared.myUuid
+        let alias = conversation?.alias
+        let quotedYou = InterfaceStrings.current()("quoted_you")
+        let revision = refreshRevision
+        let loader = Task.detached(priority: .userInitiated) {
+            try Task.checkCancellation()
+            let rows = older ? try MsgDao.shared.getMessagesBefore(edge) : try MsgDao.shared.getMessagesAfter(edge)
+            try Task.checkCancellation()
+            return Self.readHistoryPresentation(rows, peer: peer, local: local, alias: alias, quotedYou: quotedYou)
         }
-    }
-
-    public func loadNewerMessages() {
-        guard hasMoreNewerMessages, let first = messages.first else { return }
-        _ = loadMessages(jumpToLatest: false, from: first, limit: currentLimit + 50)
+        func canApply() -> Bool {
+            isCurrent() && isChatMounted && !Task.isCancelled && refreshRevision == revision &&
+                (older ? messages.first : messages.last)?.messageId == edge.messageId
+        }
+        do {
+            let page = try await withTaskCancellationHandler { try await loader.value } onCancel: { loader.cancel() }
+            guard canApply() else { return false }
+            if historyLoadFailed { historyLoadFailed = false }
+            let more = older ? page.hasOlder : page.hasNewer
+            if older && more != hasMoreOlderMessages { hasMoreOlderMessages = more }
+            if !older && more != hasMoreNewerMessages { hasMoreNewerMessages = more }
+            guard !page.rows.isEmpty else { return false }
+            willApply()
+            if let pins = page.pins, !pins.isEmpty { pinnedMessageIDs.formUnion(pins) }
+            if let forwards = page.forwards, !forwards.isEmpty { forwardedMessages.merge(forwards) { _, new in new } }
+            if !page.authors.isEmpty { replyAuthors.merge(page.authors) { _, new in new } }
+            if !page.albums.isEmpty { albumItems.merge(page.albums) { _, new in new } }
+            if older { messages.insert(contentsOf: page.rows, at: 0) }
+            else { messages.append(contentsOf: page.rows) }
+            currentLimit = messages.count
+            historyAnchor = messages.first
+            markAsRead()
+            return true
+        } catch {
+            if canApply() { historyLoadFailed = true }
+            return false
+        }
     }
 
     @discardableResult

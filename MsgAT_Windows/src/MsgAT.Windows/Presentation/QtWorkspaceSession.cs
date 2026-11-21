@@ -27,10 +27,10 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private static readonly Lazy<nint> BridgeHandle = new(LoadBridge);
     private readonly HashSet<INotifyPropertyChanged> _observed = [];
     private readonly QtWorkspaceFrame _frames = new();
-    private readonly MainViewModel _attachmentModel = model;
+    private readonly MainViewModel _model = model;
     private readonly DispatcherSynchronizationContext _ownerContext = new(dispatcher);
-    private readonly Dispatcher _callDispatcher = dispatcher;
-    private readonly Func<bool> _callOwnerLocked = isLocked;
+    private readonly Dispatcher _dispatcher = dispatcher;
+    private readonly Func<bool> _isLocked = isLocked;
     private readonly DispatcherTimer _searchRefresh = new(DispatcherPriority.Background, dispatcher)
         { Interval = TimeSpan.FromMilliseconds(250) };
     private readonly DispatcherTimer _readTimer = new(DispatcherPriority.Background, dispatcher);
@@ -111,7 +111,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal unsafe (string Geometry, int SidebarWidth)? CaptureWindowPlacement()
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         if (_view == 0) return null;
         Span<byte> data = stackalloc byte[512];
         fixed (byte* buffer = data)
@@ -124,17 +124,17 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal unsafe void Run(string? geometry, int sidebarWidth)
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         var owner = GCHandle.Alloc(this);
-        var previousHistoryPosition = model.CaptureHistoryPosition;
-        model.CaptureHistoryPosition = CaptureHistoryPosition;
-        model.PropertyChanged += Changed;
+        var previousHistoryPosition = _model.CaptureHistoryPosition;
+        _model.CaptureHistoryPosition = CaptureHistoryPosition;
+        _model.PropertyChanged += Changed;
         WindowAppearance.Changed += AppearanceChanged;
-        model.MessagesRefreshed += SearchSourceChanged;
+        _model.MessagesRefreshed += SearchSourceChanged;
         _searchRefresh.Tick += RefreshSearch;
         _readTimer.Tick += RecheckViewport;
-        model.VisibleConversations.CollectionChanged += RowsChanged;
-        model.Messages.CollectionChanged += RowsChanged;
+        _model.VisibleConversations.CollectionChanged += RowsChanged;
+        _model.Messages.CollectionChanged += RowsChanged;
         try
         {
             if (RunWindow(GCHandle.ToIntPtr(owner), &Notify, RuntimeDirectory, geometry ?? "", sidebarWidth) != 0)
@@ -153,16 +153,16 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             ClearVisibleReads();
             _historyPosition = null;
             _frames.Clear();
-            model.CaptureHistoryPosition = previousHistoryPosition;
+            _model.CaptureHistoryPosition = previousHistoryPosition;
             _update?.Abort();
             _update = null;
-            model.PropertyChanged -= Changed;
+            _model.PropertyChanged -= Changed;
             WindowAppearance.Changed -= AppearanceChanged;
-            model.MessagesRefreshed -= SearchSourceChanged;
+            _model.MessagesRefreshed -= SearchSourceChanged;
             _searchRefresh.Tick -= RefreshSearch;
             _readTimer.Tick -= RecheckViewport;
-            model.VisibleConversations.CollectionChanged -= RowsChanged;
-            model.Messages.CollectionChanged -= RowsChanged;
+            _model.VisibleConversations.CollectionChanged -= RowsChanged;
+            _model.Messages.CollectionChanged -= RowsChanged;
             foreach (var item in _observed) item.PropertyChanged -= Changed;
             _observed.Clear();
             owner.Free();
@@ -230,7 +230,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                     session.ChooseFolder(Marshal.PtrToStringUTF8(bytes, length));
                     break;
                 case 35:
-                    if (session._view != view || session._callOwnerLocked() || bytes == 0 || length <= 0) return 0;
+                    if (session._view != view || session._isLocked() || bytes == 0 || length <= 0) return 0;
                     var callReader = new Utf8JsonReader(new ReadOnlySpan<byte>((void*)bytes, length));
                     using (var callPayload = JsonDocument.ParseValue(ref callReader))
                         return session.HandleCallAction(callPayload.RootElement) ? 1 : 0;
@@ -253,27 +253,27 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     {
         var peer = payload.GetProperty("peer").GetString();
         var text = payload.GetProperty("text").GetString();
-        if (peer is null || text is null || peer != model.SelectedConversation?.Uuid ||
-            !model.IsChatContentVisible) return false;
+        if (peer is null || text is null || peer != _model.SelectedConversation?.Uuid ||
+            !_model.IsChatContentVisible) return false;
         if (kind == 5) return copyText(text);
         var target = payload.GetProperty("target").GetString();
-        if (target != (model.EditTargetId ?? "")) return false;
-        if (model.HasMessageEdit)
+        if (target != (_model.EditTargetId ?? "")) return false;
+        if (_model.HasMessageEdit)
         {
-            if (!model.CanEditText) return false;
-            if (kind == 3) { model.EditText = text; return true; }
-            if (!model.CanSubmitEdit || model.EditText != text) return false;
-            TrackMessageAction(model.SubmitMessageEditAsync());
+            if (!_model.CanEditText) return false;
+            if (kind == 3) { _model.EditText = text; return true; }
+            if (!_model.CanSubmitEdit || _model.EditText != text) return false;
+            TrackMessageAction(_model.SubmitMessageEditAsync());
             return true;
         }
-        if (!model.CanCompose) return false;
-        if (kind == 3) { model.Draft = text; return true; }
-        if (model.Draft != text || !model.HasDraft || model.TextSendPending) return false;
-        TrackMessageAction(model.SendDraftAsync());
+        if (!_model.CanCompose) return false;
+        if (kind == 3) { _model.Draft = text; return true; }
+        if (_model.Draft != text || !_model.HasDraft || _model.TextSendPending) return false;
+        TrackMessageAction(_model.SendDraftAsync());
         return true;
     }
 
-    private bool IsVisible(nint view) => _view == view && _presentUpdates && !isLocked() && model.IsWorkspaceReady;
+    private bool IsVisible(nint view) => _view == view && _presentUpdates && !_isLocked() && _model.IsWorkspaceReady;
 
     private bool QueueConversationAction(JsonElement payload)
     {
@@ -294,48 +294,48 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private bool HandleMessageAction(JsonElement payload)
     {
         var peer = payload.GetProperty("peer").GetString();
-        if (peer is null || model.SelectedConversation?.Uuid != peer || !model.IsChatContentVisible) return false;
+        if (peer is null || _model.SelectedConversation?.Uuid != peer || !_model.IsChatContentVisible) return false;
         var command = payload.GetProperty("command").GetString();
         var id = payload.GetProperty("id").GetString();
         if (command is "toggleSelection" or "clearSelection" or "copySelected" or "save" or "forward" or "delete" or "cancelSend")
             return HandleSelectionAction(command, peer, id, payload.GetProperty("extending").GetBoolean());
-        if (model.IsSelecting) return false;
-        if (command == "sendSilently" && model.CanCompose && model.HasDraft && !model.TextSendPending)
+        if (_model.IsSelecting) return false;
+        if (command == "sendSilently" && _model.CanCompose && _model.HasDraft && !_model.TextSendPending)
         {
-            TrackMessageAction(model.SendDraftAsync(model.SendOptions with { Silent = true }));
+            TrackMessageAction(_model.SendDraftAsync(_model.SendOptions with { Silent = true }));
             return true;
         }
-        if (command == "clearDelivery" && model.CanCompose && model.HasSendOptions)
+        if (command == "clearDelivery" && _model.CanCompose && _model.HasSendOptions)
         {
-            model.SetSendOptions(new());
+            _model.SetSendOptions(new());
             return true;
         }
-        if (command == "cancelReply" && model.HasReplyTarget)
+        if (command == "cancelReply" && _model.HasReplyTarget)
         {
-            model.CancelReply();
+            _model.CancelReply();
             return true;
         }
-        if (command == "cancelEdit" && id is not null && id == model.EditTargetId && model.CanCancelEdit)
+        if (command == "cancelEdit" && id is not null && id == _model.EditTargetId && _model.CanCancelEdit)
         {
             var epoch = _visibilityEpoch;
             _ownerContext.Post(_ =>
             {
-                if (epoch == _visibilityEpoch && _view != 0 && IsVisible(_view) && model.SelectedConversation?.Uuid == peer &&
-                    model.EditTargetId == id && model.CanCancelEdit && confirmDiscardEdit()) model.CancelMessageEdit();
+                if (epoch == _visibilityEpoch && _view != 0 && IsVisible(_view) && _model.SelectedConversation?.Uuid == peer &&
+                    _model.EditTargetId == id && _model.CanCancelEdit && confirmDiscardEdit()) _model.CancelMessageEdit();
             }, null);
             return true;
         }
-        var item = model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked && row.Source.ConversationUuid == peer);
+        var item = _model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked && row.Source.ConversationUuid == peer);
         if (item is null || item.Source.ExpiresAt is { } expiry && expiry <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) return false;
-        if (command == "reply" && model.CanCompose)
+        if (command == "reply" && _model.CanCompose)
         {
-            model.SetReply(item);
-            return model.ReplyTarget?.MessageId == id;
+            _model.SetReply(item);
+            return _model.ReplyTarget?.MessageId == id;
         }
-        if ((command is "editMessage" or "editCaption") && model.CanCompose && item.CanEditContent)
+        if ((command is "editMessage" or "editCaption") && _model.CanCompose && item.CanEditContent)
         {
-            model.BeginMessageEdit(item);
-            return model.EditTargetId == id;
+            _model.BeginMessageEdit(item);
+            return _model.EditTargetId == id;
         }
         if (command == "retry" && item.CanRetrySend && !item.IsRetryingSend)
         {
@@ -344,7 +344,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         }
         if (command == "revoke" && item.CanModify)
         {
-            TrackMessageAction(model.RevokeAsync(item));
+            TrackMessageAction(_model.RevokeAsync(item));
             return true;
         }
         if (command == "openCard" && (item.IsContactCard || item.IsLocation || item.IsLiveLocation))
@@ -352,9 +352,9 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             var epoch = _visibilityEpoch;
             _ownerContext.Post(_ =>
             {
-                if (epoch != _visibilityEpoch || _view == 0 || !IsVisible(_view) || model.IsSelecting ||
-                    !model.IsChatContentVisible || model.SelectedConversation?.Uuid != peer) return;
-                if (model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked &&
+                if (epoch != _visibilityEpoch || _view == 0 || !IsVisible(_view) || _model.IsSelecting ||
+                    !_model.IsChatContentVisible || _model.SelectedConversation?.Uuid != peer) return;
+                if (_model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked &&
                     row.Source.ConversationUuid == peer) is { } current &&
                     (current.Source.ExpiresAt is not { } expires || expires > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
                     openCard(current, HostWindow);
@@ -366,56 +366,56 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private bool HandleSelectionAction(string command, string peer, string? id, bool extending)
     {
-        if (!model.CanChangeSelection) return false;
+        if (!_model.CanChangeSelection) return false;
         if (command == "clearSelection")
         {
-            if (!model.IsSelecting) return false;
-            model.ClearSelection();
+            if (!_model.IsSelecting) return false;
+            _model.ClearSelection();
             return true;
         }
 
         var epoch = _visibilityEpoch;
-        var version = model.SelectionVersion;
+        var version = _model.SelectionVersion;
         bool IsCurrent() => _view != 0 && IsVisible(_view) && epoch == _visibilityEpoch &&
-            model.IsChatContentVisible && model.SelectedConversation?.Uuid == peer && version == model.SelectionVersion && model.CanChangeSelection;
-        var item = string.IsNullOrEmpty(id) ? null : model.Messages.FirstOrDefault(row => row.MessageId == id && row.Source.ConversationUuid == peer);
+            _model.IsChatContentVisible && _model.SelectedConversation?.Uuid == peer && version == _model.SelectionVersion && _model.CanChangeSelection;
+        var item = string.IsNullOrEmpty(id) ? null : _model.Messages.FirstOrDefault(row => row.MessageId == id && row.Source.ConversationUuid == peer);
         if (command == "toggleSelection")
         {
             if (item is null || !MainViewModel.CanSelectMessage(item)) return false;
-            if (!model.HasMessageEdit) model.ToggleSelection(item, extending);
+            if (!_model.HasMessageEdit) _model.ToggleSelection(item, extending);
             else
             {
-                var edit = model.EditTargetId;
+                var edit = _model.EditTargetId;
                 _ownerContext.Post(_ =>
                 {
-                    if (IsCurrent() && edit == model.EditTargetId && model.CanCancelEdit && confirmDiscardEdit() &&
-                        IsCurrent() && model.Messages.Contains(item)) model.ToggleSelection(item, extending);
+                    if (IsCurrent() && edit == _model.EditTargetId && _model.CanCancelEdit && confirmDiscardEdit() &&
+                        IsCurrent() && _model.Messages.Contains(item)) _model.ToggleSelection(item, extending);
                 }, null);
             }
             return true;
         }
 
         var fromSelection = string.IsNullOrEmpty(id);
-        if (fromSelection && !model.CanUseSelection || !fromSelection && (model.IsSelecting || item is null)) return false;
+        if (fromSelection && !_model.CanUseSelection || !fromSelection && (_model.IsSelecting || item is null)) return false;
         if (command is "save" or "forward")
         {
-            if (fromSelection ? !model.CanKeepSelection : item is null || !MainViewModel.CanSelectMessage(item) || item.HasExpiration)
+            if (fromSelection ? !_model.CanKeepSelection : item is null || !MainViewModel.CanSelectMessage(item) || item.HasExpiration)
                 return false;
         }
         if (command == "delete" && item is not null && (item.IsSending || item.IsLiveLocation)) return false;
         if (command == "cancelSend" && item is not { IsSending: true }) return false;
-        var action = new QtMessageCollectionAction(command, peer, fromSelection ? model.SelectedMessageIds : [id!], version, fromSelection);
+        var action = new QtMessageCollectionAction(command, peer, fromSelection ? _model.SelectedMessageIds : [id!], version, fromSelection);
         _ownerContext.Post(_ =>
         {
-            if (IsCurrent() && (item is null || model.Messages.Contains(item))) TrackMessageAction(changeMessages(action));
+            if (IsCurrent() && (item is null || _model.Messages.Contains(item))) TrackMessageAction(changeMessages(action));
         }, null);
         return true;
     }
 
     internal void TrackMessageAction(Task operation)
     {
-        var previous = model.WorkspaceMessageActionCompletion;
-        model.WorkspaceMessageActionCompletion = previous.IsCompletedSuccessfully ? operation : Task.WhenAll(previous, operation);
+        var previous = _model.WorkspaceMessageActionCompletion;
+        _model.WorkspaceMessageActionCompletion = previous.IsCompletedSuccessfully ? operation : Task.WhenAll(previous, operation);
     }
 
     private bool QueueCall(JsonElement payload)
@@ -432,8 +432,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         return true;
     }
 
-    private bool CanStartCall(string peer) => _view != 0 && IsVisible(_view) && model.IsChatContentVisible &&
-        !model.IsSelecting && model.SelectedConversation?.Uuid == peer;
+    private bool CanStartCall(string peer) => _view != 0 && IsVisible(_view) && _model.IsChatContentVisible &&
+        !_model.IsSelecting && _model.SelectedConversation?.Uuid == peer;
 
     private bool QueueWorkspaceCommand(JsonElement payload)
     {
@@ -448,8 +448,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         _ownerContext.Post(async _ =>
         {
             if (_view == 0 || !IsVisible(_view) || epoch != _visibilityEpoch) return;
-            if (chatScoped && (!model.IsChatContentVisible || model.IsSelecting ||
-                string.IsNullOrEmpty(peer) || peer != model.SelectedConversation?.Uuid || composing && !model.CanCompose)) return;
+            if (chatScoped && (!_model.IsChatContentVisible || _model.IsSelecting ||
+                string.IsNullOrEmpty(peer) || peer != _model.SelectedConversation?.Uuid || composing && !_model.CanCompose)) return;
             try { await openWorkspaceCommand(command, owner); }
             catch (Exception error) { Trace.TraceWarning("Qt workspace command failed ({0}).", error.GetType().Name); }
         }, null);
@@ -473,17 +473,17 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     }
 
     private ChatHistoryPosition? CaptureHistoryPosition() =>
-        _historyPosition is { } value && value.Peer == model.SelectedConversation?.Uuid &&
-        value.Version == model.HistoryNavigationVersion &&
-        model.Messages.Any(row => !row.IsRevoked && row.MessageId == value.Position.MessageId)
+        _historyPosition is { } value && value.Peer == _model.SelectedConversation?.Uuid &&
+        value.Version == _model.HistoryNavigationVersion &&
+        _model.Messages.Any(row => !row.IsRevoked && row.MessageId == value.Position.MessageId)
             ? value.Position : null;
 
     private bool HandleHistoryViewport(JsonElement payload)
     {
         var peer = payload.GetProperty("peer").GetString();
         var version = payload.GetProperty("generation").GetInt64();
-        if (peer is null || peer != model.SelectedConversation?.Uuid || !model.IsChatContentVisible ||
-            version != model.HistoryNavigationVersion || model.InitialHistoryLoading) return false;
+        if (peer is null || peer != _model.SelectedConversation?.Uuid || !_model.IsChatContentVisible ||
+            version != _model.HistoryNavigationVersion || _model.InitialHistoryLoading) return false;
         if (!payload.GetProperty("shown").GetBoolean())
         {
             ClearVisibleReads();
@@ -493,7 +493,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         var anchor = payload.GetProperty("anchor").GetString();
         _historyPosition = latest || string.IsNullOrEmpty(anchor) ? null :
             (peer, version, new ChatHistoryPosition(anchor, payload.GetProperty("offset").GetDouble()));
-        if (model.IsViewingLatest != latest) model.IsViewingLatest = latest;
+        if (_model.IsViewingLatest != latest) _model.IsViewingLatest = latest;
         TrackVisibleReads(peer, version, payload.GetProperty("readable"));
         return true;
     }
@@ -514,9 +514,9 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     }
 
     private bool CanMarkVisibleReads(string peer, long version) =>
-        _view != 0 && IsActive && IsVisible(_view) && model.IsChatContentVisible &&
-        _readScope == (peer, version) && model.SelectedConversation?.Uuid == peer &&
-        model.HistoryNavigationVersion == version && !model.InitialHistoryLoading;
+        _view != 0 && IsActive && IsVisible(_view) && _model.IsChatContentVisible &&
+        _readScope == (peer, version) && _model.SelectedConversation?.Uuid == peer &&
+        _model.HistoryNavigationVersion == version && !_model.InitialHistoryLoading;
 
     private void TrackVisibleReads(string peer, long version, JsonElement ids)
     {
@@ -558,7 +558,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private async Task MarkVisibleAsync(string peer, long version, Dictionary<string, long> due)
     {
-        if (await model.MarkVisibleMessagesReadAsync(due.Keys, () => CanMarkVisibleReads(peer, version)) ||
+        if (await _model.MarkVisibleMessagesReadAsync(due.Keys, () => CanMarkVisibleReads(peer, version)) ||
             !CanMarkVisibleReads(peer, version)) return;
         var now = Environment.TickCount64;
         var retry = false;
@@ -578,22 +578,22 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private bool HandleHistory(int kind, string? peer)
     {
-        if (peer is null || peer != model.SelectedConversation?.Uuid || !model.IsChatContentVisible ||
-            model.InitialHistoryLoading || model.HistoryPageLoading) return false;
+        if (peer is null || peer != _model.SelectedConversation?.Uuid || !_model.IsChatContentVisible ||
+            _model.InitialHistoryLoading || _model.HistoryPageLoading) return false;
         switch (kind)
         {
             case 6: RequestHistoryPage(newer: false); break;
             case 7: RequestHistoryPage(newer: true); break;
-            case 8: model.LoadLatestMessages(QueueFullRefresh); break;
-            case 9: model.RetryHistoryLoad(); break;
+            case 8: _model.LoadLatestMessages(QueueFullRefresh); break;
+            case 9: _model.RetryHistoryLoad(); break;
         }
         return true;
     }
 
     private void RequestHistoryPage(bool newer)
     {
-        if (_view == 0 || isLocked()) return;
-        _ = model.LoadHistoryPageAsync(newer ? HistoryPage.Newer : HistoryPage.Older, () => RequestHistoryPage(newer));
+        if (_view == 0 || _isLocked()) return;
+        _ = _model.LoadHistoryPageAsync(newer ? HistoryPage.Newer : HistoryPage.Older, () => RequestHistoryPage(newer));
     }
 
     private void QueueFullRefresh() => QueueRefresh();
@@ -609,11 +609,11 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private bool HandleSearch(int action, JsonElement payload)
     {
         if (action == 14) { ClearSearch(); return true; }
-        if (!model.IsChatContentVisible || model.IsSelecting || model.HasMessageEdit) return false;
+        if (!_model.IsChatContentVisible || _model.IsSelecting || _model.HasMessageEdit) return false;
         var generation = payload.GetProperty("generation").GetInt64();
         var origin = payload.GetProperty("peer").GetString();
         if (string.IsNullOrEmpty(origin)) origin = null;
-        if (model.SelectedConversation?.Uuid != origin) return false;
+        if (_model.SelectedConversation?.Uuid != origin) return false;
         if (action == 11)
         {
             ClearSearch();
@@ -645,7 +645,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         if (action == 13 && payload.GetProperty("id").GetString() is { } id && _searchHits.TryGetValue(id, out var hit))
         {
             _searchWork = OpenAsync(_searchWork);
-            model.WorkspaceSearchCompletion = _searchWork;
+            _model.WorkspaceSearchCompletion = _searchWork;
             return true;
 
             async Task OpenAsync(Task previous)
@@ -654,7 +654,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                 if (!SearchIsCurrent(current)) return;
                 try
                 {
-                    var opened = await model.RevealWorkspaceMessageAsync(hit.Peer, hit.MessageId,
+                    var opened = await _model.RevealWorkspaceMessageAsync(hit.Peer, hit.MessageId,
                         () => SearchIsCurrent(current, hit.Peer), choose);
                     if (!SearchIsCurrent(current, hit.Peer)) return;
                     PresentSearch(current, [], opened: opened, status: opened ? "" : AppStrings.Get("UiSearchTargetUnavailable"));
@@ -672,9 +672,9 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private bool SearchIsCurrent(SearchInput input, string? destination = null)
     {
-        var selected = model.SelectedConversation?.Uuid;
-        return _view != 0 && IsVisible(_view) && model.IsChatContentVisible && !model.IsSelecting &&
-            !model.HasMessageEdit && ReferenceEquals(_searchInput, input) &&
+        var selected = _model.SelectedConversation?.Uuid;
+        return _view != 0 && IsVisible(_view) && _model.IsChatContentVisible && !_model.IsSelecting &&
+            !_model.HasMessageEdit && ReferenceEquals(_searchInput, input) &&
             (selected == input.Origin || destination is not null && selected == destination);
     }
 
@@ -682,7 +682,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     {
         PresentSearch(input, [], busy: true, status: AppStrings.Get("UiSearchSearching"));
         _searchWork = ReadAsync(_searchWork);
-        model.WorkspaceSearchCompletion = _searchWork;
+        _model.WorkspaceSearchCompletion = _searchWork;
 
         async Task ReadAsync(Task previous)
         {
@@ -691,13 +691,13 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             try
             {
                 var limit = append ? 50 : Math.Max(50, _searchHits.Count);
-                var page = await Task.Run(() => model.SearchMessages(input.Query, input.Peer, before, input.Kind, input.Day, limit));
+                var page = await Task.Run(() => _model.SearchMessages(input.Query, input.Peer, before, input.Kind, input.Day, limit));
                 if (!SearchIsCurrent(input)) return;
                 if (!append) _searchHits.Clear();
                 var rows = page.Hits.Where(hit => _searchHits.TryAdd(hit.MessageId, hit)).ToArray();
                 _searchCursor = page.Next;
                 var status = _searchHits.Count == 0 ? AppStrings.Get("UiSearchNoResults") :
-                    string.Format(CultureInfo.CurrentCulture, AppStrings.Get("UiSearchResultsCount"), _searchHits.Count);
+                    AppStrings.Format("UiSearchResultsCount", _searchHits.Count);
                 PresentSearch(input, rows, replace: !append, status: status);
             }
             catch (Exception error) when (error is ArgumentException or IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
@@ -745,7 +745,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         _ownerContext.Post(_ =>
         {
             if (epoch != _visibilityEpoch || _view == 0 || !IsVisible(_view)) return;
-            if (model.VisibleConversations.FirstOrDefault(row => row.Uuid == id) is { } item)
+            if (_model.VisibleConversations.FirstOrDefault(row => row.Uuid == id) is { } item)
                 choose(item);
             QueueRefresh();
         }, null);
@@ -754,9 +754,9 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private void ChooseFolder(string? key)
     {
         ++_externalReveal;
-        if (key is not null && model.CanChangeSelection &&
-            (model.FolderChoices.Any(folder => folder.Key == key) || key == model.ArchiveEntry.Key && model.ShowArchiveEntry))
-            model.FolderKey = key;
+        if (key is not null && _model.CanChangeSelection &&
+            (_model.FolderChoices.Any(folder => folder.Key == key) || key == _model.ArchiveEntry.Key && _model.ShowArchiveEntry))
+            _model.FolderKey = key;
         QueueRefresh();
     }
 
@@ -764,24 +764,24 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     {
         var epoch = _visibilityEpoch;
         var request = ++_externalReveal;
-        var selected = model.SelectedConversation?.Uuid;
-        var navigation = model.HistoryNavigationVersion;
+        var selected = _model.SelectedConversation?.Uuid;
+        var navigation = _model.HistoryNavigationVersion;
         TrackMessageAction(RevealAsync());
 
         bool IsCurrent() => _view != 0 && IsVisible(_view) && request == _externalReveal && epoch == _visibilityEpoch &&
-            model.IsChatContentVisible && !model.IsSelecting && model.SelectedConversation?.Uuid == selected &&
-            model.HistoryNavigationVersion == navigation;
+            _model.IsChatContentVisible && !_model.IsSelecting && _model.SelectedConversation?.Uuid == selected &&
+            _model.HistoryNavigationVersion == navigation;
 
         async Task RevealAsync()
         {
             try
             {
-                var opened = await model.RevealWorkspaceMessageAsync(peer, id, IsCurrent, target =>
+                var opened = await _model.RevealWorkspaceMessageAsync(peer, id, IsCurrent, target =>
                 {
-                    if (!model.CanChangeSelection || !model.Conversations.Contains(target)) return;
-                    model.SelectedConversation = target;
+                    if (!_model.CanChangeSelection || !_model.Conversations.Contains(target)) return;
+                    _model.SelectedConversation = target;
                     selected = target.Uuid;
-                    navigation = model.HistoryNavigationVersion;
+                    navigation = _model.HistoryNavigationVersion;
                 });
                 if (opened) QueueRefresh();
                 else if (IsCurrent()) ShowNotice(AppStrings.Get(unavailableLabel));
@@ -795,7 +795,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal void Close()
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         ++_visibilityEpoch;
         StopPresenting();
         ClearCall();
@@ -805,8 +805,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal void Show()
     {
-        dispatcher.VerifyAccess();
-        if (_view == 0 || isLocked()) return;
+        _dispatcher.VerifyAccess();
+        if (_view == 0 || _isLocked()) return;
         _presentUpdates = true;
         Refresh();
         ShowWindow(_view, 1);
@@ -830,7 +830,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal void Hide()
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         if (_view == 0) return;
         ++_visibilityEpoch;
         StopPresenting();
@@ -843,7 +843,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     internal void Minimize()
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         if (_view == 0) return;
         ++_visibilityEpoch;
         StopPresenting();
@@ -876,9 +876,9 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private unsafe void Refresh(bool editorOnly)
     {
-        dispatcher.VerifyAccess();
+        _dispatcher.VerifyAccess();
         if (_view == 0) return;
-        if (isLocked() || !model.IsWorkspaceReady)
+        if (_isLocked() || !_model.IsWorkspaceReady)
         {
             ++_visibilityEpoch;
             _historyPosition = null;
@@ -899,8 +899,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         byte[]? frame = null;
         try
         {
-            frame = editorOnly ? QtWorkspaceFrame.CaptureEditor(model) :
-                _frames.Capture(model, locked: false, chatTextPercentage: _chatTextPercentage, appLockEnabled: _appLockEnabled);
+            frame = editorOnly ? QtWorkspaceFrame.CaptureEditor(_model) :
+                _frames.Capture(_model, locked: false, chatTextPercentage: _chatTextPercentage, appLockEnabled: _appLockEnabled);
             fixed (byte* data = frame) Present(_view, data, frame.Length, editorOnly ? 1 : 0);
         }
         catch (Exception error)
@@ -914,7 +914,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private void ObserveRows()
     {
         _observeRowsNeeded = false;
-        var current = model.VisibleConversations.Cast<INotifyPropertyChanged>().Concat(model.Messages).ToHashSet();
+        var current = _model.VisibleConversations.Cast<INotifyPropertyChanged>().Concat(_model.Messages).ToHashSet();
         foreach (var previous in _observed.Where(row => !current.Contains(row)).ToArray())
         {
             previous.PropertyChanged -= Changed;
@@ -926,12 +926,12 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private void Changed(object? sender, PropertyChangedEventArgs args)
     {
-        if (sender == model && args.PropertyName == nameof(MainViewModel.PendingPreparations))
+        if (sender == _model && args.PropertyName == nameof(MainViewModel.PendingPreparations))
         {
             UpdateAttachmentReview();
             return;
         }
-        QueueRefresh(editorOnly: sender == model && args.PropertyName is
+        QueueRefresh(editorOnly: sender == _model && args.PropertyName is
             (nameof(MainViewModel.Draft) or nameof(MainViewModel.HasDraft) or nameof(MainViewModel.TextSendPending)
             or nameof(MainViewModel.CanCompose) or nameof(MainViewModel.EditText) or nameof(MainViewModel.CanSubmitEdit)));
     }
@@ -952,10 +952,10 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private void QueueRefresh(bool editorOnly = false)
     {
-        if (_view == 0 || !_presentUpdates || dispatcher.HasShutdownStarted) return;
+        if (_view == 0 || !_presentUpdates || _dispatcher.HasShutdownStarted) return;
         _fullUpdate |= !editorOnly;
         if (_update is not null) return;
-        _update = dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
+        _update = _dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
         {
             _update = null;
             var complete = _fullUpdate;

@@ -12,7 +12,7 @@ namespace MsgAT.Windows.Presentation;
 
 internal sealed partial class QtWorkspaceSession
 {
-    private sealed class AttachmentView(string peer, string message, long generation)
+    private sealed class AttachmentView(string peer, string message, long generation) : IDisposable
     {
         internal readonly string Peer = peer;
         internal readonly string Message = message;
@@ -25,6 +25,8 @@ internal sealed partial class QtWorkspaceSession
         internal bool HasImage;
         internal bool Working;
         internal AttachmentViewFrame? LastFrame;
+
+        public void Dispose() => Lifetime.Dispose();
     }
 
     private sealed record AttachmentViewFrame(long generation, string id, string filename, string name, string info, string status,
@@ -121,9 +123,9 @@ internal sealed partial class QtWorkspaceSession
 
     private MessageItem? FindPreviewItem(string peer, string id)
     {
-        if (_view == 0 || !IsVisible(_view) || !_attachmentModel.IsChatContentVisible ||
-            _attachmentModel.SelectedConversation?.Uuid != peer) return null;
-        var item = _attachmentModel.Messages.FirstOrDefault(row => row.MessageId == id &&
+        if (_view == 0 || !IsVisible(_view) || !_model.IsChatContentVisible ||
+            _model.SelectedConversation?.Uuid != peer) return null;
+        var item = _model.Messages.FirstOrDefault(row => row.MessageId == id &&
             row.Source.ConversationUuid == peer && !row.IsRevoked &&
             EncryptedObjectStore.IsReference(row.Content) && row.AttachmentInfo is not null);
         if (item?.Source.ExpiresAt is { } expiry && expiry <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) return null;
@@ -170,11 +172,11 @@ internal sealed partial class QtWorkspaceSession
             photo = await Task.Run(() =>
             {
                 token.ThrowIfCancellationRequested();
-                if (!_attachmentModel.CanReadAttachment(item)) return null;
+                if (!_model.CanReadAttachment(item)) return null;
                 using var input = item.OpenMedia();
                 var decoded = ImageDecoder.Load(input);
                 token.ThrowIfCancellationRequested();
-                if (!_attachmentModel.CanReadAttachment(item)) return null;
+                if (!_model.CanReadAttachment(item)) return null;
                 var bitmap = new FormatConvertedBitmap(decoded, PixelFormats.Pbgra32, null, 0);
                 var stride = checked(bitmap.PixelWidth * 4);
                 var pixels = new byte[checked(stride * bitmap.PixelHeight)];
@@ -227,7 +229,7 @@ internal sealed partial class QtWorkspaceSession
         var token = view.Lifetime.Token;
         try
         {
-            if (!await _attachmentModel.ChangeAttachmentDownloadAsync(item, item.CanRequestDownload, token))
+            if (!await _model.ChangeAttachmentDownloadAsync(item, item.CanRequestDownload, token))
                 view.Status = AppStrings.Get("UiFileDetailsUnavailable");
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested) { }
@@ -246,7 +248,7 @@ internal sealed partial class QtWorkspaceSession
     {
         var token = view.Lifetime.Token;
         var saved = await AttachmentExporter.ExportToAsync(item, destination,
-            () => !token.IsCancellationRequested && _attachmentModel.CanExportAttachment(item), token);
+            () => !token.IsCancellationRequested && _model.CanExportAttachment(item), token);
         if (!ReferenceEquals(_attachmentView, view)) return;
         view.Working = false;
         view.Status = AppStrings.Get(saved ? "UiAttachmentExported" : "UiSharedMediaSaveFailed");
@@ -282,11 +284,10 @@ internal sealed partial class QtWorkspaceSession
 
     private void ClearAttachmentPreview()
     {
-        var view = _attachmentView;
+        using var view = _attachmentView;
         _attachmentView = null;
         if (view is null) return;
         view.Lifetime.Cancel();
-        try { ClearAttachmentPlayback(view); }
-        finally { view.Lifetime.Dispose(); }
+        ClearAttachmentPlayback(view);
     }
 }

@@ -204,7 +204,8 @@ public partial class MainWindow
         try
         {
             dialog.Owner = null;
-            new WindowInteropHelper(dialog) { Owner = owner };
+            var interop = new WindowInteropHelper(dialog);
+            interop.Owner = owner;
             dialog.Loaded += (_, _) => workspace.UpdateCallPresentation();
             return dialog.ShowDialog() == true;
         }

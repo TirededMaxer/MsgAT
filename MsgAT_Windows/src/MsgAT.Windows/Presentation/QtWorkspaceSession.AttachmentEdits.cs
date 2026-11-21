@@ -25,7 +25,7 @@ internal sealed partial class QtWorkspaceSession
             return true;
         }
 
-        if (!_attachmentModel.CanCompose || ReadWindowHandle(payload) is not { } owner) return false;
+        if (!_model.CanCompose || ReadWindowHandle(payload) is not { } owner) return false;
         var mime = EncryptedObjectStore.MimeForPath(path);
         var isVideo = mime.StartsWith("video/", StringComparison.Ordinal);
         if (!isVideo && !PhotoCompression.Supports(mime)) return false;
@@ -80,7 +80,8 @@ internal sealed partial class QtWorkspaceSession
         bool ShowAttachmentEditor(System.Windows.Window editor)
         {
             review.Editor = editor;
-            new WindowInteropHelper(editor) { Owner = owner };
+            var interop = new WindowInteropHelper(editor);
+            interop.Owner = owner;
             return editor.ShowDialog() == true;
         }
     }

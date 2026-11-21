@@ -39,7 +39,7 @@ internal sealed partial class QtWorkspaceSession
 
     internal bool ShowCall(CallService service, FrameworkElement video, Panel parking, nint anchor, bool activate, bool compact)
     {
-        if (_view == 0 || _callOwnerLocked() || service.CurrentCallId is not { } id) return false;
+        if (_view == 0 || _isLocked() || service.CurrentCallId is not { } id) return false;
         var call = _call;
         if (call is null || call.Id != id || !ReferenceEquals(call.Service, service))
         {
@@ -54,7 +54,7 @@ internal sealed partial class QtWorkspaceSession
 
     internal bool ShowCallNotice(string message)
     {
-        if (_call is not { } call || _callOwnerLocked()) return false;
+        if (_call is not { } call || _isLocked()) return false;
         call.Notice = message;
         QueueCallRefresh();
         return true;
@@ -66,8 +66,8 @@ internal sealed partial class QtWorkspaceSession
 
     private void QueueCallRefresh()
     {
-        if (_view == 0 || _call is null || _callRefresh is not null || _callDispatcher.HasShutdownStarted) return;
-        _callRefresh = _callDispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
+        if (_view == 0 || _call is null || _callRefresh is not null || _dispatcher.HasShutdownStarted) return;
+        _callRefresh = _dispatcher.BeginInvoke(DispatcherPriority.DataBind, new Action(() =>
         {
             _callRefresh = null;
             RefreshCall();
@@ -78,7 +78,7 @@ internal sealed partial class QtWorkspaceSession
     {
         if (_call is not { } call) return;
         var service = call.Service;
-        if (_view == 0 || _callOwnerLocked() || service.State == CallState.Idle ||
+        if (_view == 0 || _isLocked() || service.State == CallState.Idle ||
             (service.State != CallState.Ended && service.CurrentCallId != call.Id))
         {
             ClearCall();
@@ -134,7 +134,7 @@ internal sealed partial class QtWorkspaceSession
 
     private bool HandleCallAction(JsonElement payload)
     {
-        if (_call is not { } call || _view == 0 || _callOwnerLocked() || payload.GetProperty("id").GetString() != call.Id ||
+        if (_call is not { } call || _view == 0 || _isLocked() || payload.GetProperty("id").GetString() != call.Id ||
             call.Service.CurrentCallId != call.Id || call.Service.State is CallState.Idle or CallState.Ended) return false;
         var action = payload.GetProperty("action").GetString();
         if (action == "surface") return PresentCallVideo(call, payload);
@@ -167,13 +167,13 @@ internal sealed partial class QtWorkspaceSession
         {
             try
             {
-                if (ReferenceEquals(_call, call) && !_callOwnerLocked() && service.CurrentCallId == call.Id)
+                if (ReferenceEquals(_call, call) && !_isLocked() && service.CurrentCallId == call.Id)
                     await operation();
             }
             catch (Exception error) when (error is InvalidOperationException or IOException or TimeoutException or ExternalException or OperationCanceledException)
             {
                 Trace.TraceWarning("Qt call operation failed ({0}).", error.GetType().Name);
-                if (ReferenceEquals(_call, call) && !_callOwnerLocked()) ShowCallNotice(AppStrings.Get("UiCallFailed"));
+                if (ReferenceEquals(_call, call) && !_isLocked()) ShowCallNotice(AppStrings.Get("UiCallFailed"));
             }
             finally
             {

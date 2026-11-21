@@ -32,9 +32,9 @@ internal sealed partial class QtWorkspaceSession
         var generation = payload.GetProperty("generation").GetInt64();
         if (action == 18)
         {
-            if (peer is null || _attachmentModel.SelectedConversation?.Uuid != peer ||
-                !_attachmentModel.IsChatContentVisible || _attachmentModel.HasMessageEdit ||
-                _attachmentModel.CaptureConfirmedMediaBatchSender() is not { } sender) return false;
+            if (peer is null || _model.SelectedConversation?.Uuid != peer ||
+                !_model.IsChatContentVisible || _model.HasMessageEdit ||
+                _model.CaptureConfirmedMediaBatchSender() is not { } sender) return false;
             ClearAttachmentReview();
             _attachmentReview = new AttachmentReview(peer, generation, sender);
             return true;
@@ -43,12 +43,12 @@ internal sealed partial class QtWorkspaceSession
         if (action == 21) { ClearAttachmentReview(); return true; }
         if (action == 20)
         {
-            if (review.PreparationId is { } preparation) _attachmentModel.CancelPreparation(preparation);
+            if (review.PreparationId is { } preparation) _model.CancelPreparation(preparation);
             return true;
         }
         if (!CanUseAttachmentReview(review) || review.Busy || review.Editing) return false;
         if (action is 29 or 30) return EditAttachmentSelection(review, action, payload);
-        if (!_attachmentModel.CanCompose) return false;
+        if (!_model.CanCompose) return false;
 
         var paths = Strings(payload.GetProperty("paths"));
         var captions = Strings(payload.GetProperty("captions"));
@@ -90,13 +90,13 @@ internal sealed partial class QtWorkspaceSession
 
     internal void TrackAttachmentWork(Task operation)
     {
-        var previous = _attachmentModel.WorkspaceAttachmentCompletion;
-        _attachmentModel.WorkspaceAttachmentCompletion = previous.IsCompletedSuccessfully ? operation : Task.WhenAll(previous, operation);
+        var previous = _model.WorkspaceAttachmentCompletion;
+        _model.WorkspaceAttachmentCompletion = previous.IsCompletedSuccessfully ? operation : Task.WhenAll(previous, operation);
     }
 
     private bool CanUseAttachmentReview(AttachmentReview review) =>
         _view != 0 && IsVisible(_view) && ReferenceEquals(_attachmentReview, review) &&
-        _attachmentModel.IsChatContentVisible && _attachmentModel.SelectedConversation?.Uuid == review.Peer;
+        _model.IsChatContentVisible && _model.SelectedConversation?.Uuid == review.Peer;
 
     private async Task SendAttachmentAsync(AttachmentReview review, string[] paths, MediaSendChoice choice)
     {
@@ -123,7 +123,7 @@ internal sealed partial class QtWorkspaceSession
     private void UpdateAttachmentReview()
     {
         if (_attachmentReview is not { } review || !CanUseAttachmentReview(review) || !review.Busy) return;
-        var progress = _attachmentModel.PendingPreparations.FirstOrDefault(row => row.Id == review.PreparationId);
+        var progress = _model.PendingPreparations.FirstOrDefault(row => row.Id == review.PreparationId);
         if (progress is not null) PresentAttachment(review, progress.Status, progress.Progress.CanCancel);
     }
 
@@ -139,7 +139,7 @@ internal sealed partial class QtWorkspaceSession
         var review = _attachmentReview;
         _attachmentReview = null;
         if (review is null) return;
-        if (review.PreparationId is { } preparation) _attachmentModel.CancelPreparation(preparation);
+        if (review.PreparationId is { } preparation) _model.CancelPreparation(preparation);
         try { review.Editor?.Close(); }
         finally { if (!review.Busy) ClearAttachmentEdits(review); }
     }

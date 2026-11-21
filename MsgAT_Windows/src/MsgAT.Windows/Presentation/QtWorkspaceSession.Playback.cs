@@ -32,7 +32,7 @@ internal sealed partial class QtWorkspaceSession
                 var player = new EncryptedMediaView(item.Mime, () =>
                 {
                     token.ThrowIfCancellationRequested();
-                    if (!_attachmentModel.CanReadAttachment(item)) throw new FileNotFoundException();
+                    if (!_model.CanReadAttachment(item)) throw new FileNotFoundException();
                     return item.OpenMedia();
                 }, item.AttachmentInfo?.Size, () => DismissAttachmentView(view), showClose: false,
                     movePreview: direction =>

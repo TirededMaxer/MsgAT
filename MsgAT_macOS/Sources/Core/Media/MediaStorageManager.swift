@@ -6,6 +6,9 @@ import SQLCipher
 import CryptoKit
 import Darwin
 import UniformTypeIdentifiers
+#if SWIFT_PACKAGE
+import MsgATNativeSecurity
+#endif
 
 enum MediaSendSource: Sendable {
     case file(URL)

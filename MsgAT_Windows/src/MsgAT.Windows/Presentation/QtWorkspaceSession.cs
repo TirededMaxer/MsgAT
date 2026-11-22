@@ -25,7 +25,10 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     Func<QtMessageCollectionAction, Task> changeMessages)
 {
     private const string Bridge = "msgat_desktop_ui";
-    private static readonly string RuntimeDirectory = Path.Combine(AppContext.BaseDirectory, "qt");
+    // The self-extracting bundle can set AppContext.BaseDirectory to its extraction directory.
+    // The separately deployed Qt runtime lives beside the executable.
+    private static readonly string RuntimeDirectory = Path.Combine(
+        Path.GetDirectoryName(Environment.ProcessPath) ?? AppContext.BaseDirectory, "qt");
     private static readonly Lazy<nint> BridgeHandle = new(LoadBridge);
     private readonly HashSet<INotifyPropertyChanged> _observed = [];
     private readonly QtWorkspaceFrame _frames = new();

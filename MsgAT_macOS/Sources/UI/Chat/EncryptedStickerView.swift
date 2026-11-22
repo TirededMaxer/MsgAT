@@ -87,6 +87,7 @@ struct EncryptedStickerView:NSViewRepresentable {
     let reference:String
     var gif: AttachmentMetadata? = nil
     var onFailure: (() -> Void)? = nil
+    var onSize: ((CGSize) -> Void)? = nil
     func makeNSView(context:Context)->StickerCanvas {
         let view = StickerCanvas()
         updateNSView(view, context: context)
@@ -94,6 +95,7 @@ struct EncryptedStickerView:NSViewRepresentable {
     }
     func updateNSView(_ view:StickerCanvas,context:Context){
         view.onFailure = onFailure
+        view.onSize = onSize
         view.setPlaybackPaused(playbackPaused)
         view.setReference(reference, gif: gif)
     }
@@ -107,6 +109,8 @@ final class StickerCanvas:NSView {
     private var gif: AttachmentMetadata?
     private var observers=[NSObjectProtocol]();private var generation=0;private var loading=false;private var settled=false;private var failed=false;private var ownsSlot=false;private var ended=false
     var onFailure: (() -> Void)?
+    var onSize: ((CGSize) -> Void)?
+    private var reportedSize = false
     private var playbackPaused = false
     override init(frame:NSRect){super.init(frame:frame);wantsLayer=true;layer?.contentsGravity = .resizeAspect}
     required init?(coder:NSCoder){fatalError("init(coder:) has not been implemented")}
@@ -123,6 +127,7 @@ final class StickerCanvas:NSView {
         settled = false
         failed = false
         ended = false
+        reportedSize = false
         layer?.contents = nil
         updatePlayback()
     }
@@ -163,6 +168,10 @@ final class StickerCanvas:NSView {
         Task { @MainActor in
             do {let (image,delay,animated)=try await EncryptedMediaWork.run {try frames.next()}
                 guard self.generation==version else {return};self.layer?.contents=image
+                if !self.reportedSize, let onSize = self.onSize {
+                    self.reportedSize = true
+                    onSize(CGSize(width: image.width, height: image.height))
+                }
                 if animated {self.timer=Timer.scheduledTimer(withTimeInterval:delay,repeats:false){[weak self]_ in self?.next()}}
                 else {self.settled=true;self.stop()}
             }catch {
@@ -186,6 +195,6 @@ final class StickerCanvas:NSView {
             }
         } else if !loading {releaseSlot()}
     }
-    func shutdown(){ended=true;onFailure=nil;observers.forEach(NotificationCenter.default.removeObserver);observers=[];stop();layer?.contents=nil}
+    func shutdown(){ended=true;onFailure=nil;onSize=nil;observers.forEach(NotificationCenter.default.removeObserver);observers=[];stop();layer?.contents=nil}
     deinit {timer?.invalidate();retry?.invalidate();observers.forEach(NotificationCenter.default.removeObserver)}
 }

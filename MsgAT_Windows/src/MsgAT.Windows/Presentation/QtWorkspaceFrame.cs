@@ -162,7 +162,9 @@ internal sealed class QtWorkspaceFrame
                 canEdit = model.CanCompose && row.CanEditContent, canRevoke = row.CanModify,
                 canRetry = row.CanRetrySend, retrying = row.IsRetryingSend,
                 canCancelSend = row.IsSending,
-                metadata = Join(row.EditedText.Trim(), row.ShortTimeText, ConversationSummary.ReceiptMark(row.Receipt)),
+                metadata = Join(row.EditedText.Trim(), row.ShortTimeText),
+                receiptStatus = row.ReceiptStatus, receiptLabel = row.StatusName,
+                mediaFooter = row.UsesVisualMediaFooter,
                 accessible = Join(quote, body, media.Length == 0 ? "" : filename, preview?.Title ?? "", row.EditedText.Trim(), row.TimeText, row.StatusName)
             };
         });

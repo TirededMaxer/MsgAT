@@ -221,6 +221,7 @@ struct EncryptedAttachmentCard: View {
     @Environment(\.chatInlineAudio) private var inlineAudio
     @State private var media: AttachmentMetadata?
     @State private var image: NSImage?
+    @State private var stickerDimensions: CGSize?
     @State private var progress: AttachmentProgress?
     @State private var failed = false
     @State private var cacheRevision = 0
@@ -228,7 +229,13 @@ struct EncryptedAttachmentCard: View {
     @State private var openRequest: Task<Void, Never>?
 
     private var inlineSize: CGSize {
-        if media?.isSticker == true { return CGSize(width: 112, height: 112) }
+        if media?.isSticker == true {
+            guard let source = stickerDimensions, source.width > 0, source.height > 0 else {
+                return CGSize(width: 132, height: 132)
+            }
+            let scale = min(132 / max(source.width, source.height), max(1, 30 / min(source.width, source.height)))
+            return CGSize(width: max(1, (source.width * scale).rounded()), height: max(1, (source.height * scale).rounded()))
+        }
         guard let source = image?.size, source.width > 0, source.height > 0 else {
             return CGSize(width: 224, height: media?.isVideo == true ? 126 : 168)
         }
@@ -308,7 +315,7 @@ struct EncryptedAttachmentCard: View {
                     }
                 } label: {
                     if let media,media.isSticker,media.available {
-                        EncryptedStickerView(reference: media.reference)
+                        EncryptedStickerView(reference: media.reference, onSize: { stickerDimensions = $0 })
                             .frame(width: albumTile ? nil : inlineSize.width, height: albumTile ? 112 : inlineSize.height)
                             .frame(maxWidth: albumTile ? .infinity : nil)
                     } else if let image {
@@ -509,7 +516,10 @@ struct EncryptedAttachmentCard: View {
                 try EncryptedObjectStore.shared.metadata(message.content, messageID: message.messageId)
             }
             guard !Task.isCancelled else { return }
-            if value?.available != true || value?.reference != media?.reference { image = nil }
+            if value?.available != true || value?.reference != media?.reference {
+                image = nil
+                stickerDimensions = nil
+            }
             media = value; progress = SecureMessaging.shared.attachmentProgress(message.messageId)
             if let value, value.available, value.isVideo {
                 let decoded = try? await EncryptedMediaWork.runWhileVisible { try encryptedMediaThumbnail(value, edge: 640) }

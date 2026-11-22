@@ -46,7 +46,10 @@ public:
         ReplyText,
         InlineMedia,
         InlineMediaCount,
-        InlineMediaStatus
+        InlineMediaStatus,
+        ReceiptStatus,
+        ReceiptLabel,
+        MediaFooter
     };
 
     explicit MessageTimeline(QWidget *parent = nullptr);
@@ -54,6 +57,7 @@ public:
     QList<QModelIndex> readableRows() const;
     QString richAction(const QModelIndex &index, QPoint point) const;
     QString mediaTarget(const QModelIndex &index, QPoint point) const;
+    bool retryReceiptContains(const QModelIndex &index, QPoint point) const;
     QStringList visibleMedia() const;
     void retainMedia(const QStringList &ids);
     void showMedia(const QString &id, const QImage &image);

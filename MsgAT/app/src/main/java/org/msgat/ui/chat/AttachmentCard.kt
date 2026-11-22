@@ -54,6 +54,13 @@ private fun inlineMediaSize(source: IntSize?, video: Boolean): IntSize {
     else IntSize((longEdge * aspect).roundToInt(), longEdge)
 }
 
+private fun inlineStickerSize(source: IntSize?): IntSize {
+    if (source == null || source.width <= 0 || source.height <= 0) return IntSize(132, 132)
+    val scale = minOf(132.0 / maxOf(source.width, source.height), maxOf(1.0, 30.0 / minOf(source.width, source.height)))
+    return IntSize((source.width * scale).roundToInt().coerceAtLeast(1),
+        (source.height * scale).roundToInt().coerceAtLeast(1))
+}
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun AttachmentCard(
@@ -123,6 +130,7 @@ internal fun AttachmentCard(
         }
         val dimensions = if (media?.isVideo == true) videoPoster?.let { IntSize(it.width, it.height) } else imageDimensions
         val singleSize = inlineMediaSize(dimensions, media?.isVideo == true)
+        val stickerSize = inlineStickerSize(imageDimensions)
         val cropped = compact || dimensions?.let {
             it.width > it.height * 2.5 || it.height > it.width * 2.0
         } == true
@@ -132,7 +140,7 @@ internal fun AttachmentCard(
                 if (gallerySelected != null) selected = gallerySelected
             }
             albumTile -> Modifier.fillMaxWidth().height(112.dp)
-            media?.isSticker == true -> Modifier.width(112.dp).aspectRatio(1f)
+            media?.isSticker == true -> Modifier.width(stickerSize.width.dp).aspectRatio(stickerSize.width.toFloat() / stickerSize.height)
             visual -> Modifier.width(singleSize.width.dp).aspectRatio(singleSize.width.toFloat() / singleSize.height)
             else -> Modifier.width(230.dp).heightIn(min = 72.dp)
         }
@@ -189,7 +197,7 @@ internal fun AttachmentCard(
                     } else Modifier
                     EncryptedImage(media, Modifier.matchParentSize().then(trackOrigin),
                         fitToViewport = media.isSticker || !cropped,
-                        onImageSize = if (!compact && !media.isSticker) ({ imageDimensions = it }) else null,
+                        onImageSize = if (!compact) ({ imageDimensions = it }) else null,
                         onStillBitmap = if (canAnimate) ({ thumbnail = it }) else null,
                         pauseStickerPlayback = pauseStickerPlayback)
                 } else if (media?.available == true && media.isVideo) {

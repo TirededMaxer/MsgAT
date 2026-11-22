@@ -437,19 +437,25 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
             applyMessageAction(QStringLiteral("openCard"), id);
         reportHistoryViewport();
     };
-    connect(messages_, &QListView::clicked, this, [this, openPreview](const QModelIndex &index) {
+    connect(messages_, &QListView::clicked, this, [this, openPreview, openMessageMenu](const QModelIndex &index) {
         if (selecting_) {
             const bool extend = QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
             applyMessageAction(QStringLiteral("toggleSelection"), history_->idAt(index), extend);
             return;
         }
         const auto point = messages_->viewport()->mapFromGlobal(QCursor::pos());
+        if (messages_->retryReceiptContains(index, point)) {
+            openMessageMenu(index, messages_->viewport()->mapToGlobal(point));
+            return;
+        }
         const auto action = messages_->richAction(index, point);
         if (!action.isEmpty()) {
             applyMessageAction(QStringLiteral("richText"), history_->idAt(index), false, action);
             return;
         }
-        openPreview(index, messages_->previewContains(index, point), messages_->mediaTarget(index, point));
+        const auto tile = messages_->mediaTarget(index, point);
+        if (!tile.isEmpty() || index.data(MessageTimeline::InlineMedia).value<QJsonArray>().isEmpty())
+            openPreview(index, messages_->previewContains(index, point), tile);
     });
     connect(messages_, &QListView::activated, this, [this, openPreview](const QModelIndex &index) {
         if (!selecting_) openPreview(index, true);

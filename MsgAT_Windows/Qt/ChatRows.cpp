@@ -75,6 +75,9 @@ QVariant ChatRows::data(const QModelIndex &index, int role) const {
     case MessageTimeline::ContinuesFromPrevious: return row.value("joinsAbove").toBool();
     case MessageTimeline::ContinuesInNext: return row.value("joinsBelow").toBool();
     case MessageTimeline::Metadata: return row.value("metadata").toString();
+    case MessageTimeline::ReceiptStatus: return row.value("receiptStatus").toInt(4);
+    case MessageTimeline::ReceiptLabel: return row.value("receiptLabel").toString();
+    case MessageTimeline::MediaFooter: return row.value("mediaFooter").toBool();
     case MessageTimeline::DayLabel: return row.value("day").toString();
     case MessageTimeline::UnreadDivider: return row.value("unread").toString();
     case MessageTimeline::SearchHighlight: return row.value("highlighted").toBool();

@@ -6,6 +6,7 @@
 #include <QAbstractTextDocumentLayout>
 #include <QCache>
 #include <QFontDatabase>
+#include <QHelpEvent>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QSet>
@@ -17,6 +18,7 @@
 #include <QStyledItemDelegate>
 #include <QTextDocument>
 #include <QTimer>
+#include <QToolTip>
 #include <QtMath>
 #include <memory>
 
@@ -24,7 +26,7 @@ namespace MsgAT {
 namespace {
 
 QPainterPath bubbleShape(QRectF rect, bool right, bool joinsAbove, bool joinsBelow) {
-    const qreal full = qMin(14.0, qMin(rect.width(), rect.height()) / 2.0);
+    const qreal full = qMin(16.0, qMin(rect.width(), rect.height()) / 2.0);
     const qreal small = qMin(4.0, full);
     const qreal tl = !right && joinsAbove ? small : full;
     const qreal tr = right && joinsAbove ? small : full;
@@ -101,7 +103,13 @@ struct MediaTile {
     bool available, sticker, video;
 };
 
-QSize inlineMediaSize(const QSize &source, bool video) {
+QSize inlineMediaSize(const QSize &source, bool video, bool sticker) {
+    if (sticker) {
+        if (source.isEmpty()) return {132, 132};
+        const auto scale = qMin(132.0 / qMax(source.width(), source.height()),
+                                qMax(1.0, 30.0 / qMin(source.width(), source.height())));
+        return {qMax(1, qRound(source.width() * scale)), qMax(1, qRound(source.height() * scale))};
+    }
     if (source.isEmpty()) return {224, video ? 126 : 168};
     const auto aspect = qBound(0.5, double(source.width()) / source.height(), 2.5);
     const auto longEdge = qBound(96, qMax(source.width(), source.height()), 224);
@@ -109,16 +117,47 @@ QSize inlineMediaSize(const QSize &source, bool video) {
                        : QSize(qRound(longEdge * aspect), longEdge);
 }
 
+void paintReceipt(QPainter &painter, const QRectF &rect, int status, bool overMedia, const QPalette &palette) {
+    const auto center = rect.center();
+    const auto neutral = overMedia ? QColor(205, 212, 216) : palette.color(QPalette::PlaceholderText);
+    const auto delivered = overMedia ? QColor(121, 223, 188) : palette.color(QPalette::Accent);
+    const auto failed = overMedia || palette.color(QPalette::Window).lightness() < 128 ? QColor(255, 158, 163) : QColor(174, 39, 56);
+    painter.setPen(QPen(status == -1 ? failed : status >= 2 ? delivered : neutral,
+                        1.35, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    if (status <= 0) {
+        painter.drawEllipse(center, 4.9, 4.9);
+        if (status == -1) {
+            painter.drawLine(center + QPointF(0, -2.5), center + QPointF(0, 0.6));
+            painter.drawPoint(center + QPointF(0, 2.4));
+        } else {
+            QPainterPath hand(center + QPointF(0, -2.6));
+            hand.lineTo(center);
+            hand.lineTo(center + QPointF(2.2, 1.1));
+            painter.drawPath(hand);
+        }
+        return;
+    }
+    auto check = [&](int offset) {
+        QPainterPath stroke(center + QPointF(-3.6 + offset, 0));
+        stroke.lineTo(center + QPointF(-1.0 + offset, 2.6));
+        stroke.lineTo(center + QPointF(4.2 + offset, -2.8));
+        painter.drawPath(stroke);
+    };
+    check(status == 3 ? -2 : 0);
+    if (status == 3) check(2);
+}
+
 struct MessageLayout {
     QTextDocument body;
     std::unique_ptr<QTextDocument> preview;
     QFont smallFont;
-    QRectF bubble, text, previewRect, footer;
+    QRectF bubble, bounds, text, previewRect, footer, footerPill, receipt;
     QList<MediaTile> media;
     int moreMedia = 0;
     QStringList labels;
     int labelHeight = 0, height = 0;
-    bool right, revoked, stickerOnly = false;
+    bool right, revoked, attachmentCard = false;
 
     MessageLayout(int width, const QStyleOptionViewItem &option, const QModelIndex &index, const MessageTimeline &view)
         : smallFont(option.font),
@@ -179,8 +218,8 @@ struct MessageLayout {
             const auto tileWidth = qMax(1, (mediaWidth - 4) / columns);
             tile = {tileWidth, qRound(tileWidth * 0.77)};
         } else if (!images.isEmpty()) {
-            const auto preferred = singleSticker ? QSize(112, 112) :
-                inlineMediaSize(view.mediaSize(single.value("id").toString()), single.value("video").toBool());
+            const auto preferred = inlineMediaSize(view.mediaSize(single.value("id").toString()),
+                                                   single.value("video").toBool(), singleSticker);
             tile = preferred.scaled(QSize(maxText, preferred.height()), Qt::KeepAspectRatio).expandedTo({1, 1});
             mediaWidth = tile.width();
         }
@@ -189,44 +228,66 @@ struct MessageLayout {
         const int mediaRows = (int(images.size()) + columns - 1) / columns;
         const int mediaHeight = mediaRows ? mediaRows * tileHeight + (mediaRows - 1) * 4 : 0;
         const bool hasText = !body.isEmpty();
-        stickerOnly = singleSticker && !hasText && !preview;
         const int bodyHeight = hasText ? textHeight : 0;
         const auto meta = index.data(MessageTimeline::Metadata).toString();
-        const int metaWidth = meta.isEmpty() ? 0 :
-            qMin(maxText, qCeil(QFontMetricsF(smallFont).horizontalAdvance(meta)) + 2);
-        const bool inlineFooter = images.isEmpty() && !preview && !meta.isEmpty() && body.lineCount() == 1 &&
+        const auto status = index.data(MessageTimeline::ReceiptStatus);
+        const int markWidth = status.isValid() && status.toInt() >= -1 && status.toInt() <= 3 ? 20 : 0;
+        const int metaWidth = qMin(maxText, (meta.isEmpty() ? 0 :
+            qCeil(QFontMetricsF(smallFont).horizontalAdvance(meta)) + 2) + markWidth);
+        attachmentCard = images.isEmpty() && index.data(MessageTimeline::HasAttachment).toBool();
+        const bool footerInside = images.isEmpty() && !attachmentCard;
+        const bool footerOverMedia = !hasText && !preview && !singleSticker && !single.isEmpty() &&
+            index.data(MessageTimeline::MediaFooter).toBool() && mediaWidth >= metaWidth + 18 && tileHeight >= small.height() + 24;
+        const bool inlineFooter = footerInside && !preview && metaWidth > 0 && body.lineCount() == 1 &&
                                   textWidth + 9 + metaWidth <= maxText;
         const int inner = inlineFooter ? textWidth + 9 + metaWidth :
-            qMax(mediaWidth, qMax(hasText ? textWidth : 0, qMax(metaWidth, previewWidth)));
+            qMax(hasText ? textWidth : 0, qMax(footerInside ? metaWidth : 0, previewWidth));
         if (preview) preview->setTextWidth(inner);
         const int previewHeight = preview ? qCeil(preview->size().height()) : 0;
         const int previewMargin = preview && hasText ? 7 : 0;
         const bool previewAbove = index.data(MessageTimeline::LinkPreviewAbove).toBool();
-        const int mediaMargin = mediaHeight && (hasText || preview) ? 8 : 0;
-        const int footerHeight = !meta.isEmpty() && !inlineFooter ? small.height() + 4 : 0;
+        const int mediaMargin = mediaHeight && (hasText || preview) ? 5 : 0;
+        const int footerHeight = metaWidth > 0 && !inlineFooter && footerInside ? small.height() + 3 : 0;
         const int w = qMin(available, inner + 2 * padding);
-        const int h = (inlineFooter ? qMax(textHeight, small.height()) : bodyHeight) +
-            mediaHeight + mediaMargin + previewHeight + previewMargin + footerHeight + 16;
-        bubble = QRectF(right ? width - margin - w : margin, top, w, h);
+        const int bubbleTop = top + mediaHeight + mediaMargin;
+        const int bubbleHeight = (inlineFooter ? qMax(textHeight, small.height()) : bodyHeight) +
+            previewHeight + previewMargin + footerHeight + 14;
+        if (hasText || preview || images.isEmpty()) bubble = QRectF(right ? width - margin - w : margin, bubbleTop, w, bubbleHeight);
         const int left = int(bubble.left()) + padding;
-        const int contentY = top + 8 + mediaHeight + mediaMargin;
+        const int contentY = bubbleTop + 7;
         const bool rtl = option.direction == Qt::RightToLeft;
         text = QRectF(inlineFooter && rtl ? left + metaWidth + 9 : left,
                       contentY + (previewAbove ? previewHeight + previewMargin : 0),
                       inlineFooter ? textWidth : inner, bodyHeight);
         if (preview) previewRect = QRectF(left, contentY + (previewAbove ? 0 : bodyHeight + previewMargin), inner, previewHeight);
         if (!inlineFooter) body.setTextWidth(inner);
-        footer = QRectF(rtl ? left : left + inner - metaWidth, bubble.bottom() - 8 - small.height(),
-                        metaWidth, small.height());
+        const int mediaLeft = right ? width - margin - mediaWidth : margin;
         for (int i = 0; i < images.size(); ++i) {
             const auto image = images[i].toObject();
-            media.append({QRectF(left + (i % columns) * (tileWidth + 4),
-                                 top + 8 + (i / columns) * (tileHeight + 4), tileWidth, tileHeight),
+            const int column = rtl ? columns - 1 - i % columns : i % columns;
+            media.append({QRectF(mediaLeft + column * (tileWidth + 4),
+                                 top + (i / columns) * (tileHeight + 4), tileWidth, tileHeight),
                           image.value("id").toString(), image.value("label").toString(),
                           image.value("available").toBool(), image.value("sticker").toBool(), image.value("video").toBool()});
         }
+        bounds = bubble;
+        if (mediaHeight > 0) bounds = bounds.united(QRectF(mediaLeft, top, mediaWidth, mediaHeight));
+        if (metaWidth > 0) {
+            const int inset = 10;
+            const int x = footerInside ? (rtl ? left : left + inner - metaWidth) : footerOverMedia ?
+                (rtl ? mediaLeft + inset : mediaLeft + mediaWidth - metaWidth - inset) :
+                (right ? width - margin - metaWidth : margin);
+            const int y = footerInside ? int(bubble.bottom()) - 7 - small.height() : footerOverMedia ?
+                top + tileHeight - small.height() - 8 : qCeil(bounds.bottom()) + 3;
+            const QRectF area(x, y, metaWidth, small.height());
+            const int reserved = qMin(markWidth, metaWidth);
+            footer = area.adjusted(rtl ? reserved : 0, 0, rtl ? 0 : -reserved, 0);
+            if (reserved > 0) receipt = QRectF(rtl ? x : area.right() - reserved, y, reserved, small.height());
+            if (footerOverMedia) footerPill = area.adjusted(-5, -2, 5, 2);
+            bounds = bounds.united(area);
+        }
         moreMedia = qMax(0, index.data(MessageTimeline::InlineMediaCount).toInt() - int(media.size()));
-        height = qCeil(bubble.bottom()) + (index.data(MessageTimeline::ContinuesInNext).toBool() ? 1 : 6);
+        height = qCeil(bounds.bottom()) + (index.data(MessageTimeline::ContinuesInNext).toBool() ? 1 : 6);
     }
 };
 
@@ -243,8 +304,23 @@ public:
         }
     }
 
-    QRectF bubbleBounds(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row) const {
-        return layout(row.width(), option, index).bubble.translated(row.topLeft());
+    QRectF messageBounds(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row) const {
+        return layout(row.width(), option, index).bounds.translated(row.topLeft());
+    }
+
+    bool receiptContains(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row, QPoint point) const {
+        return layout(row.width(), option, index).receipt.contains(point - row.topLeft());
+    }
+
+    bool helpEvent(QHelpEvent *event, QAbstractItemView *view, const QStyleOptionViewItem &option,
+                   const QModelIndex &index) override {
+        const auto label = index.data(MessageTimeline::ReceiptLabel).toString();
+        if (event && view && !label.isEmpty() && event->type() == QEvent::ToolTip &&
+            receiptContains(option, index, option.rect, event->pos())) {
+            QToolTip::showText(event->globalPos(), label, view);
+            return true;
+        }
+        return QStyledItemDelegate::helpEvent(event, view, option, index);
     }
 
     bool previewContains(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row, QPoint point) const {
@@ -288,13 +364,14 @@ public:
             p->drawText(QRect(0, top, option.rect.width(), row.labelHeight), Qt::AlignCenter, label);
             top += row.labelHeight;
         }
-        if (!row.revoked) {
+        const bool outlined = index.data(MessageTimeline::SearchHighlight).toBool() ||
+            (option.state.testFlag(QStyle::State_HasFocus) && option.state.testFlag(QStyle::State_KeyboardFocusChange));
+        if (!row.revoked && !row.bubble.isEmpty()) {
             const auto path = bubbleShape(row.bubble, row.right,
                 index.data(MessageTimeline::ContinuesFromPrevious).toBool(),
                 index.data(MessageTimeline::ContinuesInNext).toBool());
-            if (!row.stickerOnly || selected)
-                p->fillPath(path, colors.brush(selected ? QPalette::Highlight :
-                                              outgoing ? QPalette::AlternateBase : QPalette::Base));
+            p->fillPath(path, colors.brush(selected ? QPalette::Highlight : row.attachmentCard ? QPalette::Button :
+                                          outgoing ? QPalette::AlternateBase : QPalette::Base));
             if (index.data(MessageTimeline::SearchHighlight).toBool())
                 p->strokePath(path, QPen(colors.color(QPalette::Accent), 2));
             if (option.state.testFlag(QStyle::State_HasFocus) &&
@@ -348,6 +425,7 @@ public:
                 p->drawText(tile.bounds, Qt::AlignCenter, QStringLiteral("+%1").arg(row.moreMedia));
             }
             p->restore();
+            if (outlined || selected) p->strokePath(clip, QPen(colors.color(QPalette::Accent), 2));
         }
         p->save();
         p->translate(row.text.topLeft());
@@ -364,10 +442,20 @@ public:
             p->restore();
         }
         if (!row.revoked) {
-            p->setPen(colors.color(selected ? QPalette::HighlightedText : QPalette::PlaceholderText));
-            const auto footer = QFontMetricsF(row.smallFont).elidedText(index.data(MessageTimeline::Metadata).toString(),
-                                                                        Qt::ElideRight, row.footer.width());
-            p->drawText(row.footer, Qt::AlignCenter, footer);
+            const bool overMedia = !row.footerPill.isEmpty();
+            if (overMedia) {
+                p->setPen(Qt::NoPen);
+                p->setBrush(QColor(0, 0, 0, 184));
+                p->drawRoundedRect(row.footerPill, 8, 8);
+            }
+            p->setFont(row.smallFont);
+            p->setPen(overMedia ? QColor(Qt::white) : colors.color(QPalette::PlaceholderText));
+            if (!row.footer.isEmpty()) {
+                const auto footer = QFontMetricsF(row.smallFont).elidedText(index.data(MessageTimeline::Metadata).toString(),
+                                                                            Qt::ElideRight, row.footer.width());
+                p->drawText(row.footer, Qt::AlignCenter, footer);
+            }
+            if (!row.receipt.isEmpty()) paintReceipt(*p, row.receipt, index.data(MessageTimeline::ReceiptStatus).toInt(), overMedia, colors);
         }
         p->restore();
     }
@@ -454,6 +542,14 @@ QString MessageTimeline::mediaTarget(const QModelIndex &index, QPoint point) con
     return static_cast<const MessageDelegate *>(itemDelegate())->mediaAt(option, index, visualRect(index), point);
 }
 
+bool MessageTimeline::retryReceiptContains(const QModelIndex &index, QPoint point) const {
+    if (!index.isValid() || !index.data(CanRetry).toBool()) return false;
+    QStyleOptionViewItem option;
+    initViewItemOption(&option);
+    const auto *delegate = static_cast<const MessageDelegate *>(itemDelegate());
+    return delegate->receiptContains(option, index, visualRect(index), point);
+}
+
 QStringList MessageTimeline::visibleMedia() const {
     QStringList ids;
     const auto first = indexAt(QPoint(1, 1));
@@ -499,9 +595,10 @@ void MessageTimeline::showMedia(const QString &id, const QImage &image) {
         const auto items = index.data(InlineMedia).value<QJsonArray>();
         if (items.size() != 1) continue;
         const auto item = items[0].toObject();
-        if (item.value("id").toString() != id || item.value("sticker").toBool()) continue;
+        if (item.value("id").toString() != id) continue;
         const auto video = item.value("video").toBool();
-        if (inlineMediaSize(previous, video) == inlineMediaSize(image.size(), video)) break;
+        const auto sticker = item.value("sticker").toBool();
+        if (inlineMediaSize(previous, video, sticker) == inlineMediaSize(image.size(), video, sticker)) break;
         static_cast<MessageDelegate *>(itemDelegate())->invalidateRows(index, index);
         if (!mediaRelayoutPending_) {
             mediaRelayoutPending_ = true;
@@ -541,7 +638,7 @@ QList<QModelIndex> MessageTimeline::readableRows() const {
         const auto bounds = visualRect(index);
         if (bounds.top() >= bottom) break;
         if (!index.data(UnreadIncoming).toBool()) continue;
-        const auto bubble = delegate->bubbleBounds(option, index, bounds);
+        const auto bubble = delegate->messageBounds(option, index, bounds);
         const auto visible = qMin<qreal>(bottom, bubble.bottom()) - qMax<qreal>(0, bubble.top());
         if (bubble.height() > 0 && visible >= qMin<qreal>(48, bubble.height())) rows.append(index);
     }

@@ -118,7 +118,8 @@ internal sealed class QtWorkspaceFrame
             return new
             {
                 id = row.MessageId, body = quote.Length == 0 ? body : quote + "\n\n" + body,
-                hasQuote = row.HasReplyQuote, links = MessageLinks(row, hidden), outgoing = row.IsMine, highlighted = row.IsJumpHighlighted ||
+                hasQuote = row.HasReplyQuote, links = MessageLinks(row, hidden), outgoing = row.IsMine,
+                revoked = row.IsRevoked, highlighted = row.IsJumpHighlighted ||
                     row.AlbumMembers.Any(item => item.IsJumpHighlighted), joinsAbove = row.JoinsOlder,
                 joinsBelow = row.JoinsNewer, day = row.TimelineDay,
                 unread = row.StartsUnread ? AppStrings.Get("UiUnreadMessages") : "",

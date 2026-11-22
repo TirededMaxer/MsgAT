@@ -41,11 +41,12 @@ struct MessageLayout {
     QRectF bubble, text, previewRect, footer;
     QStringList labels;
     int labelHeight = 0, height = 0;
-    bool right;
+    bool right, revoked;
 
     MessageLayout(int width, const QStyleOptionViewItem &option, const QModelIndex &index)
         : smallFont(option.font),
-          right(index.data(MessageTimeline::Outgoing).toBool() != (option.direction == Qt::RightToLeft)) {
+          right(index.data(MessageTimeline::Outgoing).toBool() != (option.direction == Qt::RightToLeft)),
+          revoked(index.data(MessageTimeline::Revoked).toBool()) {
         if (smallFont.pointSizeF() > 0) smallFont.setPointSizeF(smallFont.pointSizeF() * 0.86);
         else if (smallFont.pixelSize() > 0) smallFont.setPixelSize(qMax(1, qRound(smallFont.pixelSize() * 0.86)));
         const QFontMetrics small(smallFont);
@@ -56,17 +57,25 @@ struct MessageLayout {
         labelHeight = small.height() + 12;
         const int top = int(labels.size()) * labelHeight + 2;
         const int margin = width >= 420 ? 20 : 8;
-        const int padding = 11;
         const int available = qMax(1, width - 2 * margin);
-        const int maxBubble = qMin(available, qMax(112, qMin(540, qRound(available * 0.81))));
-        const int maxText = qMax(1, maxBubble - 2 * padding);
 
         body.setDocumentMargin(0);
-        body.setDefaultFont(option.font);
+        body.setDefaultFont(revoked ? smallFont : option.font);
         auto wrapping = body.defaultTextOption();
         wrapping.setWrapMode(QTextOption::WrapAtWordBoundaryOrAnywhere);
+        if (revoked) wrapping.setAlignment(Qt::AlignHCenter);
         body.setDefaultTextOption(wrapping);
         body.setPlainText(index.data(Qt::DisplayRole).toString());
+        if (revoked) {
+            body.setTextWidth(available);
+            text = QRectF(margin, top + 2, available, qCeil(body.size().height()));
+            height = qCeil(text.bottom()) + 8;
+            return;
+        }
+
+        const int padding = 11;
+        const int maxBubble = qMin(available, qMax(112, qMin(540, qRound(available * 0.81))));
+        const int maxText = qMax(1, maxBubble - 2 * padding);
         body.setTextWidth(maxText);
         const int textWidth = qBound(1, qCeil(body.idealWidth()), maxText);
         body.setTextWidth(textWidth);
@@ -139,7 +148,8 @@ public:
         const auto &colors = option.palette;
         const bool selected = option.state.testFlag(QStyle::State_Selected) || index.data(MessageTimeline::MessageSelected).toBool();
         const bool outgoing = index.data(MessageTimeline::Outgoing).toBool();
-        const auto ink = colors.color(selected ? QPalette::HighlightedText : QPalette::Text);
+        const auto ink = row.revoked ? colors.color(QPalette::WindowText) :
+                         colors.color(selected ? QPalette::HighlightedText : QPalette::Text);
         p->save();
         p->setClipRect(option.rect, Qt::IntersectClip);
         p->translate(option.rect.topLeft());
@@ -151,16 +161,18 @@ public:
             p->drawText(QRect(0, top, option.rect.width(), row.labelHeight), Qt::AlignCenter, label);
             top += row.labelHeight;
         }
-        const auto path = bubbleShape(row.bubble, row.right,
-            index.data(MessageTimeline::ContinuesFromPrevious).toBool(),
-            index.data(MessageTimeline::ContinuesInNext).toBool());
-        p->fillPath(path, colors.brush(selected ? QPalette::Highlight :
-                                      outgoing ? QPalette::AlternateBase : QPalette::Base));
-        if (index.data(MessageTimeline::SearchHighlight).toBool())
-            p->strokePath(path, QPen(colors.color(QPalette::Accent), 2));
-        if (option.state.testFlag(QStyle::State_HasFocus) &&
-            option.state.testFlag(QStyle::State_KeyboardFocusChange))
-            p->strokePath(path, QPen(ink, 1));
+        if (!row.revoked) {
+            const auto path = bubbleShape(row.bubble, row.right,
+                index.data(MessageTimeline::ContinuesFromPrevious).toBool(),
+                index.data(MessageTimeline::ContinuesInNext).toBool());
+            p->fillPath(path, colors.brush(selected ? QPalette::Highlight :
+                                          outgoing ? QPalette::AlternateBase : QPalette::Base));
+            if (index.data(MessageTimeline::SearchHighlight).toBool())
+                p->strokePath(path, QPen(colors.color(QPalette::Accent), 2));
+            if (option.state.testFlag(QStyle::State_HasFocus) &&
+                option.state.testFlag(QStyle::State_KeyboardFocusChange))
+                p->strokePath(path, QPen(ink, 1));
+        }
         p->save();
         p->translate(row.text.topLeft());
         QAbstractTextDocumentLayout::PaintContext context;
@@ -175,10 +187,12 @@ public:
             row.preview->documentLayout()->draw(p, context);
             p->restore();
         }
-        p->setPen(colors.color(selected ? QPalette::HighlightedText : QPalette::PlaceholderText));
-        const auto footer = QFontMetrics(row.smallFont).elidedText(index.data(MessageTimeline::Metadata).toString(),
-                                                                   Qt::ElideRight, int(row.footer.width()));
-        p->drawText(row.footer, Qt::AlignCenter, footer);
+        if (!row.revoked) {
+            p->setPen(colors.color(selected ? QPalette::HighlightedText : QPalette::PlaceholderText));
+            const auto footer = QFontMetrics(row.smallFont).elidedText(index.data(MessageTimeline::Metadata).toString(),
+                                                                       Qt::ElideRight, int(row.footer.width()));
+            p->drawText(row.footer, Qt::AlignCenter, footer);
+        }
         p->restore();
     }
 

@@ -23,12 +23,24 @@
 #include <QSignalBlocker>
 #include <QSplitter>
 #include <QStackedLayout>
-#include <QStyle>
 #include <QStyleHints>
 #include <QTimer>
 #include <QToolButton>
 
 namespace MsgAT {
+
+namespace {
+
+void setToolbarGlyph(QToolButton *button, const QString &glyph) {
+    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    button->setText(glyph);
+    button->setMinimumWidth(28);
+    auto font = button->font();
+    font.setPointSizeF(13);
+    button->setFont(font);
+}
+
+} // namespace
 
 ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     auto *layout = new QVBoxLayout(this);
@@ -173,7 +185,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     column->addLayout(header);
     back_ = new QToolButton(detail_);
     back_->setAutoRaise(true);
-    back_->setIcon(style()->standardIcon(QStyle::SP_ArrowBack));
+    setToolbarGlyph(back_, QStringLiteral("‹"));
     header->addWidget(back_);
     title_ = new QLabel(detail_);
     title_->setTextFormat(Qt::PlainText);
@@ -211,19 +223,19 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(chatQueueAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("chatQueue"); });
     chatMenuButton_->setMenu(chatMenu);
     header->addWidget(chatMenuButton_);
-    auto historyButton = [this, header](int action, QStyle::StandardPixmap icon) {
+    auto historyButton = [this, header](int action, const QString &glyph) {
         auto *button = new QToolButton(detail_);
         button->setAutoRaise(true);
-        button->setIcon(style()->standardIcon(icon));
+        setToolbarGlyph(button, glyph);
         header->addWidget(button);
         connect(button, &QToolButton::clicked, this, [this, action] {
             if (!locked_ && !selected_.isEmpty()) emit historyRequested(action, selected_);
         });
         return button;
     };
-    older_ = historyButton(6, QStyle::SP_ArrowUp);
-    newer_ = historyButton(7, QStyle::SP_ArrowDown);
-    latest_ = historyButton(8, QStyle::SP_ArrowForward);
+    older_ = historyButton(6, QStringLiteral("↑"));
+    newer_ = historyButton(7, QStringLiteral("↓"));
+    latest_ = historyButton(8, QStringLiteral("⇣"));
     auto *historyNotice = new QHBoxLayout;
     historyError_ = new QLabel(detail_);
     historyError_->setTextFormat(Qt::PlainText);
@@ -350,7 +362,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     selectionLayout->addWidget(selectionMenuButton_);
     cancelSelection_ = new QToolButton(selectionBar_);
     cancelSelection_->setAutoRaise(true);
-    cancelSelection_->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
+    setToolbarGlyph(cancelSelection_, QStringLiteral("×"));
     selectionLayout->addWidget(cancelSelection_);
     column->addWidget(selectionBar_);
     connect(copySelection_, &QAction::triggered, this, [this] { applyMessageAction(QStringLiteral("copySelected")); });
@@ -374,7 +386,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     replyLayout->addLayout(quote, 1);
     cancelReply_ = new QToolButton(replyBar_);
     cancelReply_->setAutoRaise(true);
-    cancelReply_->setIcon(style()->standardIcon(QStyle::SP_DialogCloseButton));
+    setToolbarGlyph(cancelReply_, QStringLiteral("×"));
     replyLayout->addWidget(cancelReply_);
     connect(cancelReply_, &QToolButton::clicked, this, [this] {
         const bool accepted = editTarget_.isEmpty() ? applyMessageAction(QStringLiteral("cancelReply")) :
@@ -394,7 +406,8 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     };
     attachmentButton_ = new QToolButton(detail_);
     attachmentButton_->setAutoRaise(true);
-    attachmentButton_->setIcon(style()->standardIcon(QStyle::SP_DialogOpenButton));
+    setToolbarGlyph(attachmentButton_, QStringLiteral("+"));
+    attachmentButton_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
     attachmentButton_->setPopupMode(QToolButton::InstantPopup);
     auto *addMenu = new QMenu(attachmentButton_);
     chooseFiles_ = addMenu->addAction(QString{});
@@ -422,6 +435,8 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     send_->setFixedSize(36, 36);
     composerBar->addWidget(send_, 0, Qt::AlignBottom);
     deliveryButton_ = new QToolButton(detail_);
+    setToolbarGlyph(deliveryButton_, QStringLiteral("⌄"));
+    deliveryButton_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
     deliveryButton_->setAutoRaise(true);
     deliveryButton_->setPopupMode(QToolButton::InstantPopup);
     auto *delivery = new QMenu(deliveryButton_);
@@ -844,7 +859,8 @@ void ChatWorkspace::presentComposer(const QJsonObject &state, bool changedPeer) 
     const auto summary = delivery.value("summary").toString();
     deliveryButton_->setAccessibleName(summary.isEmpty() ? optionsLabel : optionsLabel + QStringLiteral(" · ") + summary);
     deliveryButton_->setToolTip(deliveryButton_->accessibleName());
-    deliveryButton_->setIcon(style()->standardIcon(summary.isEmpty() ? QStyle::SP_ArrowDown : QStyle::SP_DialogApplyButton));
+    const auto deliveryGlyph = summary.isEmpty() ? QStringLiteral("⌄") : QStringLiteral("✓");
+    if (deliveryButton_->text() != deliveryGlyph) deliveryButton_->setText(deliveryGlyph);
     deliveryButton_->setVisible(editTarget_.isEmpty());
     deliveryButton_->setEnabled(canAttach);
     deliveryOptions_->setText(optionsLabel);

@@ -14,10 +14,13 @@
 #include <QApplication>
 #include <QBoxLayout>
 #include <QComboBox>
+#include <QDragEnterEvent>
+#include <QDropEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QMenu>
+#include <QMimeData>
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
@@ -26,6 +29,7 @@
 #include <QStyleHints>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 
 namespace MsgAT {
 
@@ -40,9 +44,17 @@ void setToolbarGlyph(QToolButton *button, const QString &glyph) {
     button->setFont(font);
 }
 
+QStringList localFiles(const QMimeData &mime) {
+    QStringList paths;
+    for (const auto &url : mime.urls())
+        if (url.isLocalFile()) paths.append(url.toLocalFile());
+    return paths;
+}
+
 } // namespace
 
 ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
+    setAcceptDrops(true);
     auto *layout = new QVBoxLayout(this);
     layout->setContentsMargins(0, 0, 0, 0);
     split_ = new QSplitter(this);
@@ -458,6 +470,16 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     composer_->copySelection = [this](const QString &value) {
         return !locked_ && !selected_.isEmpty() && copyText && copyText(selected_, value);
     };
+    composer_->pasteMedia = [this](const QMimeData &mime) {
+        if (!canReceiveAttachments()) return false;
+        const auto paths = localFiles(mime);
+        if (!paths.isEmpty()) {
+            reportHistoryViewport();
+            attachment_->showFor(selected_, attachmentOptions_, paths);
+            return attachment_->isVisible();
+        }
+        return (mime.hasImage() || mime.hasFormat("image/png")) && openWorkspaceCommand("pasteImage");
+    };
     auto send = [this] {
         if (locked_ || !composer_->acceptsSubmit()) return;
         const auto text = composer_->toPlainText();
@@ -749,12 +771,36 @@ void ChatWorkspace::startCall(bool video) {
     request.fill(0);
 }
 
-void ChatWorkspace::openWorkspaceCommand(const char *command) {
-    if (locked_ || !dialogRequest) return;
+bool ChatWorkspace::openWorkspaceCommand(const char *command) {
+    if (locked_ || !dialogRequest) return false;
     auto request = QJsonDocument(QJsonObject{{"command", QString::fromLatin1(command)},
         {"hwnd", QString::number(qulonglong(window()->winId()), 16)}, {"peer", selected_}}).toJson(QJsonDocument::Compact);
-    dialogRequest(32, request);
+    const bool accepted = dialogRequest(32, request);
     request.fill(0);
+    return accepted;
+}
+
+bool ChatWorkspace::canReceiveAttachments() const {
+    return !locked_ && !selected_.isEmpty() && !attachment_->isVisible() &&
+        attachmentButton_->isEnabled() && composer_->acceptsSubmit();
+}
+
+void ChatWorkspace::dragEnterEvent(QDragEnterEvent *event) {
+    if (canReceiveAttachments() && event->possibleActions().testFlag(Qt::CopyAction) && !localFiles(*event->mimeData()).isEmpty()) {
+        event->setDropAction(Qt::CopyAction);
+        event->accept();
+    }
+}
+
+void ChatWorkspace::dropEvent(QDropEvent *event) {
+    if (!canReceiveAttachments() || !event->possibleActions().testFlag(Qt::CopyAction)) return;
+    const auto paths = localFiles(*event->mimeData());
+    if (paths.isEmpty()) return;
+    reportHistoryViewport();
+    attachment_->showFor(selected_, attachmentOptions_, paths);
+    if (!attachment_->isVisible()) return;
+    event->setDropAction(Qt::CopyAction);
+    event->accept();
 }
 
 bool ChatWorkspace::applyMessageAction(const QString &command, const QString &id, bool extending) {

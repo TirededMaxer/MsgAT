@@ -126,6 +126,11 @@ public partial class MainWindow
             return;
         switch (command)
         {
+            case "pasteImage":
+                var paste = PasteComposerMediaAsync(imageOnly: true);
+                _qtWorkspace?.TrackAttachmentWork(paste);
+                await paste;
+                break;
             case "contacts":
                 var directory = new ContactsDialog(services, peer => OpenConfirmedContactConversation(model, peer));
                 directory.ConfirmOpenChat = peer => ConfirmConversationNavigation(model, peer, directory);

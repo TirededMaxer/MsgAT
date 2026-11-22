@@ -1365,7 +1365,9 @@ public partial class MainWindow : Window
         catch (ExternalException) { return false; }
     }
 
-    private async void PasteComposerMedia()
+    private async void PasteComposerMedia() => await PasteComposerMediaAsync();
+
+    private async Task PasteComposerMediaAsync(bool imageOnly = false)
     {
         if (_exiting || _appLocked || _imeComposing ||
             _viewModel is not { CanCompose: true, SelectedConversation: not null } model) return;
@@ -1373,7 +1375,7 @@ public partial class MainWindow : Window
         {
             var data = Clipboard.GetDataObject();
             if (data is null) return;
-            if (ClipboardFiles(data) is { } files)
+            if (!imageOnly && ClipboardFiles(data) is { } files)
             {
                 await ReviewExternalFilesAsync(files, asFile: false);
                 return;
@@ -1382,7 +1384,7 @@ public partial class MainWindow : Window
             if (pngData is MemoryStream oversizedStream && oversizedStream.Length > 100L * 1024 * 1024 ||
                 pngData is byte[] oversizedBytes && oversizedBytes.Length > 100L * 1024 * 1024)
             {
-                TransientNotice.Show(this, AppStrings.Get("UiAttachmentSizeLimit"));
+                ShowWorkspaceNotice(AppStrings.Get("UiAttachmentSizeLimit"));
                 return;
             }
             byte[]? png = pngData switch
@@ -1438,7 +1440,7 @@ public partial class MainWindow : Window
         }
         catch (Exception error) when (error is IOException or InvalidOperationException or NotSupportedException or ArgumentException or System.Runtime.InteropServices.ExternalException)
         {
-            TransientNotice.Show(this, AppStrings.Get("UiPasteImageFailed"));
+            ShowWorkspaceNotice(AppStrings.Get("UiPasteImageFailed"));
         }
     }
 

@@ -444,7 +444,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     {
         var command = payload.GetProperty("command").GetString();
         if (command is null || ReadWindowHandle(payload) is not { } owner) return false;
-        var composing = command is "record" or "sendOptions" or "scheduleDraft" or "shareContact" or "shareLocation";
+        var composing = command is "record" or "sendOptions" or "scheduleDraft" or "shareContact" or "shareLocation" or "pasteImage";
         var chatScoped = composing || command is "sharedMedia" or "pinnedMessages" or "chatQueue";
         if (!chatScoped && command is not ("contacts" or "addFriend" or "requests" or "settings" or "manageFolders" or
             "appLock" or "lockNow" or "saved" or "sendQueue" or "forwardQueue" or "callHistory")) return false;

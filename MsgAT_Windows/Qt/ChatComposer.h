@@ -16,6 +16,7 @@ public:
     bool sendOnEnter = true;
     bool allowsEmpty = false;
     std::function<bool(const QString &)> copySelection;
+    std::function<bool(const QMimeData &)> pasteMedia;
 signals:
     void sendRequested();
     void draftChanged(const QString &text);
@@ -25,6 +26,8 @@ protected:
     void contextMenuEvent(QContextMenuEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
     QMimeData *createMimeDataFromSelection() const override;
+    bool canInsertFromMimeData(const QMimeData *source) const override;
+    void insertFromMimeData(const QMimeData *source) override;
 private:
     void copyOrCut(bool cut);
     void updateHeight();

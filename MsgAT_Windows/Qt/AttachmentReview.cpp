@@ -165,7 +165,7 @@ AttachmentReview::AttachmentReview(QWidget *parent) : QDialog(parent) {
     });
 }
 
-void AttachmentReview::showFor(const QString &peer, const QJsonObject &options) {
+void AttachmentReview::showFor(const QString &peer, const QJsonObject &options, const QStringList &paths) {
     if (isVisible() || peer.isEmpty()) return;
     reset();
     peer_ = peer;
@@ -207,14 +207,19 @@ void AttachmentReview::showFor(const QString &peer, const QJsonObject &options) 
     updateOptions();
     excludeWindowFromCapture(this);
     QDialog::open();
-    QTimer::singleShot(0, this, [this] { if (isVisible()) picker_->open(); });
+    if (paths.isEmpty()) QTimer::singleShot(0, this, [this] { if (isVisible()) picker_->open(); });
+    else appendFiles(paths);
 }
 
 void AttachmentReview::addFiles() {
+    appendFiles(picker_->selectedFiles());
+}
+
+void AttachmentReview::appendFiles(const QStringList &paths) {
     if (!isVisible() || busy_ || editing_) return;
     status_->clear();
     QMimeDatabase types;
-    for (const auto &path : picker_->selectedFiles()) {
+    for (const auto &path : paths) {
         bool existing = false;
         for (int row = 0; row < files_->count(); ++row)
             if (files_->item(row)->data(pathRole).toString().compare(path, Qt::CaseInsensitive) == 0) {

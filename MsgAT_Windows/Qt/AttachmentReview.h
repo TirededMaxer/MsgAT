@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #pragma once
+#include <QStringList>
 
 #include <QDialog>
 #include <QJsonObject>
@@ -18,7 +19,7 @@ class ChatComposer;
 class AttachmentReview final : public QDialog {
 public:
     explicit AttachmentReview(QWidget *parent);
-    void showFor(const QString &peer, const QJsonObject &options);
+    void showFor(const QString &peer, const QJsonObject &options, const QStringList &paths = {});
     void present(const QJsonObject &state);
     void reset();
     std::function<bool(int, const QByteArray &)> request;
@@ -27,6 +28,7 @@ protected:
     void reject() override;
 private:
     void addFiles();
+    void appendFiles(const QStringList &paths);
     void moveFile(int delta);
     void updateOptions();
     void updateCaption();

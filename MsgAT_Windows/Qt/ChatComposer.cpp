@@ -93,6 +93,16 @@ QMimeData *ChatComposer::createMimeDataFromSelection() const {
     return new QMimeData;
 }
 
+bool ChatComposer::canInsertFromMimeData(const QMimeData *source) const {
+    return (!composing_ && pasteMedia && (source->hasUrls() || source->hasImage() || source->hasFormat("image/png"))) ||
+        QPlainTextEdit::canInsertFromMimeData(source);
+}
+
+void ChatComposer::insertFromMimeData(const QMimeData *source) {
+    if (!isReadOnly() && !composing_ && pasteMedia && pasteMedia(*source)) return;
+    QPlainTextEdit::insertFromMimeData(source);
+}
+
 void ChatComposer::copyOrCut(bool cut) {
     auto selection = textCursor();
     if (!selection.hasSelection() || (cut && isReadOnly()) || !copySelection) return;

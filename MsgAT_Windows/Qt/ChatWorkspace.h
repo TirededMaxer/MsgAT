@@ -11,6 +11,8 @@
 class QLabel;
 class QAction;
 class QComboBox;
+class QDragEnterEvent;
+class QDropEvent;
 class QMenu;
 class QModelIndex;
 class QShortcut;
@@ -63,11 +65,14 @@ signals:
     void historyViewportChanged(const QByteArray &state);
 protected:
     void resizeEvent(QResizeEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 private:
     void layoutPanes();
     void updateLatestButton();
     void startCall(bool video);
-    void openWorkspaceCommand(const char *command);
+    bool openWorkspaceCommand(const char *command);
+    bool canReceiveAttachments() const;
     bool applyMessageAction(const QString &command, const QString &id = {}, bool extending = false);
     void openConversationMenu(const QModelIndex &index, const QPoint &globalPosition);
     bool applyConversationAction(const QJsonObject &state);

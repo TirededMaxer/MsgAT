@@ -33,10 +33,10 @@ internal sealed class RecordingDialog:DialogWindow
     private readonly TextBlock _status=new(){TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,8,0,8)};
     private readonly TextBlock _duration=new(){Text="00:00",FontSize=28,HorizontalAlignment=HorizontalAlignment.Center};
     private readonly RecordingWaveform _waveform = new() { Height = 30, Visibility = Visibility.Collapsed };
-    private readonly Grid _preview = new() { Height = 64, Visibility = Visibility.Collapsed };
+    private readonly Grid _preview = new() { Visibility = Visibility.Collapsed };
     private readonly TextBlock _indicator = new() { Text = "●", Margin = new Thickness(0, 0, 8, 0), VerticalAlignment = VerticalAlignment.Center };
     private readonly DispatcherTimer _timer=new(){Interval=TimeSpan.FromMilliseconds(100)};
-    private EncryptedMediaView? _playback;
+    private RecordingPlaybackControl? _playback;
     private EncryptedCaptureFile? _ready;
     private Task? _closeTask;
     private Task? _resetTask;
@@ -233,8 +233,7 @@ internal sealed class RecordingDialog:DialogWindow
             _timer.Stop();
             _preview.Children.Clear();
             _duration.Text = _controller.Duration.ToString(@"mm\:ss", AppStrings.InterfaceCulture);
-            _playback = new EncryptedMediaView(_ready.Mime, _ready.OpenRead, _ready.Size, () => { },
-                showClose: false, inlineAudio: true, autoplay: false);
+            _playback = new RecordingPlaybackControl(recording, _canRecord);
             _preview.Children.Add(_playback);
             _preview.Visibility = Visibility.Visible;
         }

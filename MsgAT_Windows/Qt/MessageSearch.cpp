@@ -35,7 +35,7 @@ MessageSearch::MessageSearch(QWidget *parent) : QDialog(parent) {
     layout->addWidget(query_);
     auto *filters = new QHBoxLayout;
     all_ = new QCheckBox(this);
-    kind_ = new QComboBox(this);
+    kind_ = new FluentComboBox(this);
     dateEnabled_ = new QCheckBox(this);
     date_ = new QDateEdit(QDate::currentDate(), this);
     date_->setCalendarPopup(true);

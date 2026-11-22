@@ -279,6 +279,8 @@
     <sys:String x:Key="UiRecordingAgain">重新录音</sys:String>
     <sys:String x:Key="UiRecordingUse">使用录音</sys:String>
     <sys:String x:Key="UiRecordingPreview">录音试听</sys:String>
+    <sys:String x:Key="UiRecordingPlay">播放录音</sys:String>
+    <sys:String x:Key="UiRecordingPosition">播放进度</sys:String>
     <sys:String x:Key="UiRecordingCallActive">请先结束通话，再开始录音。</sys:String>
     <sys:String x:Key="UiCallHistory">通话记录</sys:String>
     <sys:String x:Key="UiCallHistoryEmpty">暂无通话记录</sys:String>

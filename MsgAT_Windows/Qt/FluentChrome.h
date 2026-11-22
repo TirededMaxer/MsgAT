@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #pragma once
 
+#include <QComboBox>
 #include <QIcon>
 
 class QApplication;
@@ -26,5 +27,16 @@ QIcon fluentIcon(Symbol symbol, bool primary = false);
 void setFluentButton(QToolButton *button, Symbol symbol, bool primary = false);
 void setFluentAction(QPushButton *button, Symbol symbol, bool lightInk = false);
 void installFluentChrome(QApplication &app);
+
+class FluentComboBox final : public QComboBox {
+public:
+    using QComboBox::QComboBox;
+
+    void showPopup() override;
+    void hidePopup() override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+};
 
 } // namespace MsgAT

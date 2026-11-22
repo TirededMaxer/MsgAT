@@ -157,7 +157,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     savedAction_->setIcon(fluentIcon(Symbol::Bookmark));
     stickerLibraryAction_->setIcon(fluentIcon(Symbol::Sticker));
     settingsAction_->setIcon(fluentIcon(Symbol::Settings));
-    folders_ = new QComboBox(sidebar);
+    folders_ = new FluentComboBox(sidebar);
     folders_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     folders_->setMinimumContentsLength(7);
     sidebarToolbar->addWidget(folders_, 1);

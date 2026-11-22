@@ -206,7 +206,7 @@ QWidget *SettingsWindow::makeOverview() {
         form->setContentsMargins(0, 0, 0, 0);
         form->setRowWrapPolicy(QFormLayout::WrapLongRows);
         auto *name = plainLabel(row);
-        auto *combo = new QComboBox(row);
+        auto *combo = new FluentComboBox(row);
         name->setBuddy(combo);
         form->addRow(name, combo);
         formLabels_.append({name, QString::fromLatin1(label)});
@@ -400,7 +400,7 @@ QWidget *SettingsWindow::makeStorage() {
     });
 
     auto *limitTitle = plainLabel(body);
-    storageLimit_ = new QComboBox(body);
+    storageLimit_ = new FluentComboBox(body);
     limitTitle->setBuddy(storageLimit_);
     formLabels_.append({limitTitle, QStringLiteral("cacheLimit")});
     layout->addWidget(limitTitle);

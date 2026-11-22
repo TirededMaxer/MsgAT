@@ -411,8 +411,8 @@
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="ComboBoxItem">
-                        <Border x:Name="ItemSurface" Padding="{TemplateBinding Padding}" Background="Transparent" CornerRadius="4">
-                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"/>
+                        <Border x:Name="ItemSurface" Padding="{TemplateBinding Padding}" Background="Transparent" CornerRadius="5" MinHeight="32">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsSelected" Value="True">
@@ -433,8 +433,9 @@
             <Setter Property="Foreground" Value="{StaticResource TextBrush}" />
             <Setter Property="Background" Value="{StaticResource SurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{StaticResource BorderBrush}" />
-            <Setter Property="MinHeight" Value="32" />
-            <Setter Property="Padding" Value="10,4" />
+            <Setter Property="MinHeight" Value="36" />
+            <Setter Property="Padding" Value="10,5" />
+            <Setter Property="SnapsToDevicePixels" Value="True" />
             <Style.Triggers>
                 <Trigger Property="IsEditable" Value="False">
                     <Setter Property="Template">
@@ -448,10 +449,11 @@
                                         </ToggleButton.Template>
                                     </ToggleButton>
                                     <Border x:Name="Chrome" Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}"
-                                            BorderThickness="1" CornerRadius="6" IsHitTestVisible="False" Padding="{TemplateBinding Padding}">
+                                            BorderThickness="1" CornerRadius="8" IsHitTestVisible="False" Padding="{TemplateBinding Padding}">
                                         <DockPanel>
-                                            <Path DockPanel.Dock="Right" Data="M0,0 L4,4 L8,0" Stroke="{StaticResource MutedBrush}"
-                                                  StrokeThickness="1.5" Margin="10,0,1,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="Chevron" DockPanel.Dock="Right" Text="&#xE70D;"
+                                                       FontFamily="Segoe Fluent Icons, Segoe MDL2 Assets" FontSize="13"
+                                                       Foreground="{StaticResource MutedBrush}" Margin="10,0,1,0" VerticalAlignment="Center" />
                                             <ContentPresenter VerticalAlignment="Center" Content="{TemplateBinding SelectionBoxItem}"
                                                 ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
                                                 ContentTemplateSelector="{TemplateBinding ItemTemplateSelector}"
@@ -460,13 +462,22 @@
                                     </Border>
                                     <Popup x:Name="PART_Popup" IsOpen="{TemplateBinding IsDropDownOpen}" Placement="Bottom" AllowsTransparency="True" Focusable="False">
                                         <Border MinWidth="{Binding ActualWidth, RelativeSource={RelativeSource TemplatedParent}}"
-                                                MaxHeight="{TemplateBinding MaxDropDownHeight}" Padding="3" Margin="0,2,0,0"
-                                                Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="6">
-                                            <ScrollViewer CanContentScroll="True"><ItemsPresenter /></ScrollViewer>
+                                                MaxHeight="{TemplateBinding MaxDropDownHeight}" Padding="4" Margin="0,3,0,0"
+                                                Background="{StaticResource SurfaceBrush}" BorderBrush="{StaticResource BorderBrush}" BorderThickness="1" CornerRadius="8">
+                                            <ScrollViewer CanContentScroll="True" HorizontalScrollBarVisibility="Disabled">
+                                                <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained" />
+                                            </ScrollViewer>
                                         </Border>
                                     </Popup>
                                 </Grid>
                                 <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="Chrome" Property="Background" Value="{StaticResource RaisedBrush}"/>
+                                    </Trigger>
+                                    <Trigger Property="IsDropDownOpen" Value="True">
+                                        <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentTextBrush}"/>
+                                        <Setter TargetName="Chevron" Property="Text" Value="&#xE70E;"/>
+                                    </Trigger>
                                     <Trigger Property="IsKeyboardFocusWithin" Value="True">
                                         <Setter TargetName="Chrome" Property="BorderBrush" Value="{StaticResource AccentTextBrush}"/>
                                     </Trigger>

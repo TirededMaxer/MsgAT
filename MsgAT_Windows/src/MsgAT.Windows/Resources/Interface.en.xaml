@@ -308,6 +308,8 @@
     <sys:String x:Key="UiRecordingAgain">Record again</sys:String>
     <sys:String x:Key="UiRecordingUse">Use recording</sys:String>
     <sys:String x:Key="UiRecordingPreview">Recording preview</sys:String>
+    <sys:String x:Key="UiRecordingPlay">Play recording</sys:String>
+    <sys:String x:Key="UiRecordingPosition">Playback position</sys:String>
     <sys:String x:Key="UiRecordingCallActive">Finish the call before recording.</sys:String>
     <sys:String x:Key="UiCallHistory">Call history</sys:String>
     <sys:String x:Key="UiCallHistoryEmpty">No calls yet</sys:String>

@@ -101,7 +101,8 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         Children.Add(panel);
         void ReportActivity() => ReportViewerActivity?.Invoke(IsMouseOver || IsKeyboardFocusWithin);
         playback.StatusChanged += ReportActivity;
-        IsMouseOverChanged += (_, _) => ReportActivity();
+        MouseEnter += (_, _) => ReportActivity();
+        MouseLeave += (_, _) => ReportActivity();
         IsKeyboardFocusWithinChanged += (_, _) => ReportActivity();
         PreviewKeyDown += (_, args) =>
         {

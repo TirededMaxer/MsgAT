@@ -2,6 +2,7 @@
 #pragma once
 
 #include <QComboBox>
+#include <QDateTimeEdit>
 #include <QIcon>
 
 class QApplication;
@@ -34,6 +35,14 @@ public:
 
     void showPopup() override;
     void hidePopup() override;
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+};
+
+class FluentCalendarEdit final : public QDateTimeEdit {
+public:
+    using QDateTimeEdit::QDateTimeEdit;
 
 protected:
     void paintEvent(QPaintEvent *event) override;

@@ -68,7 +68,8 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         {
             if (_disposed) return;
             ActiveViewers.Add(this);
-            if (_mime is "audio/mp4" or "audio/m4a" or "audio/x-m4a") ShowNativeAudio();
+            if (_mime is "audio/mp4" or "audio/m4a" or "audio/x-m4a" or "audio/aac" or "audio/mpeg"
+                or "audio/wav" or "audio/x-wav" or "audio/flac") ShowNativeAudio();
             else await StartAsync();
         };
         Unloaded+=(_,_)=>Dispose();

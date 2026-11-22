@@ -7,7 +7,7 @@
 
 class QCheckBox;
 class QComboBox;
-class QDateEdit;
+class QDateTimeEdit;
 class QLabel;
 class QLineEdit;
 class QListWidget;
@@ -32,7 +32,7 @@ private:
     QLineEdit *query_;
     QCheckBox *all_, *dateEnabled_;
     QComboBox *kind_;
-    QDateEdit *date_;
+    QDateTimeEdit *date_;
     QListWidget *results_;
     QLabel *status_;
     QPushButton *more_, *retry_, *jump_, *close_;

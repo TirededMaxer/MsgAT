@@ -5,6 +5,7 @@
 #include <QAccessibilityHints>
 #include <QAbstractItemView>
 #include <QApplication>
+#include <QCalendarWidget>
 #include <QFontDatabase>
 #include <QIconEngine>
 #include <QPainter>
@@ -60,6 +61,21 @@ private:
     bool primary_;
 };
 
+bool highContrast() {
+    return QApplication::styleHints()->accessibility()->contrastPreference() == Qt::ContrastPreference::HighContrast;
+}
+
+void paintDropdown(QWidget *control, QStyleOptionComboBox option, bool expanded) {
+    const auto arrow = control->style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxArrow, control);
+    option.subControls &= ~QStyle::SC_ComboBoxArrow;
+    QStylePainter painter(control);
+    painter.drawComplexControl(QStyle::CC_ComboBox, option);
+    if (!option.editable) painter.drawControl(QStyle::CE_ComboBoxLabel, option);
+    const QRect iconRect(arrow.center() - QPoint(6, 6), QSize(13, 13));
+    const auto symbol = expanded ? Symbol::ChevronUp : Symbol::Options;
+    fluentIcon(symbol).paint(&painter, iconRect, Qt::AlignCenter, control->isEnabled() ? QIcon::Normal : QIcon::Disabled);
+}
+
 } // namespace
 
 QIcon fluentIcon(Symbol symbol, bool primary) { return QIcon(new SymbolEngine(symbol, primary)); }
@@ -90,21 +106,28 @@ void FluentComboBox::hidePopup() {
 }
 
 void FluentComboBox::paintEvent(QPaintEvent *event) {
-    if (QApplication::styleHints()->accessibility()->contrastPreference() == Qt::ContrastPreference::HighContrast) {
+    if (highContrast()) {
         QComboBox::paintEvent(event);
         return;
     }
 
     QStyleOptionComboBox option;
     initStyleOption(&option);
-    const auto arrow = style()->subControlRect(QStyle::CC_ComboBox, &option, QStyle::SC_ComboBoxArrow, this);
-    option.subControls &= ~QStyle::SC_ComboBoxArrow;
-    QStylePainter painter(this);
-    painter.drawComplexControl(QStyle::CC_ComboBox, option);
-    painter.drawControl(QStyle::CE_ComboBoxLabel, option);
-    const QRect iconRect(arrow.center() - QPoint(6, 6), QSize(13, 13));
-    const auto symbol = view()->isVisible() ? Symbol::ChevronUp : Symbol::Options;
-    fluentIcon(symbol).paint(&painter, iconRect, Qt::AlignCenter, isEnabled() ? QIcon::Normal : QIcon::Disabled);
+    paintDropdown(this, option, view()->isVisible());
+}
+
+void FluentCalendarEdit::paintEvent(QPaintEvent *event) {
+    if (highContrast() || !calendarPopup()) {
+        QDateTimeEdit::paintEvent(event);
+        return;
+    }
+    QStyleOptionComboBox option;
+    option.initFrom(this);
+    option.editable = true;
+    option.frame = hasFrame();
+    option.subControls = QStyle::SC_ComboBoxFrame | QStyle::SC_ComboBoxEditField | QStyle::SC_ComboBoxArrow;
+    const auto *calendar = calendarWidget();
+    paintDropdown(this, option, calendar && calendar->isVisible());
 }
 
 void installFluentChrome(QApplication &app) {
@@ -143,14 +166,15 @@ void installFluentChrome(QApplication &app) {
             QLabel#chatAvatar { background: palette(button); color: palette(button-text); border-radius: 19px; }
             QLabel#callAvatar { background: palette(button); color: palette(button-text); border-radius: 22px; }
             QPlainTextEdit#chatInput { background: transparent; color: palette(text); border: 0; }
-            QLineEdit, QComboBox, QSpinBox { background: palette(base); color: palette(text); border: 1px solid palette(mid);
+            QLineEdit, QComboBox, QDateTimeEdit, QSpinBox { background: palette(base); color: palette(text); border: 1px solid palette(mid);
                 border-radius: 7px; min-height: 26px; padding: 2px 8px; selection-background-color: palette(highlight);
                 selection-color: palette(highlighted-text); }
-            QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color: palette(accent); }
-            QComboBox { min-height: 32px; padding: 2px 36px 2px 10px; }
-            QComboBox:hover { border-color: palette(accent); }
-            QComboBox:disabled { color: palette(placeholder-text); background: palette(button); }
-            QComboBox::drop-down { subcontrol-origin: border; subcontrol-position: top right; width: 34px; border: 0; }
+            QLineEdit:focus, QComboBox:focus, QDateTimeEdit:focus, QSpinBox:focus { border-color: palette(accent); }
+            QComboBox, QDateTimeEdit { min-height: 32px; padding: 2px 36px 2px 10px; }
+            QComboBox:hover, QDateTimeEdit:hover { border-color: palette(accent); }
+            QComboBox:disabled, QDateTimeEdit:disabled { color: palette(placeholder-text); background: palette(button); }
+            QComboBox::drop-down, QDateTimeEdit::drop-down { subcontrol-origin: border; subcontrol-position: top right; width: 34px; border: 0; }
+            QDateTimeEdit QLineEdit { min-height: 0; padding: 0; border: 0; background: transparent; }
             QComboBox QAbstractItemView { background: palette(base); color: palette(text);
                 border: 1px solid palette(mid); border-radius: 8px; padding: 4px; outline: 0;
                 selection-background-color: palette(highlight); selection-color: palette(highlighted-text); }

@@ -7,7 +7,7 @@
 #include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDateEdit>
+#include <QDateTimeEdit>
 #include <QInputMethodEvent>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -37,7 +37,7 @@ MessageSearch::MessageSearch(QWidget *parent) : QDialog(parent) {
     all_ = new QCheckBox(this);
     kind_ = new FluentComboBox(this);
     dateEnabled_ = new QCheckBox(this);
-    date_ = new QDateEdit(QDate::currentDate(), this);
+    date_ = new FluentCalendarEdit(QDate::currentDate(), this);
     date_->setCalendarPopup(true);
     filters->addWidget(all_);
     filters->addWidget(kind_);
@@ -78,7 +78,7 @@ MessageSearch::MessageSearch(QWidget *parent) : QDialog(parent) {
     connect(all_, &QCheckBox::toggled, this, &MessageSearch::changeInput);
     connect(kind_, &QComboBox::currentIndexChanged, this, &MessageSearch::changeInput);
     connect(dateEnabled_, &QCheckBox::toggled, this, &MessageSearch::changeInput);
-    connect(date_, &QDateEdit::dateChanged, this, &MessageSearch::changeInput);
+    connect(date_, &QDateTimeEdit::dateChanged, this, &MessageSearch::changeInput);
     connect(results_, &QListWidget::currentItemChanged, this, &MessageSearch::updateButtons);
     connect(results_, &QListWidget::itemActivated, this, [this] { send(13); });
     connect(more_, &QPushButton::clicked, this, [this] { send(12); });

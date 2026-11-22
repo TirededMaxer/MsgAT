@@ -87,7 +87,7 @@ AttachmentReview::AttachmentReview(QWidget *parent) : QDialog(parent) {
     auto *delivery = new QHBoxLayout;
     silent_ = new QCheckBox(this);
     schedule_ = new QCheckBox(this);
-    sendAt_ = new QDateTimeEdit(this);
+    sendAt_ = new FluentCalendarEdit(this);
     sendAt_->setCalendarPopup(true);
     delivery->addWidget(silent_);
     delivery->addStretch();

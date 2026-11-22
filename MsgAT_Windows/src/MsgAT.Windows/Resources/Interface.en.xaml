@@ -194,6 +194,7 @@
     <sys:String x:Key="UiSavedViewMessages">By message</sys:String>
     <sys:String x:Key="UiSavedViewChats">By chat</sys:String>
     <sys:String x:Key="UiSavedSearch">Search saved messages</sys:String>
+    <sys:String x:Key="UiSavedMoreActions">More actions</sys:String>
     <sys:String x:Key="UiSavedSourceCount">Saved: {0}</sys:String>
     <sys:String x:Key="UiSavedRemovedChat">Removed chat ({0})</sys:String>
     <sys:String x:Key="UiSavedEmpty">No saved messages</sys:String>

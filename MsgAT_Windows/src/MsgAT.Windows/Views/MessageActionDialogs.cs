@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Threading;
@@ -19,17 +21,26 @@ public sealed class SavedMessagesDialog : DialogWindow
     private readonly Action<string> _openContact;
     internal Func<string, bool>? ConfirmOpenChat { get; set; }
     private readonly ListBox _list=new() {SelectionMode=SelectionMode.Extended,HorizontalContentAlignment=HorizontalAlignment.Stretch};
-    private readonly TextBlock _status=new() {TextWrapping=TextWrapping.Wrap,Margin=new Thickness(0,6,0,6)};
+    private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 2, 0), Visibility = Visibility.Collapsed };
     private readonly TextBlock _heading;
     private readonly System.Windows.Controls.TextBox _search = IdentitySetupDialog.Field();
+    private readonly TextBlock _searchHint;
     private readonly Button _clearSearch;
     private readonly Button _back;
-    private readonly System.Windows.Controls.Primitives.ToggleButton _messagesView;
-    private readonly System.Windows.Controls.Primitives.ToggleButton _chatsView;
+    private readonly ToggleButton _messagesView;
+    private readonly ToggleButton _chatsView;
+    private readonly Border _modes;
+    private readonly Button _more;
+    private readonly Button _close;
+    private readonly Button _open;
+    private readonly Button _forward;
+    private readonly MenuItem _copy;
+    private readonly MenuItem _export;
+    private readonly MenuItem _originalAction;
+    private readonly MenuItem _delete;
     private readonly DispatcherTimer _typing = new() { Interval = TimeSpan.FromMilliseconds(180) };
     private readonly Button _older;
     private readonly Button _refreshPage;
-    private readonly WrapPanel _actions=new() {HorizontalAlignment=HorizontalAlignment.Right};
     private MessageSearchCursor? _cursor;
     private bool _closed;
     private bool _busy;
@@ -47,69 +58,113 @@ public sealed class SavedMessagesDialog : DialogWindow
     {
         _services=services;_original=original;_openContact=openContact;
         Title = AppStrings.Get("UiSavedMessages");
-        Width = Math.Min(700, SystemParameters.WorkArea.Width * .95);
-        Height = Math.Min(600, SystemParameters.WorkArea.Height * .9);
-        MinWidth = Math.Min(480, Width);
-        MinHeight = Math.Min(400, Height);
+        Width = Math.Min(680, SystemParameters.WorkArea.Width * .95);
+        Height = Math.Min(540, SystemParameters.WorkArea.Height * .9);
+        MinWidth = Math.Min(440, Width);
+        MinHeight = Math.Min(360, Height);
         ResizeMode = ResizeMode.CanResize;
         SetResourceReference(BackgroundProperty, "MessagingChromeBrush");
-        _list.SetResourceReference(Control.BackgroundProperty, "MessagingTimelineBrush");
-        _list.SetResourceReference(Control.BorderBrushProperty, "MessagingDividerBrush");
+        _list.Background = Brushes.Transparent;
+        _list.BorderThickness = new Thickness(0);
+        _list.Padding = new Thickness(0, 4, 0, 4);
+        ScrollViewer.SetHorizontalScrollBarVisibility(_list, ScrollBarVisibility.Disabled);
         _list.ItemContainerStyle = ResourceStyle("ConversationItemStyle");
-        var panel=new DockPanel {Margin=new Thickness(20)};
-        var top = new StackPanel();
-        var heading = new DockPanel();
-        _back = IconButton("PreviousMediaIcon", "UiSavedViewChats", () => ChangeScope(null, true));
+        AutomationProperties.SetName(_list, Title);
+        AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
+        _status.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+        var panel = new DockPanel { Margin = new Thickness(18, 16, 18, 14) };
+        var top = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
+        var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
+        _back = IconButton("HistoryReturnIcon", "UiContactBack", () => ChangeScope(null, true));
         DockPanel.SetDock(_back, Dock.Left);
         heading.Children.Add(_back);
-        _heading = IdentitySetupDialog.Heading(Title);
+        _heading = new TextBlock { Text = Title, FontSize = 23, FontWeight = FontWeights.SemiBold,
+            TextTrimming = TextTrimming.CharacterEllipsis, VerticalAlignment = VerticalAlignment.Center };
         heading.Children.Add(_heading);
         top.Children.Add(heading);
-        var modes = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 0, 0, 8) };
-        _messagesView = new System.Windows.Controls.Primitives.ToggleButton { Content = AppStrings.Get("UiSavedViewMessages"), IsChecked = true, Padding = new Thickness(9, 5, 9, 5) };
-        _chatsView = new System.Windows.Controls.Primitives.ToggleButton { Content = AppStrings.Get("UiSavedViewChats"), Padding = new Thickness(9, 5, 9, 5) };
+        var modes = new StackPanel { Orientation = Orientation.Horizontal };
+        _messagesView = new ToggleButton { Content = AppStrings.Get("UiSavedViewMessages"), Style = ResourceStyle("SegmentButtonStyle") };
+        _chatsView = new ToggleButton { Content = AppStrings.Get("UiSavedViewChats"), Style = ResourceStyle("SegmentButtonStyle") };
         _messagesView.Click += (_, _) => ChangeScope(null, false);
         _chatsView.Click += (_, _) => ChangeScope(null, true);
         modes.Children.Add(_messagesView);
         modes.Children.Add(_chatsView);
-        top.Children.Add(modes);
-        var searchRow = new DockPanel();
+        _modes = new Border { Child = modes, Padding = new Thickness(3), CornerRadius = new CornerRadius(9),
+            Margin = new Thickness(0, 0, 0, 10), HorizontalAlignment = HorizontalAlignment.Left };
+        _modes.SetResourceReference(Border.BackgroundProperty, "MessagingTimelineBrush");
+        top.Children.Add(_modes);
+        var searchRow = new DockPanel { Margin = new Thickness(9, 2, 2, 2) };
         _clearSearch = IconButton("CloseIcon", "UiForwardClearSearch", () => { _search.Clear(); _search.Focus(); });
+        _clearSearch.Background = Brushes.Transparent;
+        _clearSearch.BorderBrush = Brushes.Transparent;
+        _clearSearch.Margin = new Thickness(0);
         DockPanel.SetDock(_clearSearch, Dock.Right);
         searchRow.Children.Add(_clearSearch);
+        var searchIcon = IconGlyph("\uE721");
+        searchIcon.Margin = new Thickness(2, 0, 2, 0);
+        searchIcon.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+        DockPanel.SetDock(searchIcon, Dock.Left);
+        searchRow.Children.Add(searchIcon);
         var searchName = AppStrings.Get("UiSavedSearch");
-        System.Windows.Automation.AutomationProperties.SetName(_search, searchName);
-        _search.ToolTip = searchName;
-        searchRow.Children.Add(_search);
-        top.Children.Add(new Label { Content = searchName, Target = _search, Padding = new Thickness(0, 0, 0, 3) });
-        top.Children.Add(searchRow);
+        AutomationProperties.SetName(_search, searchName);
+        _search.Background = Brushes.Transparent;
+        _search.BorderThickness = new Thickness(0);
+        _search.Padding = new Thickness(8, 4, 4, 4);
+        _searchHint = new TextBlock { Text = searchName, Margin = new Thickness(8, 0, 4, 0),
+            VerticalAlignment = VerticalAlignment.Center, IsHitTestVisible = false };
+        _searchHint.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+        var searchText = new Grid();
+        searchText.Children.Add(_search);
+        searchText.Children.Add(_searchHint);
+        searchRow.Children.Add(searchText);
+        var searchFrame = new Border { Child = searchRow, CornerRadius = new CornerRadius(8), BorderThickness = new Thickness(1) };
+        searchFrame.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
+        searchFrame.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
+        searchFrame.IsKeyboardFocusWithinChanged += (_, _) => searchFrame.SetResourceReference(Border.BorderBrushProperty,
+            searchFrame.IsKeyboardFocusWithin ? "AccentTextBrush" : "MessagingDividerBrush");
+        top.Children.Add(searchFrame);
         top.Children.Add(_status);
         DockPanel.SetDock(top,Dock.Top);panel.Children.Add(top);
-        var footer=new StackPanel();
-        _older = IdentitySetupDialog.ActionButton(AppStrings.Get("UiSavedOlder"), () =>
-            _ = LoadAsync(_pageFailed && _failedReset, keepVisible: true), Brushes.Gray);
-        _refreshPage = IdentitySetupDialog.ActionButton(AppStrings.Get("UiQueueRefresh"), () =>
-            _ = LoadAsync(true, keepVisible: true), Brushes.Gray);
-        _older.HorizontalAlignment = HorizontalAlignment.Left;
-        var pages = new WrapPanel();
+        var footer = new DockPanel { LastChildFill = false };
+        _older = new Button { Style = ResourceStyle("ButtonStyle"), Margin = new Thickness(0, 0, 5, 0) };
+        _older.Click += (_, _) => _ = LoadAsync(_pageFailed && _failedReset, keepVisible: true);
+        _refreshPage = ActionButton("\uE72C", "UiQueueRefresh", () => _ = LoadAsync(true, keepVisible: true), showLabel: false);
+        _open = ActionButton("\uE8A7", "UiOpen", Open, style: "PrimaryButtonStyle");
+        _forward = ActionButton("\uE72A", "UiForward", Forward);
+        _close = ActionButton("\uE711", "UiClose", Close);
+        var menu = new ContextMenu { Placement = PlacementMode.Top };
+        _copy = MenuAction(menu, "UiCopyMessageText", () => _ = CopyAsync());
+        _export = MenuAction(menu, "UiSaveAttachment", Export);
+        _originalAction = MenuAction(menu, "UiShowInChat", () => _ = OriginalAsync());
+        menu.Items.Add(new Separator());
+        _delete = MenuAction(menu, "UiSavedDelete", () => _ = DeleteAsync());
+        _delete.SetResourceReference(Control.ForegroundProperty, "DangerBrush");
+        _more = IconButton("MoreIcon", "UiSavedMoreActions", () => menu.IsOpen = true);
+        menu.PlacementTarget = _more;
+        _more.ContextMenu = menu;
+        DockPanel.SetDock(_close, Dock.Right);
+        footer.Children.Add(_close);
+        var pages = new StackPanel { Orientation = Orientation.Horizontal };
         pages.Children.Add(_refreshPage);
         pages.Children.Add(_older);
+        DockPanel.SetDock(pages, Dock.Left);
         footer.Children.Add(pages);
-        footer.Children.Add(_actions);
+        var actions = new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right };
+        actions.Children.Add(_open);
+        actions.Children.Add(_forward);
+        actions.Children.Add(_more);
+        DockPanel.SetDock(actions, Dock.Right);
+        footer.Children.Add(actions);
         var footerFrame = new Border { Child = footer, BorderThickness = new Thickness(0, 1, 0, 0),
             Margin = new Thickness(0, 8, 0, 0), Padding = new Thickness(0, 6, 0, 0) };
         footerFrame.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
         DockPanel.SetDock(footerFrame, Dock.Bottom);
         panel.Children.Add(footerFrame);
-        panel.Children.Add(_list);
+        var listFrame = new Border { Child = _list, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1) };
+        listFrame.SetResourceReference(Border.BackgroundProperty, "MessagingSidebarBrush");
+        listFrame.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
+        panel.Children.Add(listFrame);
         Content = panel;
-        AddAction("Open", Open, "UiOpen");
-        AddAction("Forward", Forward, "UiForward");
-        AddAction("Copy text", () => _ = CopyAsync(), "UiCopyMessageText");
-        AddAction("Export", Export, "UiSaveAttachment");
-        AddAction("Original", () => _ = OriginalAsync(), "UiShowInChat");
-        AddAction("Delete", () => _ = DeleteAsync(), "UiSavedDelete");
-        AddAction("Close", Close, "UiClose");
         _list.MouseDoubleClick+=(_,_)=>Open();_list.KeyDown+=(_,e)=>{if(e.Key==Key.Return){e.Handled=true;Open();}};
         _list.SelectionChanged+=(_,_)=>UpdateActions();
         _search.TextChanged += (_, _) =>
@@ -127,9 +182,11 @@ public sealed class SavedMessagesDialog : DialogWindow
             {
                 _search.Focus(); _search.SelectAll(); e.Handled = true;
             }
-            else if (e.Key == Key.Escape && (_search.Text.Length > 0 || _source is not null))
+            else if (e.Key == Key.Escape && _more.ContextMenu?.IsOpen != true)
             {
-                if (_search.Text.Length > 0) _search.Clear(); else ChangeScope(null, true);
+                if (_search.Text.Length > 0) _search.Clear();
+                else if (_source is not null) ChangeScope(null, true);
+                else Close();
                 e.Handled = true;
             }
         };
@@ -143,26 +200,64 @@ public sealed class SavedMessagesDialog : DialogWindow
         var button = new Button { ToolTip = text, Margin = new Thickness(0, 0, 5, 0) };
         button.SetResourceReference(StyleProperty, "IconButtonStyle");
         button.SetResourceReference(ContentControl.ContentProperty, icon);
-        System.Windows.Automation.AutomationProperties.SetName(button, text);
+        AutomationProperties.SetName(button, text);
         button.Click += (_, _) => action();
         return button;
     }
 
-    private void AddAction(string label,Action action,string key)
+    private static TextBlock IconGlyph(string glyph) => new()
     {
-        var button = IdentitySetupDialog.ActionButton(AppStrings.Get(key),action,Brushes.Gray);
-        button.Tag = label;
-        _actions.Children.Add(button);
+        Text = glyph, FontFamily = new FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets"),
+        FontSize = 15, VerticalAlignment = VerticalAlignment.Center
+    };
+
+    private static Button ActionButton(string glyph, string label, Action action, bool showLabel = true, string style = "ButtonStyle")
+    {
+        var name = AppStrings.Get(label);
+        var icon = IconGlyph(glyph);
+        var button = new Button { Style = ResourceStyle(style), ToolTip = name, Margin = new Thickness(0, 0, 5, 0) };
+        AutomationProperties.SetName(button, name);
+        if (!showLabel)
+        {
+            button.Width = 36;
+            button.Padding = new Thickness(0);
+            button.Content = icon;
+        }
+        else
+        {
+            var content = new StackPanel { Orientation = Orientation.Horizontal };
+            icon.Margin = new Thickness(0, 0, 7, 0);
+            content.Children.Add(icon);
+            content.Children.Add(new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center });
+            button.Content = content;
+        }
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    private static MenuItem MenuAction(ContextMenu menu, string key, Action action)
+    {
+        var option = new MenuItem { Header = AppStrings.Get(key) };
+        option.Click += (_, _) => action();
+        menu.Items.Add(option);
+        return option;
+    }
+
+    private void SetStatus(string value)
+    {
+        _status.Text = value;
+        _status.Visibility = value.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
     }
     private Row[] Selected()=>_list.SelectedItems.OfType<ListBoxItem>().Select(item => item.Tag).OfType<Row>().ToArray();
     private void UpdateActions()
     {
         var selected=Selected();
         _back.Visibility = _source is null ? Visibility.Collapsed : Visibility.Visible;
-        _messagesView.Visibility = _chatsView.Visibility = _source is null ? Visibility.Visible : Visibility.Collapsed;
+        _modes.Visibility = _source is null ? Visibility.Visible : Visibility.Collapsed;
         _messagesView.IsChecked = !_byChat;
         _chatsView.IsChecked = _byChat;
         _clearSearch.Visibility = _search.Text.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        _searchHint.Visibility = _search.Text.Length == 0 ? Visibility.Visible : Visibility.Collapsed;
         _back.IsEnabled = _messagesView.IsEnabled = _chatsView.IsEnabled = _search.IsEnabled = _clearSearch.IsEnabled = !_busy;
         _list.IsEnabled = !_busy && !_loading;
         _older.Content = AppStrings.Get(_pageFailed ? "UiRetry" : "UiSavedOlder");
@@ -170,14 +265,18 @@ public sealed class SavedMessagesDialog : DialogWindow
         _older.IsEnabled=!_busy && !_loading;
         _refreshPage.Visibility = _pageFailed ? Visibility.Collapsed : Visibility.Visible;
         _refreshPage.IsEnabled = !_busy && !_loading && selected.Length == 0;
-        foreach(Button button in _actions.Children) button.IsEnabled=(string)button.Tag switch
-        {
-            "Close"=>!_busy,"Open" when ShowingSources => !_busy && !_loading && _list.SelectedItem is ListBoxItem,
-            "Forward" or "Delete"=>!_busy && !_loading && selected.Length is >=1 and <=100,
-            "Copy text"=>!_busy && !_loading && selected.Length==1 && selected[0].Item.Text.Length>0,
-            "Export"=>!_busy && !_loading && selected.Length==1 && selected[0].Media?.IsAvailable == true,
-            _=>!_busy && !_loading && selected.Length==1
-        };
+        var canUseSelection = !_busy && !_loading;
+        var single = canUseSelection && selected.Length == 1;
+        _close.IsEnabled = !_busy;
+        _open.IsEnabled = ShowingSources ? canUseSelection && _list.SelectedItem is ListBoxItem : single;
+        _forward.IsEnabled = _delete.IsEnabled = canUseSelection && selected.Length is >= 1 and <= 100;
+        _copy.IsEnabled = single && selected[0].Item.Text.Length > 0;
+        _export.IsEnabled = single && selected[0].Media?.IsAvailable == true;
+        _originalAction.IsEnabled = single;
+        _more.IsEnabled = _copy.IsEnabled || _export.IsEnabled || _originalAction.IsEnabled || _delete.IsEnabled;
+        _open.Visibility = _list.SelectedItem is null ? Visibility.Collapsed : Visibility.Visible;
+        _forward.Visibility = _more.Visibility = selected.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        _originalAction.Visibility = _copy.Visibility = _export.Visibility = selected.Length == 1 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static string SourceName(SavedMessageSource source) => source.Alias ?? AppStrings.Format("UiSavedRemovedChat", source.Peer[..Math.Min(8, source.Peer.Length)]);
@@ -203,7 +302,7 @@ public sealed class SavedMessagesDialog : DialogWindow
         _pageFailed = false;
         _cursor = null;
         _list.Items.Clear();
-        _status.Text = AppStrings.Get("UiLoading");
+        SetStatus(AppStrings.Get("UiLoading"));
         UpdateActions();
     }
 
@@ -219,7 +318,7 @@ public sealed class SavedMessagesDialog : DialogWindow
         var query = _search.Text.Trim();
         _loading = true;
         _pageFailed = false;
-        _status.Text = AppStrings.Get("UiLoading");
+        SetStatus(AppStrings.Get("UiLoading"));
         UpdateActions();
         try
         {
@@ -232,18 +331,20 @@ public sealed class SavedMessagesDialog : DialogWindow
                 foreach (var entry in entries)
                 {
                     var label = SourceName(entry);
-                    var row = new DockPanel { Margin = new Thickness(8) };
+                    var row = new DockPanel { Margin = new Thickness(4, 2, 4, 2) };
                     var avatar = IdentitySetupDialog.Avatar(entry.Avatar, label, 38, 19);
                     avatar.Margin = new Thickness(0, 0, 10, 0);
                     DockPanel.SetDock(avatar, Dock.Left);
                     row.Children.Add(avatar);
                     var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
                     text.Children.Add(new TextBlock { Text = label, FontWeight = FontWeights.SemiBold, TextTrimming = TextTrimming.CharacterEllipsis });
-                    text.Children.Add(new TextBlock { Text = AppStrings.Format("UiSavedSourceCount", entry.Count), Opacity = .75, FontSize = 12 });
+                    var count = new TextBlock { Text = AppStrings.Format("UiSavedSourceCount", entry.Count), FontSize = 12, Margin = new Thickness(0, 2, 0, 0) };
+                    count.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+                    text.Children.Add(count);
                     row.Children.Add(text);
                     _list.Items.Add(new ListBoxItem { Content = row, Tag = entry });
                 }
-                _status.Text = entries.Count == 0 ? AppStrings.Get("UiSavedEmpty") : "";
+                SetStatus(entries.Count == 0 ? AppStrings.Get("UiSavedEmpty") : "");
                 return;
             }
             var page=await _services.Messaging.Actions.ListAsync(reset ? null : _cursor, cancellation.Token, peer, query);
@@ -264,9 +365,10 @@ public sealed class SavedMessagesDialog : DialogWindow
             _list.SelectionMode = SelectionMode.Extended;
             foreach(var row in data)
             {
-                var content=new StackPanel {Margin=new Thickness(6)};
-                content.Children.Add(new TextBlock {Text=row.Item.Author,FontWeight=FontWeights.SemiBold});
-                if(row.Media is not null)content.Children.Add(new TextBlock {Text=row.Media.Filename});
+                var content = new StackPanel { Margin = new Thickness(4, 2, 4, 2) };
+                content.Children.Add(new TextBlock { Text = row.Item.Author, FontWeight = FontWeights.SemiBold,
+                    TextTrimming = TextTrimming.CharacterEllipsis, Margin = new Thickness(0, 0, 0, 4) });
+                if(row.Media is not null)content.Children.Add(new TextBlock { Text = row.Media.Filename, TextTrimming = TextTrimming.CharacterEllipsis });
                 if(row.Item.ContactAccount is not null)content.Children.Add(new TextBlock {Text=AppStrings.Get("UiContactCard"),FontSize=11});
                 if(row.Item.Kind=="location" && row.Item.Text!="Location")content.Children.Add(new TextBlock {Text=AppStrings.Get("UiLocation"),FontSize=11});
                 var text = new MsgAT.Windows.Infrastructure.MessageTextBlock {MessageText=row.Item.Text,IsSummary=true,TextWrapping=TextWrapping.Wrap,MaxHeight=90};
@@ -287,14 +389,14 @@ public sealed class SavedMessagesDialog : DialogWindow
                 if (selectedIds?.Contains(row.Item.Id) == true) _list.SelectedItems.Add(item);
             }
             _cursor=page.Count>50 && data.Length>0?new(data[^1].Item.SavedAt,data[^1].Item.Id):null;
-            _status.Text = _list.Items.Count == 0 ? AppStrings.Get(query.Length == 0 ? "UiSavedEmpty" : "UiSavedNoMatches") : "";
+            SetStatus(_list.Items.Count == 0 ? AppStrings.Get(query.Length == 0 ? "UiSavedEmpty" : "UiSavedNoMatches") : "");
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException or ArgumentException or OperationCanceledException)
         {
             if (!_closed && generation == _generation)
             {
-                _status.Text = AppStrings.Get("UiSavedLoadFailed");
+                SetStatus(AppStrings.Get("UiSavedLoadFailed"));
                 _pageFailed = true;
                 _failedReset = reset;
             }
@@ -371,13 +473,13 @@ public sealed class SavedMessagesDialog : DialogWindow
     {
         if (_busy || _loading || Selected() is not [var row]) return;
         _busy = true;
-        _status.Text = "";
+        SetStatus("");
         UpdateActions();
         var available = false;
         try { available = await HasOriginalAsync(row.Item); }
         finally { _busy = false; if (!_closed) UpdateActions(); }
         if (_closed) return;
-        if (!available) { _status.Text = AppStrings.Get("UiSavedOriginalUnavailable"); return; }
+        if (!available) { SetStatus(AppStrings.Get("UiSavedOriginalUnavailable")); return; }
         ShowOriginal(row.Item);
     }
 
@@ -418,12 +520,12 @@ public sealed class SavedMessagesDialog : DialogWindow
                 var removed = ids.ToHashSet(StringComparer.Ordinal);
                 for (var i = _list.Items.Count - 1; i >= 0; i--)
                     if (_list.Items[i] is ListBoxItem { Tag: Row row } && removed.Contains(row.Item.Id)) _list.Items.RemoveAt(i);
-                _status.Text = _list.Items.Count == 0 && _cursor is null ? AppStrings.Get(
-                    string.IsNullOrWhiteSpace(_search.Text) ? "UiSavedEmpty" : "UiSavedNoMatches") : "";
+                SetStatus(_list.Items.Count == 0 && _cursor is null ? AppStrings.Get(
+                    string.IsNullOrWhiteSpace(_search.Text) ? "UiSavedEmpty" : "UiSavedNoMatches") : "");
             }
         }
         catch(Exception error) when(error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)
-        {if(!_closed)_status.Text=AppStrings.Get("UiSavedDeleteFailed");}
+        {if(!_closed)SetStatus(AppStrings.Get("UiSavedDeleteFailed"));}
         finally {if(!_closed){_busy=false;_list.IsEnabled=true;UpdateActions();}}
     }
     private sealed class SavedPreviewDialog : DialogWindow
@@ -453,16 +555,30 @@ public sealed class SavedMessagesDialog : DialogWindow
             Width = Math.Min(600, SystemParameters.WorkArea.Width * .95);
             Height = Math.Min(440, SystemParameters.WorkArea.Height * .9);
             ResizeMode = ResizeMode.CanResize;
-            var body = new Grid { Margin = new Thickness(16) };
-            for (var row = 0; row < 3; row++)
-                body.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            SetResourceReference(BackgroundProperty, "MessagingChromeBrush");
+            var body = new StackPanel { Margin = new Thickness(14) };
             var text = new MessageTextBlock { MessageText = item.Text, TextWrapping = TextWrapping.Wrap };
             var preview = new WebPreviewCard { Services = services, MessageId = item.Id, MessageText = item.Text, IsSaved = true };
-            Grid.SetRow(text, 1);
-            Grid.SetRow(preview, 2);
             body.Children.Add(text);
             body.Children.Add(preview);
-            Content = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = body };
+            var view = new Border { CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1),
+                Child = new ScrollViewer { VerticalScrollBarVisibility = ScrollBarVisibility.Auto, Content = body } };
+            view.SetResourceReference(Border.BackgroundProperty, "SurfaceBrush");
+            view.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
+            var root = new DockPanel { Margin = new Thickness(16) };
+            var close = ActionButton("\uE711", "UiClose", Close);
+            close.HorizontalAlignment = HorizontalAlignment.Right;
+            close.Margin = new Thickness(0, 12, 0, 0);
+            DockPanel.SetDock(close, Dock.Bottom);
+            root.Children.Add(close);
+            root.Children.Add(view);
+            PreviewKeyDown += (_, args) =>
+            {
+                if (args.Key != Key.Escape) return;
+                args.Handled = true;
+                Close();
+            };
+            Content = root;
         }
     }
 }

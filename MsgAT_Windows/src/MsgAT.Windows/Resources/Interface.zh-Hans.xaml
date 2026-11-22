@@ -189,6 +189,7 @@
     <sys:String x:Key="UiSavedViewMessages">按消息</sys:String>
     <sys:String x:Key="UiSavedViewChats">按聊天</sys:String>
     <sys:String x:Key="UiSavedSearch">搜索收藏消息</sys:String>
+    <sys:String x:Key="UiSavedMoreActions">更多操作</sys:String>
     <sys:String x:Key="UiSavedSourceCount">已收藏 {0} 条</sys:String>
     <sys:String x:Key="UiSavedRemovedChat">已删除的聊天（{0}）</sys:String>
     <sys:String x:Key="UiSavedEmpty">没有收藏消息</sys:String>

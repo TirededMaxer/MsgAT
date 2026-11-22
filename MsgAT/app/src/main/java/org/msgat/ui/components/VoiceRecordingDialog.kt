@@ -229,7 +229,7 @@ internal fun VoiceRecordingDialog(
                 Text(uiString(R.string.ui_voice_message), style = MaterialTheme.typography.titleLarge)
                 if (session.active) {
                     VoiceCaptureControls(session, canPreview = canRecord, onRecorded = onRecorded,
-                        onDiscard = { dismiss() }, onRecordAgain = { session.discard() })
+                        onDiscard = { dismiss() }, onRecordAgain = { session.discard(onStart) })
                 } else {
                     if (!canRecord) Text(uiString(R.string.ui_record_end_call))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

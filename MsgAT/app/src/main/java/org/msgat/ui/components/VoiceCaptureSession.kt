@@ -72,10 +72,10 @@ internal class VoiceCaptureSession(context: Context, private val captures: Encry
     var error by mutableStateOf<Int?>(null)
         private set
 
-    val active: Boolean get() = controller != null || phase != RecordingPhase.IDLE || busy || closing
+    val active: Boolean get() = phase != RecordingPhase.IDLE || busy || closing
 
     fun start(hold: Boolean) {
-        if (active || disposed) return
+        if (active || controller != null || disposed) return
         val recorder = AudioRecordingController(context, captures)
         controller = recorder
         error = null

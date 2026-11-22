@@ -1196,13 +1196,20 @@ internal fun ChatScreen(
         if (!captureAllowed || voice.active || !isChatVisible) inlineAudio.close()
     }
     var startVoiceAfterPermission by remember(peerUuid) { mutableStateOf(false) }
+    val voiceUnavailableText = uiString(R.string.ui_record_unavailable)
+    fun canStartVoice(): Boolean {
+        val state = callManager.callState.value
+        val microphoneAvailable = state == org.msgat.core.call.CallState.IDLE || state == org.msgat.core.call.CallState.ENDED
+        return microphoneAvailable && voiceLifecycle.lifecycle.currentState.isAtLeast(androidx.lifecycle.Lifecycle.State.STARTED) &&
+            !voice.active && !isSelecting && draftReady
+    }
     val voicePermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { allowed ->
-        if (allowed && startVoiceAfterPermission && showVoiceRecording && captureAllowed) voice.start(hold = false)
-        if (!allowed) android.widget.Toast.makeText(context, "Microphone permission is required.", android.widget.Toast.LENGTH_SHORT).show()
+        if (allowed && startVoiceAfterPermission && showVoiceRecording && canStartVoice()) voice.start(hold = false)
+        if (!allowed) android.widget.Toast.makeText(context, voiceUnavailableText, android.widget.Toast.LENGTH_SHORT).show()
         startVoiceAfterPermission = false
     }
     fun beginVoice(hold: Boolean): Boolean {
-        if (!captureAllowed || voice.active || isSelecting || !draftReady) return false
+        if (!canStartVoice()) return false
         if (androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.RECORD_AUDIO) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED) {
             startVoiceAfterPermission = !hold
@@ -2132,7 +2139,10 @@ internal fun ChatScreen(
                     Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                         org.msgat.ui.components.VoiceCaptureControls(voice, captureAllowed, finishVoice,
                             onDiscard = { voice.discard() },
-                            onRecordAgain = { voice.discard { showVoiceRecording = true } })
+                            onRecordAgain = { voice.discard {
+                                showVoiceRecording = true
+                                beginVoice(hold = false)
+                            } })
                     }
                 }
                 Row(

@@ -176,7 +176,7 @@ class ChatViewModel(
             message.replyToId?.let { msgDao.getMessageById(it) }?.takeIf { it.conversationUuid == targetUuid }?.isMine
         val author = originalMine?.let { if (it) securePrefs.myUuid else targetUuid }
             ?: message.replyToSender?.takeIf { it == securePrefs.myUuid || it == targetUuid }
-        val attachment = if (message.ext == "attachment") kotlinx.coroutines.withContext(Dispatchers.IO) {
+        val attachment = if (message.ext == "attachment" && message.isRevoked == 0) kotlinx.coroutines.withContext(Dispatchers.IO) {
             nettyClient.objects.metadata(message.content, message.messageId)
         } else null
         val presentation = when {

@@ -294,6 +294,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
             connect(action, &QAction::triggered, this, [this, command, id] { applyMessageAction(command, id); });
         };
         const bool idle = editTarget_.isEmpty() && !selecting_;
+        addAction("inspectText", idle && index.data(MessageTimeline::InspectFormattedText).toBool());
         addAction("quoteSelection", idle && index.data(MessageTimeline::CanCopy).toBool() && !composer_->isReadOnly());
         addAction("jumpQuote", idle && index.data(MessageTimeline::HasReplyQuote).toBool());
         const auto links = index.data(MessageTimeline::VisibleLinks).toStringList();

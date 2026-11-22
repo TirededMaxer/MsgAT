@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-only
+using System.Buffers;
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Text.Json;
@@ -23,6 +24,7 @@ public sealed class MessageTextBlock:TextBlock
     private readonly HashSet<int> _expandedCodeBlocks = [];
     private readonly HashSet<int> _expandedQuotes = [];
     private const int CollapsedCodeLines = 12;
+    private static readonly SearchValues<char> FormatCharacters = SearchValues.Create("*_+~`|>");
     private IReadOnlyList<Block>? _document;
     private long _generation;
     private bool _parsing;
@@ -167,6 +169,11 @@ public sealed class MessageTextBlock:TextBlock
         catch (Exception error) when (error is System.Security.Cryptography.CryptographicException or
             InvalidOperationException or IOException or JsonException or KeyNotFoundException or ArgumentException) { }
     }
+    internal static bool HasFormatting(string text) =>
+        text.AsSpan().IndexOfAny(FormatCharacters) >= 0 &&
+        Parse(text, false, null).Any(block => block.Kind != "paragraph" ||
+            block.Parts.Any(part => part.Style != 0 || part.Spoiler != 0));
+
     private static Block[] Parse(string text,bool summary,string? hiddenLabel)
     {
         if(summary){var value=SecurityCore.Call(new{operation="summarize_message_text",text=text,limit=240,hidden_label=hiddenLabel});return [new Block("paragraph","",[new Part(value.GetProperty("text").GetString()!,0,0,null)])];}

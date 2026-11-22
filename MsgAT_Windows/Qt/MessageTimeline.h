@@ -37,7 +37,8 @@ public:
         LinkPreviewAbove,
         HasReplyQuote,
         VisibleLinks,
-        Revoked
+        Revoked,
+        InspectFormattedText
     };
 
     explicit MessageTimeline(QWidget *parent = nullptr);

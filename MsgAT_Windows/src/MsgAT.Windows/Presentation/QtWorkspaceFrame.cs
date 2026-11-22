@@ -22,6 +22,7 @@ internal sealed class QtWorkspaceFrame
         internal string? Hidden;
         internal string Value = "";
         internal string[] Links = [];
+        internal bool HasFormatting;
     }
 
     internal void Clear()
@@ -44,8 +45,9 @@ internal sealed class QtWorkspaceFrame
             {
                 cached.Value = MessageTextBlock.CopyableText(body, hidden, []);
                 cached.Links = body.Contains("://", StringComparison.Ordinal) ? WebPreviewFetcher.Candidates(body) : [];
+                cached.HasFormatting = MessageTextBlock.HasFormatting(body);
             }
-            catch (InvalidOperationException) { cached.Value = ""; cached.Links = []; }
+            catch (InvalidOperationException) { cached.Value = ""; cached.Links = []; cached.HasFormatting = false; }
         }
         return cached.Value;
     }
@@ -55,6 +57,13 @@ internal sealed class QtWorkspaceFrame
         if (!row.IsText || row.IsRevoked || !row.Content.Contains("://", StringComparison.Ordinal)) return [];
         MessageText(row, row.Content, hidden);
         return _bodies.TryGetValue(row, out var body) ? body.Links : [];
+    }
+
+    internal bool CanInspectFormattedText(MessageItem row, string hidden)
+    {
+        if (!row.IsText || row.IsRevoked) return false;
+        MessageText(row, row.Content, hidden);
+        return _bodies.TryGetValue(row, out var body) && body.HasFormatting;
     }
 
     private string ReplyPreview(MainViewModel model, MessageItem target, string hidden)
@@ -134,6 +143,7 @@ internal sealed class QtWorkspaceFrame
                 canDelete = !row.IsSending && !row.IsLiveLocation && model.CanChangeSelection,
                 canPin = !row.IsRevoked && !row.IsSending && model.CanChangeSelection,
                 canReply = !row.IsRevoked, canCopy = row.IsText && !row.IsRevoked && !string.IsNullOrWhiteSpace(row.Content),
+                inspectText = CanInspectFormattedText(row, hidden),
                 canEdit = model.CanCompose && row.CanEditContent, canRevoke = row.CanModify,
                 canRetry = row.CanRetrySend, retrying = row.IsRetryingSend,
                 canCancelSend = row.IsSending,
@@ -179,6 +189,7 @@ internal sealed class QtWorkspaceFrame
                 pin = AppStrings.Get("UiPinnedMessages"),
                 quoteSelection = AppStrings.Get("UiQuoteSelectedText"),
                 jumpQuote = AppStrings.Get("UiQuoteJump"), openLink = AppStrings.Get("UiOpenLink"),
+                inspectText = AppStrings.Get("UiFormatting"),
                 preview = AppStrings.Get("UiLinkPreviews"),
                 select = AppStrings.Get("UiSelect"), deselect = AppStrings.Get("UiDeselectMessage"),
                 save = AppStrings.Get("UiSaveMessage"), forward = AppStrings.Get("UiForward"), delete = AppStrings.Get("UiLocalDeleteAction")
@@ -264,6 +275,11 @@ internal sealed class QtWorkspaceFrame
     internal static byte[] CaptureEditor(MainViewModel model, (int Start, int End)? formatting = null) =>
         JsonSerializer.SerializeToUtf8Bytes(Editor(model, formatting));
 
+    // The hidden desktop editor can preserve CR while QTextDocument presents it as LF.
+    internal static string NativeEditorText(string text) => text.Contains('\r')
+        ? text.Replace("\r\n", "\n", StringComparison.Ordinal).Replace('\r', '\n')
+        : text;
+
     private static object Editor(MainViewModel model, (int Start, int End)? formatting = null)
     {
         var visible = model.IsChatContentVisible;
@@ -273,7 +289,7 @@ internal sealed class QtWorkspaceFrame
         return new
         {
             peer = model.SelectedConversation?.Uuid,
-            draft = !visible ? "" : edit is null ? model.Draft : model.EditText,
+            draft = visible ? NativeEditorText(edit is null ? model.Draft : model.EditText) : "",
             editTarget = edit,
             canCompose = visible && (edit is null ? model.CanCompose : model.CanEditText),
             canSend = visible && (edit is null ? model.CanCompose && model.HasDraft && !model.TextSendPending : model.CanSubmitEdit),

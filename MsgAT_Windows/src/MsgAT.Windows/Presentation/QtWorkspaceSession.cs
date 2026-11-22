@@ -21,7 +21,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     Action<ConversationItem> choose, Func<string, bool> copyText, Dispatcher dispatcher,
     Action ready, Action closeRequested, Action presenceChanged, Func<bool, Task> startCall,
     Func<string, nint, Task> openWorkspaceCommand, Func<bool> confirmDiscardEdit, Func<MessageItem, Task> retrySend,
-    Action<MessageItem, nint> openCard, Func<QtConversationAction, Task> changeConversation,
+    Action<MessageItem, nint> openCard, Action<MessageItem, nint> inspectText, Func<QtConversationAction, Task> changeConversation,
     Func<QtMessageCollectionAction, Task> changeMessages)
 {
     private const string Bridge = "msgat_desktop_ui";
@@ -269,24 +269,27 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         {
             if (!_model.CanEditText) return false;
             if (kind == 3) { _model.EditText = text; return true; }
-            if (!_model.CanSubmitEdit || _model.EditText != text) return false;
+            if (!_model.CanSubmitEdit || !MatchesEditorText(_model.EditText, text)) return false;
             TrackMessageAction(_model.SubmitMessageEditAsync());
             return true;
         }
         if (!_model.CanCompose) return false;
         if (kind == 3) { _model.Draft = text; return true; }
-        if (_model.Draft != text || !_model.HasDraft || _model.TextSendPending) return false;
+        if (!MatchesEditorText(_model.Draft, text) || !_model.HasDraft || _model.TextSendPending) return false;
         TrackMessageAction(_model.SendDraftAsync());
         return true;
     }
 
     private bool IsVisible(nint view) => _view == view && _presentUpdates && !_isLocked() && _model.IsWorkspaceReady;
 
+    private static bool MatchesEditorText(string current, string? native) =>
+        native is not null && (current == native || QtWorkspaceFrame.NativeEditorText(current) == native);
+
     private bool ChangeLinkPreview(JsonElement payload)
     {
         if (!_model.IsChatContentVisible || !_model.CanCompose || _model.HasMessageEdit || _model.IsSelecting ||
             !_model.HasPreviewLinks || payload.GetProperty("peer").GetString() != _model.SelectedConversation?.Uuid ||
-            payload.GetProperty("text").GetString() != _model.Draft) return false;
+            !MatchesEditorText(_model.Draft, payload.GetProperty("text").GetString())) return false;
         switch (payload.GetProperty("command").GetString())
         {
             case "toggle": _model.PreviewEnabled = !_model.PreviewEnabled; break;
@@ -304,11 +307,12 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     private unsafe bool FormatEditor(JsonElement payload)
     {
         var editing = _model.HasMessageEdit;
-        var text = editing ? _model.EditText : _model.Draft;
-        if (!_model.IsChatContentVisible || _model.IsSelecting ||
+        var current = editing ? _model.EditText : _model.Draft;
+        var text = payload.GetProperty("text").GetString();
+        if (text is null || !_model.IsChatContentVisible || _model.IsSelecting ||
             payload.GetProperty("peer").GetString() != _model.SelectedConversation?.Uuid ||
             payload.GetProperty("target").GetString() != (_model.EditTargetId ?? "") ||
-            payload.GetProperty("text").GetString() != text || !(editing ? _model.CanEditText : _model.CanCompose)) return false;
+            !MatchesEditorText(current, text) || !(editing ? _model.CanEditText : _model.CanCompose)) return false;
 
         try
         {
@@ -414,8 +418,12 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             TrackMessageAction(_model.RevokeAsync(item));
             return true;
         }
-        if (command == "openCard" && (item.IsContactCard || item.IsLocation || item.IsLiveLocation || item.LinkPreview is not null))
+        if (command is "openCard" or "inspectText")
         {
+            bool CanOpen(MessageItem candidate) => command == "openCard"
+                ? candidate.IsContactCard || candidate.IsLocation || candidate.IsLiveLocation || candidate.LinkPreview is not null
+                : _frames.CanInspectFormattedText(candidate, AppStrings.Get("UiHiddenMessageText"));
+            if (!CanOpen(item)) return false;
             var epoch = _visibilityEpoch;
             _ownerContext.Post(_ =>
             {
@@ -423,8 +431,12 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                     !_model.IsChatContentVisible || _model.SelectedConversation?.Uuid != peer) return;
                 if (_model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked &&
                     row.Source.ConversationUuid == peer) is { } current &&
-                    (current.Source.ExpiresAt is not { } expires || expires > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()))
-                    openCard(current, HostWindow);
+                    (current.Source.ExpiresAt is not { } expires || expires > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) &&
+                    CanOpen(current))
+                {
+                    if (command == "inspectText") inspectText(current, HostWindow);
+                    else openCard(current, HostWindow);
+                }
             }, null);
             return true;
         }

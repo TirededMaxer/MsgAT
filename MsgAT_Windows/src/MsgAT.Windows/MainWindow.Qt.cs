@@ -5,6 +5,7 @@ using System.Windows.Interop;
 using System.Windows.Threading;
 using MsgAT.Windows.Infrastructure;
 using MsgAT.Windows.Presentation;
+using MsgAT.Windows.ViewModels;
 using MsgAT.Windows.Views;
 
 namespace MsgAT.Windows;
@@ -49,7 +50,8 @@ public partial class MainWindow
                     },
                     text => !_appLocked && !_exiting && MessageTextBlock.CopyToClipboard(text, this, showSuccess: false),
                     Dispatcher, Hide, RequestQtClose, QtPresenceChanged, StartCallAsync, OpenQtWorkspaceCommandAsync,
-                    () => ConfirmDiscardMessageEdit(model, nativeOwner: _qtWorkspace?.HostWindow ?? 0), RetrySendAsync, OpenMessageCard,
+                    () => ConfirmDiscardMessageEdit(model, nativeOwner: _qtWorkspace?.HostWindow ?? 0), RetrySendAsync,
+                    OpenMessageCard, InspectQtMessageText,
                     ChangeQtConversationAsync, ChangeQtMessagesAsync);
                 _qtWorkspace.SetChatTextPercentage(_chatTextPercentage);
                 _qtWorkspace.SetAppLockEnabled(_appLockEnabled);
@@ -209,6 +211,37 @@ public partial class MainWindow
             case "shareLocation":
                 OpenShareLocation(owner);
                 break;
+        }
+    }
+
+    private void InspectQtMessageText(MessageItem message, nint owner)
+    {
+        if (_viewModel is not { } model || _appLocked || _exiting) return;
+        var peer = message.Source.ConversationUuid;
+        var dialog = new FormattedMessageDialog(message.Content) { DataContext = model };
+        bool IsCurrent() => ReferenceEquals(model, _viewModel) && model.IsChatContentVisible && !model.IsSelecting &&
+            model.SelectedConversation?.Uuid == peer && model.Messages.Any(row =>
+                row.MessageId == message.MessageId && row.Source.ConversationUuid == peer && row.IsText &&
+                !row.IsRevoked && row.Content == message.Content &&
+                (row.Source.ExpiresAt is not { } expiry || expiry > DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()));
+        void CloseIfStale()
+        {
+            if (dialog.IsLoaded && !IsCurrent()) dialog.Close();
+        }
+        void MessagesChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs args) => CloseIfStale();
+        void SelectionChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs args)
+        {
+            if (args.PropertyName is nameof(MainViewModel.SelectedConversation) or nameof(MainViewModel.IsSelecting))
+                CloseIfStale();
+        }
+        if (!IsCurrent()) return;
+        model.Messages.CollectionChanged += MessagesChanged;
+        model.PropertyChanged += SelectionChanged;
+        try { ShowWorkspaceDialog(dialog, owner); }
+        finally
+        {
+            model.Messages.CollectionChanged -= MessagesChanged;
+            model.PropertyChanged -= SelectionChanged;
         }
     }
 

@@ -5,6 +5,7 @@
 #include "SettingsWindow.h"
 #include "ChatComposer.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 #include "ConversationList.h"
 #include "MessageSearch.h"
 #include "AttachmentReview.h"
@@ -17,6 +18,8 @@
 #include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFrame>
+#include <QSet>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QLabel>
@@ -30,19 +33,16 @@
 #include <QStyleHints>
 #include <QTimer>
 #include <QToolButton>
+#include <QStyle>
 #include <QUrl>
 
 namespace MsgAT {
 
 namespace {
 
-void setToolbarGlyph(QToolButton *button, const QString &glyph) {
-    button->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    button->setText(glyph);
-    button->setMinimumWidth(28);
-    auto font = button->font();
-    font.setPointSizeF(13);
-    button->setFont(font);
+void labelButton(QToolButton *button, const QString &label) {
+    button->setAccessibleName(label);
+    button->setToolTip(label);
 }
 
 QStringList localFiles(const QMimeData &mime) {
@@ -74,18 +74,42 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     noticeTimer_->setSingleShot(true);
     noticeTimer_->setInterval(4000);
     connect(noticeTimer_, &QTimer::timeout, this, [this] { presentNotice({}); });
-    auto *sidebar = new QWidget(split_);
+    sidebarPane_ = new QWidget(split_);
+    auto *sidebarPane = sidebarPane_;
+    auto *sidebarRoot = new QHBoxLayout(sidebarPane);
+    sidebarRoot->setContentsMargins(0, 0, 0, 0);
+    sidebarRoot->setSpacing(0);
+    auto *rail = new QFrame(sidebarPane);
+    rail->setObjectName(QStringLiteral("workspaceRail"));
+    installChatPalette(rail, ChatSurface::Rail);
+    rail->setAutoFillBackground(true);
+    rail->setFixedWidth(56);
+    auto *railLayout = new QVBoxLayout(rail);
+    railLayout->setContentsMargins(10, 13, 10, 12);
+    railLayout->setSpacing(7);
+    sidebarRoot->addWidget(rail);
+    auto *sidebar = new QWidget(sidebarPane);
     installChatPalette(sidebar, ChatSurface::ConversationList);
     sidebar->setAutoFillBackground(true);
+    sidebarRoot->addWidget(sidebar, 1);
     auto *sidebarLayout = new QVBoxLayout(sidebar);
     sidebarLayout->setContentsMargins(0, 0, 0, 0);
     sidebarLayout->setSpacing(0);
-    auto *sidebarToolbar = new QHBoxLayout;
-    sidebarToolbar->setContentsMargins(8, 6, 8, 6);
-    workspaceMenuButton_ = new QToolButton(sidebar);
-    workspaceMenuButton_->setAutoRaise(true);
+    sidebarTitle_ = new QLabel(sidebar);
+    auto *brand = sidebarTitle_;
+    auto brandFont = brand->font();
+    brandFont.setPointSizeF(18);
+    brandFont.setWeight(QFont::DemiBold);
+    brand->setFont(brandFont);
+    brand->setForegroundRole(QPalette::Text);
+    brand->setContentsMargins(15, 13, 15, 8);
+    sidebarLayout->addWidget(brand);
+    auto *sidebarToolbar = new QVBoxLayout;
+    sidebarToolbar->setContentsMargins(13, 3, 13, 11);
+    sidebarToolbar->setSpacing(8);
+    workspaceMenuButton_ = new QToolButton(rail);
     workspaceMenuButton_->setPopupMode(QToolButton::InstantPopup);
-    workspaceMenuButton_->setText(QStringLiteral("☰"));
+    setFluentButton(workspaceMenuButton_, Symbol::Menu);
     auto *workspaceMenu = new QMenu(workspaceMenuButton_);
     contactsAction_ = workspaceMenu->addAction(QString{});
     addFriendAction_ = workspaceMenu->addAction(QString{});
@@ -114,7 +138,25 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(appLockAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("appLock"); });
     connect(lockNowAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("lockNow"); });
     workspaceMenuButton_->setMenu(workspaceMenu);
-    sidebarToolbar->addWidget(workspaceMenuButton_);
+    railLayout->addWidget(workspaceMenuButton_);
+    auto railButton = [rail, railLayout](Symbol symbol) {
+        auto *button = new QToolButton(rail);
+        setFluentButton(button, symbol);
+        railLayout->addWidget(button);
+        return button;
+    };
+    contactsRail_ = railButton(Symbol::Contacts);
+    savedRail_ = railButton(Symbol::Bookmark);
+    railLayout->addStretch();
+    settingsRail_ = railButton(Symbol::Settings);
+    connect(contactsRail_, &QToolButton::clicked, contactsAction_, &QAction::trigger);
+    connect(savedRail_, &QToolButton::clicked, savedAction_, &QAction::trigger);
+    connect(settingsRail_, &QToolButton::clicked, settingsAction_, &QAction::trigger);
+    contactsAction_->setIcon(fluentIcon(Symbol::Contacts));
+    addFriendAction_->setIcon(fluentIcon(Symbol::AddContact));
+    savedAction_->setIcon(fluentIcon(Symbol::Bookmark));
+    stickerLibraryAction_->setIcon(fluentIcon(Symbol::Sticker));
+    settingsAction_->setIcon(fluentIcon(Symbol::Settings));
     folders_ = new QComboBox(sidebar);
     folders_->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
     folders_->setMinimumContentsLength(7);
@@ -124,9 +166,13 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         if (!locked_ && !key.isEmpty()) emit folderRequested(key);
     });
     searchButton_ = new QToolButton(sidebar);
-    searchButton_->setAutoRaise(true);
-    searchButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    sidebarToolbar->addWidget(searchButton_);
+    searchButton_->setObjectName(QStringLiteral("searchPill"));
+    searchButton_->setIcon(fluentIcon(Symbol::Search));
+    searchButton_->setIconSize(QSize(16, 16));
+    searchButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+    searchButton_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    searchButton_->setMinimumHeight(34);
+    sidebarToolbar->insertWidget(0, searchButton_);
     sidebarLayout->addLayout(sidebarToolbar);
     conversations_ = new ConversationList(sidebar);
     sidebarLayout->addWidget(conversations_, 1);
@@ -195,70 +241,89 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     auto *column = new QVBoxLayout(detail_);
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
-    auto *header = new QHBoxLayout;
-    header->setContentsMargins(16, 10, 16, 10);
-    column->addLayout(header);
+    installChatPalette(detail_, ChatSurface::Timeline);
+    detail_->setAutoFillBackground(true);
+    auto *headerSurface = new QFrame(detail_);
+    headerSurface->setObjectName(QStringLiteral("chatHeader"));
+    installChatPalette(headerSurface, ChatSurface::Chrome);
+    headerSurface->setAutoFillBackground(true);
+    auto *header = new QHBoxLayout(headerSurface);
+    header->setContentsMargins(13, 9, 15, 9);
+    header->setSpacing(5);
+    column->addWidget(headerSurface);
     back_ = new QToolButton(detail_);
     back_->setAutoRaise(true);
-    setToolbarGlyph(back_, QStringLiteral("‹"));
+    setFluentButton(back_, Symbol::Back);
     header->addWidget(back_);
-    title_ = new QLabel(detail_);
+    chatAvatar_ = new QLabel(headerSurface);
+    chatAvatar_->setFixedSize(38, 38);
+    chatAvatar_->setAlignment(Qt::AlignCenter);
+    chatAvatar_->setObjectName(QStringLiteral("chatAvatar"));
+    header->addWidget(chatAvatar_);
+    header->addSpacing(5);
+    title_ = new QLabel(headerSurface);
     title_->setTextFormat(Qt::PlainText);
     title_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
     QFont heading = font();
     heading.setWeight(QFont::DemiBold);
+    heading.setPointSizeF(12.0);
     title_->setFont(heading);
+    title_->setForegroundRole(QPalette::Text);
     header->addWidget(title_, 1);
     chatSearchButton_ = new QToolButton(detail_);
     chatSearchButton_->setAutoRaise(true);
-    chatSearchButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    setFluentButton(chatSearchButton_, Symbol::Search);
     header->addWidget(chatSearchButton_);
     connect(chatSearchButton_, &QToolButton::clicked, this, openSearch);
     callButton_ = new QToolButton(detail_);
     callButton_->setAutoRaise(true);
-    callButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    setFluentButton(callButton_, Symbol::Call);
     callButton_->setPopupMode(QToolButton::InstantPopup);
     auto *calls = new QMenu(callButton_);
-    voiceCall_ = calls->addAction(QString{});
-    videoCall_ = calls->addAction(QString{});
+    voiceCall_ = calls->addAction(fluentIcon(Symbol::Call), QString{});
+    videoCall_ = calls->addAction(fluentIcon(Symbol::Video), QString{});
     connect(voiceCall_, &QAction::triggered, this, [this] { startCall(false); });
     connect(videoCall_, &QAction::triggered, this, [this] { startCall(true); });
     callButton_->setMenu(calls);
     header->addWidget(callButton_);
     chatMenuButton_ = new QToolButton(detail_);
     chatMenuButton_->setAutoRaise(true);
-    chatMenuButton_->setText(QStringLiteral("⋯"));
+    setFluentButton(chatMenuButton_, Symbol::More);
     chatMenuButton_->setPopupMode(QToolButton::InstantPopup);
     auto *chatMenu = new QMenu(chatMenuButton_);
-    sharedMediaAction_ = chatMenu->addAction(QString{});
-    pinnedMessagesAction_ = chatMenu->addAction(QString{});
-    chatQueueAction_ = chatMenu->addAction(QString{});
-    historyNavigationAction_ = chatMenu->addAction(QString{});
+    sharedMediaAction_ = chatMenu->addAction(fluentIcon(Symbol::Image), QString{});
+    pinnedMessagesAction_ = chatMenu->addAction(fluentIcon(Symbol::Pin), QString{});
+    chatQueueAction_ = chatMenu->addAction(fluentIcon(Symbol::Send), QString{});
+    historyNavigationAction_ = chatMenu->addAction(fluentIcon(Symbol::History), QString{});
     connect(sharedMediaAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("sharedMedia"); });
     connect(pinnedMessagesAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("pinnedMessages"); });
     connect(chatQueueAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("chatQueue"); });
     connect(historyNavigationAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("historyNavigation"); });
     chatMenuButton_->setMenu(chatMenu);
     header->addWidget(chatMenuButton_);
-    auto historyButton = [this, header](int action, const QString &glyph) {
+    auto historyButton = [this, header](int action, Symbol symbol) {
         auto *button = new QToolButton(detail_);
         button->setAutoRaise(true);
-        setToolbarGlyph(button, glyph);
+        setFluentButton(button, symbol);
         header->addWidget(button);
         connect(button, &QToolButton::clicked, this, [this, action] {
             if (!locked_ && !selected_.isEmpty()) emit historyRequested(action, selected_);
         });
         return button;
     };
-    older_ = historyButton(6, QStringLiteral("↑"));
-    newer_ = historyButton(7, QStringLiteral("↓"));
-    latest_ = historyButton(8, QStringLiteral("⇣"));
+    older_ = historyButton(6, Symbol::Up);
+    newer_ = historyButton(7, Symbol::Down);
+    latest_ = historyButton(8, Symbol::Latest);
     auto *historyNotice = new QHBoxLayout;
     historyError_ = new QLabel(detail_);
     historyError_->setTextFormat(Qt::PlainText);
     historyError_->setWordWrap(true);
     retry_ = new QToolButton(detail_);
     retry_->setAutoRaise(true);
+    retry_->setIcon(fluentIcon(Symbol::Reset));
+    retry_->setIconSize(QSize(16, 16));
+    retry_->setMinimumHeight(36);
+    retry_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     connect(retry_, &QToolButton::clicked, this, [this] {
         if (!locked_ && !selected_.isEmpty()) emit historyRequested(9, selected_);
     });
@@ -297,6 +362,22 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         addAction("inspectText", idle && index.data(MessageTimeline::InspectFormattedText).toBool());
         addAction("quoteSelection", idle && index.data(MessageTimeline::CanCopy).toBool() && !composer_->isReadOnly());
         addAction("jumpQuote", idle && index.data(MessageTimeline::HasReplyQuote).toBool());
+        if (idle) {
+            const auto runs = index.data(MessageTimeline::RichRuns).value<QJsonArray>();
+            const auto peer = selected_;
+            int count = 0;
+            for (const auto &value : runs) {
+                const auto run = value.toObject();
+                const auto token = run.value("action").toString();
+                const auto label = run.value("label").toString();
+                if (token.isEmpty() || label.isEmpty() || label == messageLabels_.value("openLink").toString()) continue;
+                auto *action = messageMenu_->addAction(label);
+                connect(action, &QAction::triggered, this, [this, peer, id, token] {
+                    if (selected_ == peer) applyMessageAction(QStringLiteral("richText"), id, false, token);
+                });
+                if (++count == 16) break;
+            }
+        }
         const auto links = index.data(MessageTimeline::VisibleLinks).toStringList();
         if (idle && !links.isEmpty()) {
             auto *linkMenu = links.size() > 1 ? messageMenu_->addMenu(messageLabels_.value("openLink").toString()) : messageMenu_;
@@ -347,10 +428,10 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     preview_->request = [this](int action, const QByteArray &state) {
         return !locked_ && dialogRequest && dialogRequest(action, state);
     };
-    const auto openPreview = [this](const QModelIndex &index, bool allowLinkPreview) {
-        if (locked_ || selected_.isEmpty()) return;
+    const auto openPreview = [this](const QModelIndex &index, bool allowLinkPreview, const QString &tile = {}) {
+        if (locked_ || selected_.isEmpty() || !index.isValid()) return;
         const auto id = history_->idAt(index);
-        if (index.data(MessageTimeline::HasAttachment).toBool()) preview_->showFor(selected_, id);
+        if (index.data(MessageTimeline::HasAttachment).toBool()) preview_->showFor(selected_, tile.isEmpty() ? id : tile);
         else if (index.data(MessageTimeline::HasCard).toBool() ||
                  (allowLinkPreview && !index.data(MessageTimeline::LinkPreviewText).toString().isEmpty()))
             applyMessageAction(QStringLiteral("openCard"), id);
@@ -360,7 +441,15 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         if (selecting_) {
             const bool extend = QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
             applyMessageAction(QStringLiteral("toggleSelection"), history_->idAt(index), extend);
-        } else openPreview(index, messages_->previewContains(index, messages_->viewport()->mapFromGlobal(QCursor::pos())));
+            return;
+        }
+        const auto point = messages_->viewport()->mapFromGlobal(QCursor::pos());
+        const auto action = messages_->richAction(index, point);
+        if (!action.isEmpty()) {
+            applyMessageAction(QStringLiteral("richText"), history_->idAt(index), false, action);
+            return;
+        }
+        openPreview(index, messages_->previewContains(index, point), messages_->mediaTarget(index, point));
     });
     connect(messages_, &QListView::activated, this, [this, openPreview](const QModelIndex &index) {
         if (!selecting_) openPreview(index, true);
@@ -387,7 +476,10 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     selectionText_->setTextFormat(Qt::PlainText);
     selectionLayout->addWidget(selectionText_, 1);
     selectionMenuButton_ = new QToolButton(selectionBar_);
-    selectionMenuButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    selectionMenuButton_->setIcon(fluentIcon(Symbol::More));
+    selectionMenuButton_->setIconSize(QSize(16, 16));
+    selectionMenuButton_->setMinimumHeight(36);
+    selectionMenuButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     selectionMenuButton_->setPopupMode(QToolButton::InstantPopup);
     auto *selectionMenu = new QMenu(selectionMenuButton_);
     copySelection_ = selectionMenu->addAction(QString{});
@@ -398,7 +490,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     selectionLayout->addWidget(selectionMenuButton_);
     cancelSelection_ = new QToolButton(selectionBar_);
     cancelSelection_->setAutoRaise(true);
-    setToolbarGlyph(cancelSelection_, QStringLiteral("×"));
+    setFluentButton(cancelSelection_, Symbol::Close);
     selectionLayout->addWidget(cancelSelection_);
     column->addWidget(selectionBar_);
     connect(copySelection_, &QAction::triggered, this, [this] { applyMessageAction(QStringLiteral("copySelected")); });
@@ -422,7 +514,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     replyLayout->addLayout(quote, 1);
     cancelReply_ = new QToolButton(replyBar_);
     cancelReply_->setAutoRaise(true);
-    setToolbarGlyph(cancelReply_, QStringLiteral("×"));
+    setFluentButton(cancelReply_, Symbol::Close);
     replyLayout->addWidget(cancelReply_);
     connect(cancelReply_, &QToolButton::clicked, this, [this] {
         const bool accepted = editTarget_.isEmpty() ? applyMessageAction(QStringLiteral("cancelReply")) :
@@ -431,7 +523,10 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     });
     column->addWidget(replyBar_);
     linkPreviewButton_ = new QToolButton(detail_);
-    linkPreviewButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    linkPreviewButton_->setIcon(fluentIcon(Symbol::Options));
+    linkPreviewButton_->setIconSize(QSize(16, 16));
+    linkPreviewButton_->setMinimumHeight(36);
+    linkPreviewButton_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     linkPreviewButton_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
     linkPreviewButton_->setPopupMode(QToolButton::InstantPopup);
     linkPreviewButton_->hide();
@@ -470,9 +565,11 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         add(options.value("remove").toString(), QStringLiteral("remove"));
     });
     column->addWidget(linkPreviewButton_);
-    auto *composerBar = new QHBoxLayout;
-    composerBar->setContentsMargins(14, 7, 12, 7);
-    composerBar->setSpacing(8);
+    auto *composerCard = new QFrame(detail_);
+    composerCard->setObjectName(QStringLiteral("composerCard"));
+    auto *composerBar = new QHBoxLayout(composerCard);
+    composerBar->setContentsMargins(7, 6, 7, 6);
+    composerBar->setSpacing(4);
     attachment_ = new AttachmentReview(this);
     attachment_->request = [this](int action, const QByteArray &state) {
         return !locked_ && dialogRequest && dialogRequest(action, state);
@@ -482,7 +579,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     };
     attachmentButton_ = new QToolButton(detail_);
     attachmentButton_->setAutoRaise(true);
-    setToolbarGlyph(attachmentButton_, QStringLiteral("+"));
+    setFluentButton(attachmentButton_, Symbol::Attach);
     attachmentButton_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
     attachmentButton_->setPopupMode(QToolButton::InstantPopup);
     auto *addMenu = new QMenu(attachmentButton_);
@@ -503,17 +600,22 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(shareLocation_, &QAction::triggered, this, [this] { openWorkspaceCommand("shareLocation"); });
     recordButton_ = new QToolButton(detail_);
     recordButton_->setAutoRaise(true);
-    recordButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    setFluentButton(recordButton_, Symbol::Record);
     composerBar->addWidget(recordButton_, 0, Qt::AlignBottom);
     connect(recordButton_, &QToolButton::clicked, this, [this] { openWorkspaceCommand("record"); });
-    composer_ = new ChatComposer(detail_);
+    stickerButton_ = new QToolButton(composerCard);
+    setFluentButton(stickerButton_, Symbol::Sticker);
+    connect(stickerButton_, &QToolButton::clicked, stickersAction_, &QAction::trigger);
+    composerBar->addWidget(stickerButton_, 0, Qt::AlignBottom);
+    composer_ = new ChatComposer(composerCard);
+    composer_->setObjectName(QStringLiteral("chatInput"));
     composerBar->addWidget(composer_, 1);
     send_ = new QToolButton(detail_);
     send_->setAutoRaise(true);
-    send_->setFixedSize(36, 36);
+    setFluentButton(send_, Symbol::Send, true);
     composerBar->addWidget(send_, 0, Qt::AlignBottom);
     deliveryButton_ = new QToolButton(detail_);
-    setToolbarGlyph(deliveryButton_, QStringLiteral("⌄"));
+    setFluentButton(deliveryButton_, Symbol::Options);
     deliveryButton_->setStyleSheet(QStringLiteral("QToolButton::menu-indicator { image: none; }"));
     deliveryButton_->setAutoRaise(true);
     deliveryButton_->setPopupMode(QToolButton::InstantPopup);
@@ -532,7 +634,10 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(clearDelivery_, &QAction::triggered, this, [this] { applyMessageAction(QStringLiteral("clearDelivery")); });
     deliveryButton_->setMenu(delivery);
     composerBar->addWidget(deliveryButton_, 0, Qt::AlignBottom);
-    column->addLayout(composerBar);
+    auto *composerInset = new QVBoxLayout;
+    composerInset->setContentsMargins(14, 3, 14, 13);
+    composerInset->addWidget(composerCard);
+    column->addLayout(composerInset);
     composer_->copySelection = [this](const QString &value) {
         return !locked_ && !selected_.isEmpty() && copyText && copyText(selected_, value);
     };
@@ -564,7 +669,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(composer_, &ChatComposer::draftChanged, this, [this](const QString &draft) {
         if (!locked_ && !selected_.isEmpty()) emit draftChanged(selected_, editTarget_, draft);
     });
-    split_->addWidget(sidebar);
+    split_->addWidget(sidebarPane_);
     split_->addWidget(detailContainer_);
     split_->setStretchFactor(0, 0);
     split_->setStretchFactor(1, 1);
@@ -634,9 +739,11 @@ void ChatWorkspace::clear() {
     twoPanes_ = false;
     peers_->clear();
     history_->clear();
+    messages_->retainMedia({});
     selected_.clear();
     editTarget_.clear();
     title_->clear();
+    chatAvatar_->clear();
     historyGeneration_ = -1;
     initialHistory_ = hasNewer_ = false;
     for (auto *control : {older_, newer_, latest_, retry_}) control->hide();
@@ -691,6 +798,7 @@ void ChatWorkspace::present(const QByteArray &frame) {
         chatMenuButton_->menu()->hide();
         dismissAttachment();
         history_->clear();
+        messages_->retainMedia({});
         selected_ = peer;
         showingList_ = peer.isEmpty();
     }
@@ -736,21 +844,24 @@ void ChatWorkspace::present(const QByteArray &frame) {
     workspaceMenuButton_->setAccessibleName(workspace.value("label").toString());
     workspaceMenuButton_->setToolTip(workspaceMenuButton_->accessibleName());
     contactsAction_->setText(workspace.value("contacts").toString());
+    labelButton(contactsRail_, contactsAction_->text());
     addFriendAction_->setText(workspace.value("addFriend").toString());
     requestsAction_->setText(workspace.value("requests").toString());
     manageFoldersAction_->setText(workspace.value("manageFolders").toString());
     savedAction_->setText(workspace.value("saved").toString());
+    labelButton(savedRail_, savedAction_->text());
     stickerLibraryAction_->setText(workspace.value("stickerLibrary").toString());
     sendQueueAction_->setText(workspace.value("sendQueue").toString());
     forwardQueueAction_->setText(workspace.value("forwardQueue").toString());
     callHistoryAction_->setText(workspace.value("callHistory").toString());
     settingsAction_->setText(workspace.value("settings").toString());
+    labelButton(settingsRail_, settingsAction_->text());
     appLockAction_->setText(workspace.value("appLock").toString());
     lockNowAction_->setText(workspace.value("lockNow").toString());
     lockNowAction_->setVisible(workspace.value("lockEnabled").toBool());
     const auto calls = state.value("calls").toObject();
     callButton_->setVisible(calls.value("enabled").toBool());
-    callButton_->setText(calls.value("label").toString());
+    labelButton(callButton_, calls.value("label").toString());
     voiceCall_->setText(calls.value("voice").toString());
     videoCall_->setText(calls.value("video").toString());
     const auto chatActions = state.value("chatActions").toObject();
@@ -769,8 +880,8 @@ void ChatWorkspace::present(const QByteArray &frame) {
     stickersAction_->setText(attachmentOptions_.value("stickers").toString());
     shareContact_->setText(attachmentOptions_.value("shareContact").toString());
     shareLocation_->setText(attachmentOptions_.value("shareLocation").toString());
-    recordButton_->setText(attachmentOptions_.value("record").toString());
-    recordButton_->setAccessibleName(recordButton_->text());
+    labelButton(recordButton_, attachmentOptions_.value("record").toString());
+    labelButton(stickerButton_, stickersAction_->text());
     {
         const QSignalBlocker blocked(folders_);
         const auto choices = state.value("folders").toArray();
@@ -788,8 +899,7 @@ void ChatWorkspace::present(const QByteArray &frame) {
     }
     searchButton_->setText(searchLabels_.value("title").toString());
     searchButton_->setAccessibleName(searchButton_->text());
-    chatSearchButton_->setText(searchButton_->text());
-    chatSearchButton_->setAccessibleName(searchButton_->text());
+    labelButton(chatSearchButton_, searchButton_->text());
     hasNewer_ = history.value("newer").toBool();
     const bool busy = loading || history.value("busy").toBool();
     const bool failed = history.value("failed").toBool();
@@ -814,7 +924,9 @@ void ChatWorkspace::present(const QByteArray &frame) {
     peers_->replace(state.value("conversations").toArray());
     const auto selectedIndex = peers_->byId(peer);
     if (conversations_->currentIndex() != selectedIndex) conversations_->setCurrentIndex(selectedIndex);
+    sidebarTitle_->setText(state.value("listLabel").toString());
     title_->setText(state.value("title").toString());
+    chatAvatar_->setText(state.value("initial").toString());
     presentComposer(state.value("editor").toObject(), changed);
     const bool changedRows = history_->replace(state.value("messages").toArray());
     split_->show();
@@ -954,6 +1066,10 @@ void ChatWorkspace::reportHistoryViewport() {
         !conversationMenu_->isVisible() && !messageMenu_->isVisible() &&
         !attachment_->isVisible() && !preview_->isVisible())
         for (const auto &index : messages_->readableRows()) readable.append(history_->idAt(index));
+    const auto visual = shown && !window()->isMinimized() ? messages_->visibleMedia() : QStringList{};
+    messages_->retainMedia(visual);
+    QJsonArray media;
+    for (const auto &id : visual) media.append(id);
     const QJsonObject state{
         {"peer", selected_},
         {"generation", historyGeneration_},
@@ -961,9 +1077,16 @@ void ChatWorkspace::reportHistoryViewport() {
         {"latest", !hasNewer_ && scroll->value() == scroll->maximum()},
         {"anchor", history_->idAt(row)},
         {"offset", row.isValid() ? messages_->visualRect(row).top() : 0},
-        {"readable", readable}
+        {"readable", readable},
+        {"media", media},
+        {"animateMedia", window()->isActiveWindow() && !search_->isVisible() && !preview_->isVisible()}
     };
     emit historyViewportChanged(QJsonDocument(state).toJson(QJsonDocument::Compact));
+}
+
+void ChatWorkspace::presentInlineImage(qint64 generation, const QString &id, const QImage &image) {
+    if (locked_ || historyGeneration_ != generation || !messages_->visibleMedia().contains(id)) return;
+    messages_->showMedia(id, image);
 }
 
 void ChatWorkspace::presentComposer(const QJsonObject &state, bool changedPeer) {
@@ -976,14 +1099,13 @@ void ChatWorkspace::presentComposer(const QJsonObject &state, bool changedPeer) 
     const auto sendLabel = state.value("sendLabel").toString();
     send_->setAccessibleName(sendLabel);
     send_->setToolTip(sendLabel);
-    send_->setText(sendLabel);
-    send_->setToolButtonStyle(Qt::ToolButtonTextOnly);
-    const auto sendWidth = qMax(36, send_->fontMetrics().horizontalAdvance(sendLabel) + 18);
-    send_->setFixedWidth(sendWidth);
+    if (changedPeer || changedTarget)
+        send_->setIcon(fluentIcon(editTarget_.isEmpty() ? Symbol::Send : Symbol::Check, true));
     send_->setEnabled(state.value("canSend").toBool());
     const bool canAttach = editTarget_.isEmpty() && state.value("canCompose").toBool();
     attachmentButton_->setEnabled(canAttach);
     recordButton_->setEnabled(canAttach);
+    stickerButton_->setEnabled(canAttach);
     linkPreviewOptions_ = state.value("linkPreview").toObject();
     if (changedPeer || linkPreviewOptions_.isEmpty()) {
         linkPreviewButton_->menu()->close();
@@ -991,15 +1113,19 @@ void ChatWorkspace::presentComposer(const QJsonObject &state, bool changedPeer) 
     }
     const auto previewLabel = linkPreviewOptions_.value("label").toString();
     linkPreviewButton_->setText(linkPreviewOptions_.value("title").toString());
-    linkPreviewButton_->setAccessibleName(previewLabel);
+    labelButton(linkPreviewButton_, previewLabel);
     linkPreviewButton_->setVisible(!linkPreviewOptions_.isEmpty());
     const auto delivery = state.value("delivery").toObject();
     const auto optionsLabel = delivery.value("options").toString();
     const auto summary = delivery.value("summary").toString();
     deliveryButton_->setAccessibleName(summary.isEmpty() ? optionsLabel : optionsLabel + QStringLiteral(" · ") + summary);
     deliveryButton_->setToolTip(deliveryButton_->accessibleName());
-    const auto deliveryGlyph = summary.isEmpty() ? QStringLiteral("⌄") : QStringLiteral("✓");
-    if (deliveryButton_->text() != deliveryGlyph) deliveryButton_->setText(deliveryGlyph);
+    if (deliveryButton_->property("optionsActive").toBool() != !summary.isEmpty()) {
+        deliveryButton_->setProperty("optionsActive", !summary.isEmpty());
+        deliveryButton_->style()->unpolish(deliveryButton_);
+        deliveryButton_->style()->polish(deliveryButton_);
+        deliveryButton_->update();
+    }
     deliveryButton_->setVisible(editTarget_.isEmpty());
     deliveryButton_->setEnabled(canAttach);
     deliveryOptions_->setText(optionsLabel);
@@ -1097,7 +1223,7 @@ void ChatWorkspace::dismissSearch() {
 void ChatWorkspace::layoutPanes() {
     if (locked_) return;
     const bool narrow = width() < 640;
-    conversations_->parentWidget()->setVisible(!narrow || showingList_);
+    sidebarPane_->setVisible(!narrow || showingList_);
     detailContainer_->setVisible(!narrow || (!selected_.isEmpty() && !showingList_));
     auto *page = selected_.isEmpty() ? static_cast<QWidget *>(emptyChat_) : detail_;
     if (detailPages_->currentWidget() != page) detailPages_->setCurrentWidget(page);

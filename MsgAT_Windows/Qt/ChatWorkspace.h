@@ -9,6 +9,7 @@
 #include <memory>
 
 class QLabel;
+class QImage;
 class QAction;
 class QComboBox;
 class QDragEnterEvent;
@@ -44,6 +45,7 @@ public:
     void dismissAttachment();
     void presentPreview(const QJsonObject &state);
     void presentImage(qint64 generation, const uchar *pixels, int width, int height, int stride);
+    void presentInlineImage(qint64 generation, const QString &id, const QImage &image);
     void presentNotice(const QString &message);
     void presentArchiveUndo(const QJsonObject &state);
     void presentCall(const QJsonObject &state);
@@ -99,7 +101,7 @@ private:
     QAction *deliveryOptions_, *sendSilently_, *scheduleDraft_, *clearDelivery_;
     QJsonObject attachmentOptions_;
     QToolButton *searchButton_, *chatSearchButton_;
-    QToolButton *workspaceMenuButton_;
+    QToolButton *workspaceMenuButton_, *contactsRail_, *savedRail_, *settingsRail_, *stickerButton_;
     QAction *contactsAction_, *addFriendAction_, *requestsAction_, *settingsAction_;
     QAction *manageFoldersAction_;
     QAction *savedAction_, *stickerLibraryAction_, *sendQueueAction_, *forwardQueueAction_, *callHistoryAction_;
@@ -110,9 +112,9 @@ private:
     QAction *sharedMediaAction_, *pinnedMessagesAction_, *chatQueueAction_, *historyNavigationAction_;
     QJsonObject searchLabels_;
     ChatRows *peers_, *history_;
-    QWidget *detailContainer_, *detail_;
+    QWidget *sidebarPane_, *detailContainer_, *detail_;
     QStackedLayout *detailPages_;
-    QLabel *title_, *emptyChat_;
+    QLabel *sidebarTitle_, *title_, *chatAvatar_, *emptyChat_;
     QToolButton *back_;
     ChatComposer *composer_;
     QWidget *replyBar_;
@@ -138,7 +140,7 @@ private:
     QString editTarget_;
     qint64 historyGeneration_ = -1;
     int theme_ = -1, chatTextPercentage_ = 0;
-    int sidebarWidth_ = 288;
+    int sidebarWidth_ = 318;
     bool twoPanes_ = false;
     bool initialHistory_ = false, hasNewer_ = false;
     bool presenting_ = false;

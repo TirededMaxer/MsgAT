@@ -21,8 +21,8 @@ internal sealed class StickerImageView:Image
         }));
     internal static void SetPlaybackPaused(DependencyObject scope, bool paused) => scope.SetValue(PlaybackPausedProperty, paused);
     private static readonly SemaphoreSlim Animations=new(3);
-    private sealed class Lease:IDisposable {private int _held=1;public void Dispose(){if(Interlocked.Exchange(ref _held,0)==1)Animations.Release();}}
-    private sealed class Decoder:IDisposable
+    internal sealed class Lease:IDisposable {private int _held=1;public void Dispose(){if(Interlocked.Exchange(ref _held,0)==1)Animations.Release();}}
+    internal sealed class Decoder:IDisposable
     {
         private readonly object _gate=new();private readonly byte[] _bytes;private readonly MemoryStream _stream;private readonly SKCodec _codec;private readonly SKBitmap _pixels;private readonly SKCodecFrameInfo[] _frames;private readonly Lease _lease;
         private bool _closed;private int _index;private int _last=-1;
@@ -53,6 +53,14 @@ internal sealed class StickerImageView:Image
         }
         public void Dispose(){lock(_gate){if(_closed)return;_closed=true;_pixels.Dispose();_codec.Dispose();_stream.Dispose();CryptographicOperations.ZeroMemory(_bytes);_lease.Dispose();}}
     }
+    internal static Decoder? TryOpenDecoder(Func<byte[]> read)
+    {
+        if (!Animations.Wait(0)) return null;
+        var lease = new Lease();
+        try { return new Decoder(read(), lease); }
+        catch { lease.Dispose(); throw; }
+    }
+
     private readonly Func<byte[]> _read;private readonly DispatcherTimer _timer;private readonly DispatcherTimer _retry;
     internal event EventHandler? PlaybackFailed;
     private Window? _window;private ScrollViewer? _scroll;private Decoder? _decoder;private bool _loading;private bool _static;private bool _failed;private long _generation;

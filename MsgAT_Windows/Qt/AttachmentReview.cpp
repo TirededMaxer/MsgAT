@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "AttachmentReview.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 #include "ChatComposer.h"
 #include "WindowPrivacy.h"
 
@@ -52,6 +53,13 @@ AttachmentReview::AttachmentReview(QWidget *parent) : QDialog(parent) {
     down_ = new QPushButton(this);
     edit_ = new QPushButton(this);
     remove_ = new QPushButton(this);
+    setFluentAction(add_, Symbol::Attach);
+    setFluentAction(up_, Symbol::Up);
+    setFluentAction(down_, Symbol::Down);
+    setFluentAction(edit_, Symbol::Edit);
+    setFluentAction(remove_, Symbol::Remove);
+    up_->setMinimumWidth(36);
+    down_->setMinimumWidth(36);
     order->addWidget(add_);
     order->addStretch();
     order->addWidget(edit_);
@@ -95,6 +103,9 @@ AttachmentReview::AttachmentReview(QWidget *parent) : QDialog(parent) {
     actions->addStretch();
     cancel_ = new QPushButton(this);
     submit_ = new QPushButton(this);
+    submit_->setObjectName(QStringLiteral("fluentPrimary"));
+    setFluentAction(submit_, Symbol::Send, true);
+    setFluentAction(cancel_, Symbol::Close);
     actions->addWidget(cancel_);
     actions->addWidget(submit_);
     layout->addLayout(actions);
@@ -177,10 +188,8 @@ void AttachmentReview::showFor(const QString &peer, const QJsonObject &options, 
     files_->setAccessibleName(label("title"));
     picker_->setWindowTitle(label("add"));
     add_->setText(label("add"));
-    up_->setText(QStringLiteral("↑"));
     up_->setAccessibleName(label("up"));
     up_->setToolTip(label("up"));
-    down_->setText(QStringLiteral("↓"));
     down_->setAccessibleName(label("down"));
     down_->setToolTip(label("down"));
     remove_->setText(label("remove"));

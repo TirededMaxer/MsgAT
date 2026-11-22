@@ -156,6 +156,7 @@ public:
 } // namespace
 
 ConversationList::ConversationList(QWidget *parent) : QListView(parent) {
+    setObjectName(QStringLiteral("conversationList"));
     installChatPalette(this, ChatSurface::ConversationList);
     setItemDelegate(new ConversationDelegate(this));
     setSelectionMode(QAbstractItemView::SingleSelection);

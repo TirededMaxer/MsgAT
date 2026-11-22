@@ -56,6 +56,11 @@ QVariant ChatRows::data(const QModelIndex &index, int role) const {
     case MessageTimeline::CanDeleteLocally: return row.value("canDelete").toBool();
     case MessageTimeline::CanCancelSend: return row.value("canCancelSend").toBool();
     case MessageTimeline::Revoked: return row.value("revoked").toBool();
+    case MessageTimeline::RichRuns: return row.value("runs").toArray();
+    case MessageTimeline::ReplyText: return row.value("quote").toString();
+    case MessageTimeline::InlineMedia: return row.value("media").toArray();
+    case MessageTimeline::InlineMediaCount: return row.value("mediaCount").toInt();
+    case MessageTimeline::InlineMediaStatus: return row.value("mediaStatus").toString();
     case MessageTimeline::InspectFormattedText: return row.value("inspectText").toBool();
     case MessageTimeline::CanPin: return row.value("canPin").toBool();
     case MessageTimeline::LinkPreviewText: return row.value("preview").toString();

@@ -45,6 +45,7 @@ private:
     QWidget *makeProfile();
     QWidget *makeReset();
     void applyLabels();
+    void updateAdvancedDisclosure(bool expanded);
     void filterTopics(bool resetScroll);
     void readNetwork(const QJsonObject &network);
     void openNetwork(QWidget *target = nullptr);

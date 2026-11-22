@@ -4,6 +4,7 @@ project(MsgATDesktopUi LANGUAGES CXX)
 find_package(Qt6 6.10 REQUIRED COMPONENTS Widgets)
 add_library(msgat_desktop_ui SHARED
     ChatPalette.cpp ChatPalette.h
+    FluentChrome.cpp FluentChrome.h
     ChatComposer.cpp ChatComposer.h
     ChatRows.cpp ChatRows.h
     ChatWorkspace.cpp ChatWorkspace.h

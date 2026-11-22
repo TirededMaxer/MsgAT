@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "SettingsWindow.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 #include "WindowPrivacy.h"
 
 #include <QBoxLayout>
@@ -68,6 +69,7 @@ SettingsWindow::SettingsWindow(QWidget *parent) : QDialog(parent) {
     auto *header = new QHBoxLayout;
     back_ = new QPushButton(this);
     back_->setAutoDefault(false);
+    setFluentAction(back_, Symbol::Back);
     connect(back_, &QPushButton::clicked, this, &SettingsWindow::showOverview);
     header->addWidget(back_);
     heading_ = plainLabel(this);
@@ -94,7 +96,12 @@ SettingsWindow::SettingsWindow(QWidget *parent) : QDialog(parent) {
     close_ = new QPushButton(this);
     cancel_ = new QPushButton(this);
     save_ = new QPushButton(this);
+    save_->setObjectName(QStringLiteral("fluentPrimary"));
     retry_ = new QPushButton(this);
+    setFluentAction(close_, Symbol::Close);
+    setFluentAction(cancel_, Symbol::Back);
+    setFluentAction(save_, Symbol::Check, true);
+    setFluentAction(retry_, Symbol::Reset);
     for (auto *button : {close_, retry_, cancel_, save_}) {
         button->setAutoDefault(false);
         footer->addWidget(button);
@@ -143,6 +150,7 @@ QWidget *SettingsWindow::makeOverview() {
     layout->setContentsMargins(0, 0, 0, 0);
     search_ = new QLineEdit(root);
     search_->setClearButtonEnabled(true);
+    search_->addAction(fluentIcon(Symbol::Search), QLineEdit::LeadingPosition);
     connect(search_, &QLineEdit::textChanged, this, [this] { if (!applying_) filterTopics(true); });
     layout->addWidget(search_);
     auto *body = new QWidget(root);
@@ -168,26 +176,29 @@ QWidget *SettingsWindow::makeOverview() {
     idRow->addWidget(identity_, 1);
     copy_ = new QPushButton(profile);
     copy_->setAutoDefault(false);
+    copy_->setIcon(fluentIcon(Symbol::Copy));
     idRow->addWidget(copy_);
     connect(copy_, &QPushButton::clicked, this, [this] { send("copyIdentity"); });
     profileLayout->addLayout(idRow);
     topic(profile, "copyIdentity", "identity");
 
-    auto link = [&](const char *label, const char *keywords, auto click, bool searchOnly = false) {
+    auto link = [&](const char *label, const char *keywords, Symbol symbol, auto click, bool searchOnly = false) {
         auto *button = new QPushButton(body);
         button->setObjectName(QStringLiteral("settingsLink"));
         button->setAutoDefault(false);
-        button->setMinimumHeight(34);
+        button->setMinimumHeight(39);
+        button->setIcon(fluentIcon(symbol));
+        button->setIconSize(QSize(18, 18));
         connect(button, &QPushButton::clicked, this, click);
         topic(button, label, keywords, searchOnly);
     };
-    link("profile", "profile", [this] { openPreferences(Profile); });
-    link("network", "network", [this] { openNetwork(); });
-    link("advanced", "advanced", [this] { openNetwork(advanced_); }, true);
-    link("turn", "turn", [this] { openNetwork(turnHeading_); }, true);
-    link("fingerprint", "certificate", [this] { openNetwork(fingerprint_); }, true);
-    link("notifications", "notifications", [this] { openPreferences(Notifications); });
-    link("privacy", "privacy", [this] { openPreferences(Privacy); });
+    link("profile", "profile", Symbol::Contacts, [this] { openPreferences(Profile); });
+    link("network", "network", Symbol::Network, [this] { openNetwork(); });
+    link("advanced", "advanced", Symbol::Settings, [this] { openNetwork(advanced_); }, true);
+    link("turn", "turn", Symbol::Network, [this] { openNetwork(turnHeading_); }, true);
+    link("fingerprint", "certificate", Symbol::Shield, [this] { openNetwork(fingerprint_); }, true);
+    link("notifications", "notifications", Symbol::Bell, [this] { openPreferences(Notifications); });
+    link("privacy", "privacy", Symbol::Shield, [this] { openPreferences(Privacy); });
 
     auto choice = [&](const char *label, const char *keywords) {
         auto *row = new QWidget(body);
@@ -211,11 +222,11 @@ QWidget *SettingsWindow::makeOverview() {
     tray_ = new QCheckBox(body);
     connect(tray_, &QCheckBox::clicked, this, [this](bool value) { send("tray", QJsonObject{{"value", value}}); });
     topic(tray_, "tray", "tray");
-    link("storage", "storage", [this] { openPreferences(Storage); });
-    link("exportFolder", "exportFolder", [this] { openPreferences(ExportFolder); });
+    link("storage", "storage", Symbol::Drive, [this] { openPreferences(Storage); });
+    link("exportFolder", "exportFolder", Symbol::Folder, [this] { openPreferences(ExportFolder); });
     revocations_ = plainLabel(body);
     topicsLayout_->addWidget(revocations_);
-    link("reset", "reset", [this] { openPreferences(Reset); });
+    link("reset", "reset", Symbol::Reset, [this] { openPreferences(Reset); });
     noResults_ = plainLabel(body);
     topicsLayout_->addWidget(noResults_);
     topicsLayout_->addStretch();
@@ -264,7 +275,9 @@ QWidget *SettingsWindow::makeNetwork() {
     advanced_ = new QToolButton(body);
     advanced_->setCheckable(true);
     advanced_->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    advanced_->setArrowType(Qt::RightArrow);
+    advanced_->setFocusPolicy(Qt::StrongFocus);
+    advanced_->setIconSize(QSize(16, 16));
+    advanced_->setMinimumHeight(36);
     layout->addWidget(advanced_, 0, Qt::AlignLeft);
     advancedFields_ = new QWidget(body);
     auto *advancedLayout = newForm(advancedFields_);
@@ -292,9 +305,9 @@ QWidget *SettingsWindow::makeNetwork() {
     layout->addWidget(advancedFields_);
     layout->addStretch();
     advancedFields_->hide();
-    connect(advanced_, &QToolButton::toggled, this, [this](bool open) {
-        advancedFields_->setVisible(open);
-        advanced_->setArrowType(open ? Qt::DownArrow : Qt::RightArrow);
+    connect(advanced_, &QToolButton::toggled, this, [this](bool expanded) {
+        advancedFields_->setVisible(expanded);
+        updateAdvancedDisclosure(expanded);
     });
     networkScroll_ = scrollFor(body, pages_);
     return networkScroll_;
@@ -364,6 +377,9 @@ QWidget *SettingsWindow::makeStorage() {
     auto *actions = new QHBoxLayout;
     cancelCache_ = new QPushButton(cacheConfirmation_);
     confirmCache_ = new QPushButton(cacheConfirmation_);
+    confirmCache_->setObjectName(QStringLiteral("fluentDestructive"));
+    setFluentAction(cancelCache_, Symbol::Close);
+    setFluentAction(confirmCache_, Symbol::Remove, true);
     for (auto *button : {cancelCache_, confirmCache_}) {
         button->setAutoDefault(false);
         actions->addWidget(button);
@@ -427,6 +443,8 @@ QWidget *SettingsWindow::makeExportFolder() {
     layout->addWidget(exportFolder_);
     chooseFolder_ = new QPushButton(body);
     defaultFolder_ = new QPushButton(body);
+    setFluentAction(chooseFolder_, Symbol::Folder);
+    setFluentAction(defaultFolder_, Symbol::Reset);
     for (auto *button : {chooseFolder_, defaultFolder_}) {
         button->setAutoDefault(false);
         layout->addWidget(button, 0, Qt::AlignLeft);
@@ -452,6 +470,8 @@ QWidget *SettingsWindow::makeProfile() {
     actions->addStretch();
     chooseAvatar_ = new QPushButton(body);
     removeAvatar_ = new QPushButton(body);
+    setFluentAction(chooseAvatar_, Symbol::Image);
+    setFluentAction(removeAvatar_, Symbol::Remove);
     for (auto *button : {chooseAvatar_, removeAvatar_}) {
         button->setAutoDefault(false);
         actions->addWidget(button);
@@ -496,6 +516,8 @@ QWidget *SettingsWindow::makeReset() {
     resetWarning_ = plainLabel(body);
     layout->addWidget(resetWarning_);
     confirmReset_ = new QPushButton(body);
+    confirmReset_->setObjectName(QStringLiteral("fluentDestructive"));
+    setFluentAction(confirmReset_, Symbol::Reset, true);
     confirmReset_->setAutoDefault(false);
     layout->addWidget(confirmReset_, 0, Qt::AlignLeft);
     connect(confirmReset_, &QPushButton::clicked, this, [this] { send("resetIdentity"); });
@@ -582,6 +604,13 @@ void SettingsWindow::chooseFile(bool directory) {
     picker->open();
 }
 
+void SettingsWindow::updateAdvancedDisclosure(bool expanded) {
+    const auto text = labels_.value(QLatin1String(expanded ? "hideAdvanced" : "advanced")).toString();
+    advanced_->setText(text);
+    advanced_->setToolTip(text);
+    advanced_->setIcon(fluentIcon(expanded ? Symbol::ChevronUp : Symbol::Options));
+}
+
 void SettingsWindow::applyLabels() {
     const auto label = [this](const char *key) { return labels_.value(QLatin1String(key)).toString(); };
     setWindowTitle(label("title"));
@@ -596,7 +625,7 @@ void SettingsWindow::applyLabels() {
     retry_->setText(label("retry"));
     tray_->setText(label("tray"));
     noResults_->setText(label("empty"));
-    advanced_->setText(label("advanced"));
+    updateAdvancedDisclosure(advanced_->isChecked());
     turnHeading_->setText(label("turn"));
     turnTls_->setText(label("turnTls"));
     developmentCertificate_->setText(label("developmentCertificate"));

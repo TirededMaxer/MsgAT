@@ -2,7 +2,6 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using MsgAT.Windows.Core.Network;
 using MsgAT.Windows.Core.Storage;
 using MsgAT.Windows.Infrastructure;
 using MsgAT.Windows.ViewModels;
@@ -21,8 +20,7 @@ internal sealed class QtWorkspaceFrame
         internal string? Source;
         internal string? Hidden;
         internal string Value = "";
-        internal string[] Links = [];
-        internal bool HasFormatting;
+        internal QtRichText? Rich;
     }
 
     internal void Clear()
@@ -34,37 +32,46 @@ internal sealed class QtWorkspaceFrame
         _reply.Value = "";
     }
 
-    internal string MessageText(MessageItem row, string body, string hidden)
+    private RenderedBody GetBody(MessageItem row, string source, string hidden)
     {
         var cached = _bodies.GetValue(row, static _ => new RenderedBody());
-        if (cached.Source != body || cached.Hidden != hidden)
+        if (cached.Source == source && cached.Hidden == hidden) return cached;
+        cached.Source = source;
+        cached.Hidden = hidden;
+        cached.Rich = null;
+        try
         {
-            cached.Source = body;
-            cached.Hidden = hidden;
-            try
-            {
-                cached.Value = MessageTextBlock.CopyableText(body, hidden, []);
-                cached.Links = body.Contains("://", StringComparison.Ordinal) ? WebPreviewFetcher.Candidates(body) : [];
-                cached.HasFormatting = MessageTextBlock.HasFormatting(body);
-            }
-            catch (InvalidOperationException) { cached.Value = ""; cached.Links = []; cached.HasFormatting = false; }
+            cached.Rich = QtRichText.Create(source, hidden);
+            cached.Value = cached.Rich is null ? NativeEditorText(source) : "";
         }
-        return cached.Value;
+        catch (InvalidOperationException) { cached.Value = ""; }
+        return cached;
     }
 
-    internal string[] MessageLinks(MessageItem row, string hidden)
+    private static string FormattedSource(MessageItem row) => row.IsText ? row.DisplayContent : row.Caption;
+
+    internal string CopyableText(MessageItem row, string hidden)
     {
-        if (!row.IsText || row.IsRevoked || !row.Content.Contains("://", StringComparison.Ordinal)) return [];
-        MessageText(row, row.Content, hidden);
-        return _bodies.TryGetValue(row, out var body) ? body.Links : [];
+        var body = GetBody(row, FormattedSource(row), hidden);
+        return MessageTextBlock.CopyableText(row.Content, hidden, body.Rich?.Revealed ?? []);
     }
 
-    internal bool CanInspectFormattedText(MessageItem row, string hidden)
+    internal string[] MessageLinks(MessageItem row, string hidden) =>
+        row.IsRevoked ? [] : GetBody(row, FormattedSource(row), hidden).Rich?.Links ?? [];
+
+    internal bool CanInspectFormattedText(MessageItem row, string hidden) =>
+        row.IsText && !row.IsRevoked && GetBody(row, FormattedSource(row), hidden).Rich?.HasFormatting == true;
+
+    internal bool ApplyRichText(MessageItem row, string action, string hidden, Func<string, bool> copy,
+        Func<string, bool> open, out bool changed)
     {
-        if (!row.IsText || row.IsRevoked) return false;
-        MessageText(row, row.Content, hidden);
-        return _bodies.TryGetValue(row, out var body) && body.HasFormatting;
+        changed = false;
+        return GetBody(row, FormattedSource(row), hidden).Rich is { } rich &&
+            rich.Apply(action, copy, open, out changed);
     }
+
+    internal static bool HasInlineMedia(MessageItem row) =>
+        !row.IsRevoked && row.IsAttachment && (row.IsImage || row.IsVideo || row.IsSticker);
 
     private string ReplyPreview(MainViewModel model, MessageItem target, string hidden)
     {
@@ -116,18 +123,26 @@ internal sealed class QtWorkspaceFrame
         {
             var hasCard = row.IsContactCard || row.IsLocation || row.IsLiveLocation;
             var preview = row.LinkPreview;
-            var body = hasCard ? row.CardTitle : row.DisplayContent;
-            if (row.IsText && !row.IsRevoked)
-            {
-                body = MessageText(row, body, hidden);
-                if (body.Length == 0) body = AppStrings.Get("UiNewMessage");
-            }
+            var media = (row.AlbumMembers.Count > 0 ? row.AlbumMembers : [row])
+                .Where(HasInlineMedia).Take(4).Select(item => new
+                {
+                    id = item.MessageId, available = item.IsAvailable, sticker = item.IsSticker,
+                    video = item.IsVideo, label = item.Filename
+                }).ToArray();
+            var filename = hasCard ? row.CardTitle : row.DisplayContent;
+            var source = media.Length > 0 || row.IsText ? FormattedSource(row) : filename;
+            var rendered = !row.IsRevoked && (media.Length != 0 || row.IsText) ? GetBody(row, source, hidden) : null;
+            var body = rendered is null ? filename : rendered.Rich?.VisibleText ?? rendered.Value;
+            if (row.IsText && body.Length == 0) body = AppStrings.Get("UiNewMessage");
             var quote = row.HasReplyQuote ? Join(row.ReplyQuoteAuthor,
                 PreviewText(_quotes.GetValue(row, static _ => new RenderedBody()), row.ReplyQuoteText, hidden)) : "";
             return new
             {
                 id = row.MessageId, body = quote.Length == 0 ? body : quote + "\n\n" + body,
-                hasQuote = row.HasReplyQuote, links = MessageLinks(row, hidden), outgoing = row.IsMine,
+                hasQuote = row.HasReplyQuote, quote, runs = rendered?.Rich?.Runs,
+                links = rendered?.Rich?.Links, outgoing = row.IsMine, media,
+                mediaCount = row.AlbumMembers.Count,
+                mediaStatus = media.Length == 0 || media.All(item => item.available) ? "" : row.TransferText,
                 revoked = row.IsRevoked, highlighted = row.IsJumpHighlighted ||
                     row.AlbumMembers.Any(item => item.IsJumpHighlighted), joinsAbove = row.JoinsOlder,
                 joinsBelow = row.JoinsNewer, day = row.TimelineDay,
@@ -148,12 +163,12 @@ internal sealed class QtWorkspaceFrame
                 canRetry = row.CanRetrySend, retrying = row.IsRetryingSend,
                 canCancelSend = row.IsSending,
                 metadata = Join(row.EditedText.Trim(), row.ShortTimeText, ConversationSummary.ReceiptMark(row.Receipt)),
-                accessible = Join(body, quote, preview?.Title ?? "", row.EditedText.Trim(), row.TimeText, row.StatusName)
+                accessible = Join(quote, body, media.Length == 0 ? "" : filename, preview?.Title ?? "", row.EditedText.Trim(), row.TimeText, row.StatusName)
             };
         });
         return JsonSerializer.SerializeToUtf8Bytes(new
         {
-            locked = false, peer = selected?.Uuid, title = selected?.Alias,
+            locked = false, peer = selected?.Uuid, title = selected?.Alias, initial = selected?.Initial,
             theme = (int)WindowAppearance.Theme, chatTextPercentage,
             folder = model.FolderKey,
             folders = (model.ShowArchiveEntry ? model.FolderChoices.Append(model.ArchiveEntry) : model.FolderChoices)
@@ -202,7 +217,7 @@ internal sealed class QtWorkspaceFrame
                 forward = AppStrings.Get("UiForwardSelectedMessages"), delete = AppStrings.Get("UiLocalDeleteAction")
             },
             workspace = new {
-                label = AppStrings.Get("UiSettings"), contacts = AppStrings.Get("UiContacts"), addFriend = AppStrings.Get("UiAddFriend"),
+                label = AppStrings.Get("UiMenu"), contacts = AppStrings.Get("UiContacts"), addFriend = AppStrings.Get("UiAddFriend"),
                 requests = AppStrings.Get("UiFriendRequests"), settings = AppStrings.Get("UiSettings"),
                 manageFolders = AppStrings.Get("UiChatFolders"),
                 saved = AppStrings.Get("UiSavedMessages"), stickerLibrary = AppStrings.Get("UiStickerLibrary"),

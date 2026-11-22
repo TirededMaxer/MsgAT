@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "AttachmentPreview.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 #include "WindowPrivacy.h"
 
 #include <QBoxLayout>
@@ -113,6 +114,11 @@ AttachmentPreview::AttachmentPreview(QWidget *parent) : QDialog(parent) {
     download_ = new QPushButton(this);
     save_ = new QPushButton(this);
     close_ = new QPushButton(this);
+    setFluentAction(previous_, Symbol::Previous);
+    setFluentAction(next_, Symbol::Next);
+    setFluentAction(download_, Symbol::Download);
+    setFluentAction(save_, Symbol::Save);
+    setFluentAction(close_, Symbol::Close);
     actions->addWidget(previous_);
     actions->addWidget(next_);
     actions->addWidget(download_);

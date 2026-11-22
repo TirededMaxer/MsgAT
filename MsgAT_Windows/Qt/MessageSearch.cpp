@@ -2,6 +2,7 @@
 #include "MessageSearch.h"
 #include "WindowPrivacy.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 
 #include <QBoxLayout>
 #include <QCheckBox>
@@ -28,6 +29,8 @@ MessageSearch::MessageSearch(QWidget *parent) : QDialog(parent) {
     layout->setSpacing(10);
     query_ = new QLineEdit(this);
     query_->setMaxLength(512);
+    query_->addAction(fluentIcon(Symbol::Search), QLineEdit::LeadingPosition);
+    query_->setClearButtonEnabled(true);
     query_->installEventFilter(this);
     layout->addWidget(query_);
     auto *filters = new QHBoxLayout;
@@ -55,6 +58,11 @@ MessageSearch::MessageSearch(QWidget *parent) : QDialog(parent) {
     retry_ = new QPushButton(this);
     jump_ = new QPushButton(this);
     close_ = new QPushButton(this);
+    jump_->setObjectName(QStringLiteral("fluentPrimary"));
+    setFluentAction(more_, Symbol::Down);
+    setFluentAction(retry_, Symbol::Reset);
+    setFluentAction(jump_, Symbol::Open, true);
+    setFluentAction(close_, Symbol::Close);
     for (auto *button : {more_, retry_, jump_, close_}) button->setAutoDefault(false);
     actions->addWidget(more_);
     actions->addWidget(retry_);

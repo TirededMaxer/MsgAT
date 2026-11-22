@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "ChatWorkspace.h"
+#include "FluentChrome.h"
 #include "WindowPrivacy.h"
 #include <QApplication>
 #include <QCloseEvent>
@@ -45,6 +46,7 @@ extern "C" Q_DECL_EXPORT int msgat_workspace_run(void *owner, Notify notify, con
     QApplication::setQuitOnLastWindowClosed(false);
     const auto icon = QFileIconProvider().icon(QFileInfo(QCoreApplication::applicationFilePath()));
     if (!icon.isNull()) app.setWindowIcon(icon);
+    MsgAT::installFluentChrome(app);
     WorkspaceWindow window;
     window.setWindowTitle("MsgAT");
     window.resize(1040, 680);
@@ -114,6 +116,14 @@ extern "C" Q_DECL_EXPORT int msgat_workspace_run(void *owner, Notify notify, con
     notify(owner, workspace, 2, nullptr, 0);
     workspace->clear();
     return exitCode;
+}
+
+extern "C" Q_DECL_EXPORT void msgat_workspace_inline_image(void *handle, qint64 generation, const char *id,
+        const uchar *pixels, int width, int height, int stride) {
+    auto *view = static_cast<MsgAT::ChatWorkspace *>(handle);
+    if (!view || !id || !pixels || width < 1 || height < 1 || width > 800 || height > 800 || stride != width * 4) return;
+    const QImage image(pixels, width, height, stride, QImage::Format_ARGB32_Premultiplied);
+    view->presentInlineImage(generation, QString::fromUtf8(id), image.copy());
 }
 
 extern "C" Q_DECL_EXPORT void msgat_workspace_present(void *handle, const char *bytes, int length, int surface) {

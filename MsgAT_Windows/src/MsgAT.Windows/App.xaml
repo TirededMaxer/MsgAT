@@ -4,28 +4,28 @@
              xmlns:infra="clr-namespace:MsgAT.Windows.Infrastructure"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
-        <Color x:Key="WindowColor">#FF19211E</Color>
-        <Color x:Key="PanelColor">#FF202925</Color>
-        <Color x:Key="SurfaceColor">#FF29332E</Color>
-        <Color x:Key="RaisedColor">#FF344139</Color>
-        <Color x:Key="BorderColor">#FF46564C</Color>
-        <Color x:Key="TextColor">#FFE9F3EE</Color>
-        <Color x:Key="MutedColor">#FFB0C3B8</Color>
-        <Color x:Key="AccentColor">#FF7ED8AD</Color>
-        <Color x:Key="AccentHoverColor">#FF96E5BE</Color>
+        <Color x:Key="WindowColor">#FF212933</Color>
+        <Color x:Key="PanelColor">#FF252F39</Color>
+        <Color x:Key="SurfaceColor">#FF29333E</Color>
+        <Color x:Key="RaisedColor">#FF33414F</Color>
+        <Color x:Key="BorderColor">#FF3B4856</Color>
+        <Color x:Key="TextColor">#FFF0F3F6</Color>
+        <Color x:Key="MutedColor">#FFB7C4CF</Color>
+        <Color x:Key="AccentColor">#FF86D9C2</Color>
+        <Color x:Key="AccentHoverColor">#FFA1E6D4</Color>
         <Color x:Key="DangerColor">#FFFF6B78</Color>
-        <Color x:Key="AccentTextColor">#FF95E3BB</Color>
-        <Color x:Key="ConnectionDotColor">#FF6FD6A2</Color>
-        <Color x:Key="ConnectionColor">#FF8BD8AC</Color>
-        <Color x:Key="MessagingTimelineColor">#FF171E1B</Color>
-        <Color x:Key="MessagingChromeColor">#FF242E29</Color>
-        <Color x:Key="MessagingSidebarColor">#FF1E2823</Color>
-        <Color x:Key="MessagingSelectionColor">#FF334C3F</Color>
-        <Color x:Key="MessagingDividerColor">#FF38473E</Color>
-        <Color x:Key="MessagingSelectionMarkColor">#FF8DDAB1</Color>
-        <Color x:Key="MessagingIncomingBubbleColor">#FF2C3B32</Color>
-        <Color x:Key="MessagingOutgoingBubbleColor">#FF25493A</Color>
-        <Color x:Key="MessagingMetadataColor">#FFB0C3B8</Color>
+        <Color x:Key="AccentTextColor">#FF86D9C2</Color>
+        <Color x:Key="ConnectionDotColor">#FF86D9C2</Color>
+        <Color x:Key="ConnectionColor">#FFA1E6D4</Color>
+        <Color x:Key="MessagingTimelineColor">#FF171E26</Color>
+        <Color x:Key="MessagingChromeColor">#FF29333E</Color>
+        <Color x:Key="MessagingSidebarColor">#FF212933</Color>
+        <Color x:Key="MessagingSelectionColor">#FF2E474B</Color>
+        <Color x:Key="MessagingDividerColor">#FF3B4856</Color>
+        <Color x:Key="MessagingSelectionMarkColor">#FF86D9C2</Color>
+        <Color x:Key="MessagingIncomingBubbleColor">#FF29333E</Color>
+        <Color x:Key="MessagingOutgoingBubbleColor">#FF20453C</Color>
+        <Color x:Key="MessagingMetadataColor">#FFB7C4CF</Color>
 
         <SolidColorBrush x:Key="WindowBrush" Color="{DynamicResource WindowColor}" />
         <SolidColorBrush x:Key="PanelBrush" Color="{DynamicResource PanelColor}" />

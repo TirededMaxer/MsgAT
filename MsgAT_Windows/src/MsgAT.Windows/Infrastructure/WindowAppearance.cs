@@ -20,16 +20,16 @@ internal static class WindowAppearance
 
     private static readonly (string Resource, int Rgb)[] LightPalette =
     [
-        ("WindowColor", 0xE9EEEB), ("PanelColor", 0xF0F4F2), ("SurfaceColor", 0xFFFFFF),
-        ("RaisedColor", 0xE8EEEA), ("BorderColor", 0xBFCDC3), ("TextColor", 0x172620),
-        ("MutedColor", 0x455B50), ("AccentColor", 0x78C6A8), ("AccentHoverColor", 0x66BA98),
-        ("AccentTextColor", 0x125D40), ("ConnectionDotColor", 0x1F855B), ("ConnectionColor", 0x155D41),
+        ("WindowColor", 0xF7F9FB), ("PanelColor", 0xEFF3F7), ("SurfaceColor", 0xFFFFFF),
+        ("RaisedColor", 0xE9EFF4), ("BorderColor", 0xD4DDE5), ("TextColor", 0x192531),
+        ("MutedColor", 0x526070), ("AccentColor", 0x80CDBA), ("AccentHoverColor", 0x6BC2AC),
+        ("AccentTextColor", 0x006957), ("ConnectionDotColor", 0x117B65), ("ConnectionColor", 0x006957),
         ("DangerColor", 0xA62339),
-        ("MessagingTimelineColor", 0xF4F7F5), ("MessagingChromeColor", 0xFCFDFC),
-        ("MessagingSidebarColor", 0xEAF0EB), ("MessagingSelectionColor", 0xD3E7DA),
-        ("MessagingDividerColor", 0xCAD6CE), ("MessagingSelectionMarkColor", 0x176144),
-        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xDCEFE4),
-        ("MessagingMetadataColor", 0x45594F)
+        ("MessagingTimelineColor", 0xEFF3F7), ("MessagingChromeColor", 0xFFFFFF),
+        ("MessagingSidebarColor", 0xF7F9FB), ("MessagingSelectionColor", 0xD5E8E7),
+        ("MessagingDividerColor", 0xD4DDE5), ("MessagingSelectionMarkColor", 0x006957),
+        ("MessagingIncomingBubbleColor", 0xFFFFFF), ("MessagingOutgoingBubbleColor", 0xD9EEE8),
+        ("MessagingMetadataColor", 0x526070)
     ];
     private static (Color Dark, PaletteColor Source)[]? _palette;
     private static UISettings? _systemSettings;

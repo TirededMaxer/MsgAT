@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #include "CallWindow.h"
 #include "ChatPalette.h"
+#include "FluentChrome.h"
 #include "WindowPrivacy.h"
 
 #include <QBoxLayout>
@@ -28,7 +29,7 @@ CallWindow::CallWindow() : QDialog(nullptr, Qt::Tool) {
     initial_->setTextFormat(Qt::PlainText);
     initial_->setFixedSize(44, 44);
     initial_->setAlignment(Qt::AlignCenter);
-    initial_->setStyleSheet(QStringLiteral("border-radius: 22px; background: palette(button); color: palette(button-text)"));
+    initial_->setObjectName(QStringLiteral("callAvatar"));
     identity->addWidget(initial_);
     auto *details = new QVBoxLayout;
     details->setSpacing(3);
@@ -94,6 +95,17 @@ CallWindow::CallWindow() : QDialog(nullptr, Qt::Tool) {
     compactButton_ = button(nullptr);
     connect(compactButton_, &QPushButton::clicked, this, [this] { setCompact(!compact_); });
     end_ = button("end", true);
+    answer_->setObjectName(QStringLiteral("fluentPrimary"));
+    reject_->setObjectName(QStringLiteral("fluentDestructive"));
+    end_->setObjectName(QStringLiteral("fluentDestructive"));
+    setFluentAction(answer_, Symbol::Call, true);
+    setFluentAction(reject_, Symbol::HangUp, true);
+    setFluentAction(end_, Symbol::HangUp, true);
+    setFluentAction(camera_, Symbol::Video);
+    setFluentAction(switchCamera_, Symbol::Reset);
+    setFluentAction(mute_, Symbol::Record);
+    setFluentAction(devices_, Symbol::Settings);
+    setFluentAction(compactButton_, Symbol::Options);
     layout->addLayout(actions);
     reset();
 }
@@ -164,6 +176,7 @@ void CallWindow::updatePresentation(bool resizeWindow) {
     set(switchCamera_, "switchCamera", fullVideo && local, !pending && state_.value("canSwitchCamera").toBool());
     set(devices_, "devices", connected && !compact_, !pending && !deviceState_.isEmpty());
     set(compactButton_, compact_ ? "expand" : "compact", !incoming && !ended, !pending);
+    compactButton_->setIcon(fluentIcon(compact_ ? Symbol::Options : Symbol::ChevronUp));
     waiting_->setText(labels.value(videoFault ? "videoUnavailable" : "waiting").toString());
     waiting_->setVisible(fullVideo && (!remote || videoFault));
     video_->setVisible(fullVideo && !videoFault);

@@ -1,5 +1,4 @@
 // SPDX-License-Identifier: AGPL-3.0-only
-using System.Buffers;
 using System.Diagnostics;
 using System.ComponentModel;
 using System.Text.Json;
@@ -17,14 +16,13 @@ namespace MsgAT.Windows.Infrastructure;
 [System.Diagnostics.CodeAnalysis.SuppressMessage("Design", "CA1001", Justification = "The WPF Unloaded event cancels and disposes the current parse.")]
 public sealed class MessageTextBlock:TextBlock
 {
-    private sealed record Part(string Text,int Style,int Spoiler,string? Url);
-    private sealed record QuoteFold(int Run, int End);
-    private sealed record Block(string Kind,string Language,IReadOnlyList<Part> Parts, QuoteFold? Fold = null);
+    internal sealed record Part(string Text,int Style,int Spoiler,string? Url);
+    internal sealed record QuoteFold(int Run, int End);
+    internal sealed record Block(string Kind,string Language,IReadOnlyList<Part> Parts, QuoteFold? Fold = null);
     private readonly HashSet<int> _revealed=[];
     private readonly HashSet<int> _expandedCodeBlocks = [];
     private readonly HashSet<int> _expandedQuotes = [];
     private const int CollapsedCodeLines = 12;
-    private static readonly SearchValues<char> FormatCharacters = SearchValues.Create("*_+~`|>");
     private IReadOnlyList<Block>? _document;
     private long _generation;
     private bool _parsing;
@@ -169,12 +167,7 @@ public sealed class MessageTextBlock:TextBlock
         catch (Exception error) when (error is System.Security.Cryptography.CryptographicException or
             InvalidOperationException or IOException or JsonException or KeyNotFoundException or ArgumentException) { }
     }
-    internal static bool HasFormatting(string text) =>
-        text.AsSpan().IndexOfAny(FormatCharacters) >= 0 &&
-        Parse(text, false, null).Any(block => block.Kind != "paragraph" ||
-            block.Parts.Any(part => part.Style != 0 || part.Spoiler != 0));
-
-    private static Block[] Parse(string text,bool summary,string? hiddenLabel)
+    internal static Block[] Parse(string text,bool summary,string? hiddenLabel)
     {
         if(summary){var value=SecurityCore.Call(new{operation="summarize_message_text",text=text,limit=240,hidden_label=hiddenLabel});return [new Block("paragraph","",[new Part(value.GetProperty("text").GetString()!,0,0,null)])];}
         var result=SecurityCore.Call(new {operation="render_message_text",text=text});
@@ -286,12 +279,7 @@ public sealed class MessageTextBlock:TextBlock
     private Block RenderCodeHeader(Block block, int index)
     {
         var code = string.Concat(block.Parts.Select(part => part.Text));
-        var cutoff = -1;
-        for (var line = 0; line < CollapsedCodeLines; line++)
-        {
-            cutoff = code.IndexOf('\n', cutoff + 1);
-            if (cutoff < 0) break;
-        }
+        var cutoff = CodeFoldOffset(code);
         var showingQuote = _quoteRanges.Keys.Any(key => key.Block == index);
         var expanded = showingQuote || _expandedCodeBlocks.Contains(index);
         var language = string.IsNullOrEmpty(block.Language) ? AppStrings.Get("UiFormatCodeBlock") : block.Language;
@@ -320,6 +308,17 @@ public sealed class MessageTextBlock:TextBlock
         Inlines.Add(new LineBreak());
         if (expanded || cutoff < 0) return block;
         return block with { Parts = [new Part(code[..cutoff], 16, 0, null)] };
+    }
+
+    internal static int CodeFoldOffset(string code)
+    {
+        var cutoff = -1;
+        for (var line = 0; line < CollapsedCodeLines; line++)
+        {
+            cutoff = code.IndexOf('\n', cutoff + 1);
+            if (cutoff < 0) break;
+        }
+        return cutoff;
     }
 
     private async Task LoadAsync(string text,bool summary,long generation,CancellationToken token)

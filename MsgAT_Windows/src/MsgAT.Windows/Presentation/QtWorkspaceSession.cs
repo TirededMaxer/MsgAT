@@ -153,6 +153,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             ClearSearch();
             ClearAttachmentReview();
             ClearAttachmentPreview();
+            ClearInlineMedia();
             ClearCall();
             ClearSettings();
             ClearVisibleReads();
@@ -201,6 +202,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                     session._view = 0;
                     session._presentUpdates = false;
                     session.ClearAttachmentPreview();
+                    session.ClearInlineMedia();
                     session.SetActive(false);
                     break;
                 case 3 or 4 or 5 or 10 or 11 or 12 or 13 or 14 or >= 18 and <= 34 or 36 or 37 or 38:
@@ -247,6 +249,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         {
             // A managed exception cannot unwind through Qt's dispatch loop.
             session.ClearAttachmentPreview();
+            session.ClearInlineMedia();
             session.ClearCall();
             session.ClearSettings();
             Present(view, null, 0, 0);
@@ -394,6 +397,14 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             RevealConfirmedMessage(peer, original, "UiQuotedMessageUnavailable", includeRevoked: true);
             return true;
         }
+        if (command == "richText" && payload.GetProperty("value").GetString() is { } inlineAction)
+        {
+            var accepted = _frames.ApplyRichText(item, inlineAction, AppStrings.Get("UiHiddenMessageText"), copyText,
+                url => MessageLinks.Parse(url) is { } targetUri &&
+                    MessageLinks.Open(targetUri, () => ShowNotice(AppStrings.Get("UiLinkOpenFailed"))), out var changed);
+            if (changed) QueueRefresh();
+            return accepted;
+        }
         if (command == "openLink" && payload.GetProperty("value").GetString() is { } url &&
             _frames.MessageLinks(item, AppStrings.Get("UiHiddenMessageText")).Contains(url, StringComparer.Ordinal) &&
             MessageLinks.Parse(url) is { } uri)
@@ -440,7 +451,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             }, null);
             return true;
         }
-        return command == "copy" && item.IsText && copyText(_frames.MessageText(item, item.Content, AppStrings.Get("UiHiddenMessageText")));
+        return command == "copy" && item.IsText && copyText(_frames.CopyableText(item, AppStrings.Get("UiHiddenMessageText")));
     }
 
     private bool HandleSelectionAction(string command, string peer, string? id, bool extending)
@@ -565,6 +576,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         var version = payload.GetProperty("generation").GetInt64();
         if (peer is null || peer != _model.SelectedConversation?.Uuid || !_model.IsChatContentVisible ||
             version != _model.HistoryNavigationVersion || _model.InitialHistoryLoading) return false;
+        if (payload.TryGetProperty("media", out var media))
+            UpdateInlineMedia(peer, version, media, payload.GetProperty("animateMedia").GetBoolean());
         if (!payload.GetProperty("shown").GetBoolean())
         {
             ClearVisibleReads();
@@ -881,6 +894,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         StopPresenting();
         ClearCall();
         ClearAttachmentPreview();
+        ClearInlineMedia();
         if (_view != 0) CloseWindow(_view);
     }
 
@@ -918,6 +932,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         ClearSearch();
         ClearAttachmentReview();
         ClearAttachmentPreview();
+        ClearInlineMedia();
         ShowWindow(_view, 0);
         SetActive(false, _callActive);
     }
@@ -931,6 +946,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         ClearSearch();
         ClearAttachmentReview();
         ClearAttachmentPreview();
+        ClearInlineMedia();
         ShowWindow(_view, 2);
         SetActive(false, _callActive);
     }
@@ -966,6 +982,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             ClearSearch();
             ClearAttachmentReview();
             ClearAttachmentPreview();
+            ClearInlineMedia();
             ClearCall();
             ClearSettings();
             ClearVisibleReads();

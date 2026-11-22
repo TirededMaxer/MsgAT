@@ -102,6 +102,16 @@ jobs:
       - name: Publish self-contained x64 EXE
         working-directory: MsgAT_Windows
         run: dotnet publish src/MsgAT.Windows/MsgAT.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o "$env:RUNNER_TEMP/msgat-windows-release"
+      - name: Install Qt for the Windows package
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125
+        with:
+          version: '6.10.3'
+          arch: win64_msvc2022_64
+          archives: qtbase
+          cache: false
+      - name: Compile and package the Qt workspace
+        shell: pwsh
+        run: ./scripts/ci/windows_qt.ps1 -Flavor release
       - run: python scripts/ci/packages.py windows
       - uses: actions/upload-artifact@v4
         with:

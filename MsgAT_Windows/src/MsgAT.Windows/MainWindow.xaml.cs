@@ -4420,7 +4420,7 @@ public partial class MainWindow : Window
             _peerBeforeCallOverlay = null;
             if (_deferredNotification is not null) Dispatcher.BeginInvoke(new Action(OpenDeferredNotification));
             if (_interruptedRecording is not null) Dispatcher.BeginInvoke(new Action(ReviewInterruptedRecording));
-            if (UseQtDevelopmentWorkspace) Dispatcher.BeginInvoke(new Action(ScheduleQtWorkspace));
+            if (UseQtWorkspace) Dispatcher.BeginInvoke(new Action(ScheduleQtWorkspace));
         }
         if (!_viewModel.IsChatContentVisible) { ClearFloatingTimelineDate(); CloseInlineAudio(); }
         if (!_viewModel.IsChatContentVisible)

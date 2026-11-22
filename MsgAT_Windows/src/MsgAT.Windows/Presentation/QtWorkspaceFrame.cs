@@ -226,6 +226,7 @@ internal sealed class QtWorkspaceFrame
                 retryLabel = AppStrings.Get("UiRetry")
             },
             backLabel = AppStrings.Get("UiBackToConversations"), listLabel = AppStrings.Get("UiConversationList"),
+            selectChatLabel = AppStrings.Get("UiSelectChat"),
             conversations, messages
         });
     }

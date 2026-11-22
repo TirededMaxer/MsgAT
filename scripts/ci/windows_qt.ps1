@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: MIT
-# Invoked by the Windows hosted acceptance job after the managed Debug publish.
+# Invoked after the managed publish on the Windows hosted runner.
+param(
+    [ValidateSet('development', 'release')]
+    [string] $Flavor = 'development'
+)
+
 $ErrorActionPreference = 'Stop'
 $PSNativeCommandUseErrorActionPreference = $true
 
@@ -8,8 +13,8 @@ $qtRoot = $env:QT_ROOT_DIR
 $build = Join-Path $env:RUNNER_TEMP 'msgat-windows-qt-native'
 $staging = Join-Path $env:RUNNER_TEMP 'msgat-windows-qt-package'
 $runtime = Join-Path $staging 'qt'
-$exe = Join-Path $env:RUNNER_TEMP 'msgat-windows-development/MsgAT.exe'
-$archive = Join-Path $env:RUNNER_TEMP 'MsgAT-Windows-Qt-development.zip'
+$exe = Join-Path $env:RUNNER_TEMP "msgat-windows-$Flavor/MsgAT.exe"
+$archive = Join-Path $env:RUNNER_TEMP "MsgAT-Windows-Qt-$Flavor.zip"
 
 cmake -S MsgAT_Windows/Qt -B $build -G Ninja -DCMAKE_BUILD_TYPE=Release "-DCMAKE_PREFIX_PATH=$qtRoot"
 cmake --build $build
@@ -40,9 +45,11 @@ Copy-Item LICENSE, LICENSE-AGPL-3.0, THIRD_PARTY_NOTICES.md $staging
 Prefix = qt
 Plugins = .
 '@ | Set-Content -Encoding Ascii (Join-Path $staging 'qt.conf')
-@'
+if ($Flavor -eq 'development') {
+    @'
 @echo off
 "%~dp0MsgAT.exe" --qt-workspace
 '@ | Set-Content -Encoding Ascii (Join-Path $staging 'Open MsgAT Qt.cmd')
+}
 
 Compress-Archive -Path (Join-Path $staging '*') -DestinationPath $archive -CompressionLevel Fastest

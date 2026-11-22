@@ -16,10 +16,10 @@ public partial class MainWindow
     private string? _qtWindowGeometry;
     private int _qtSidebarWidth;
     private bool _qtLaunchQueued;
-    internal bool UseQtDevelopmentWorkspace { get; set; }
+    internal bool UseQtWorkspace { get; set; }
     internal bool IsWorkspaceActive => _qtWorkspace?.IsForeground == true || IsActive || HasActiveQtWorkspaceDialog();
 
-    private bool CanShowQtWorkspace => UseQtDevelopmentWorkspace && !_appLocked && !_exiting &&
+    private bool CanShowQtWorkspace => UseQtWorkspace && !_appLocked && !_exiting &&
         _viewModel is { IsWorkspaceReady: true, IsChatContentVisible: true } && !_reviewingRecording && _recordingDialog is null &&
         (_services?.Calls.IsIncoming != true || _qtWorkspace?.IsOpen == true);
 
@@ -57,7 +57,7 @@ public partial class MainWindow
             }
             catch (Exception error)
             {
-                UseQtDevelopmentWorkspace = false;
+                UseQtWorkspace = false;
                 Trace.TraceError("Qt workspace startup failed ({0}).", error.GetType().Name);
                 if (!_exiting)
                 {

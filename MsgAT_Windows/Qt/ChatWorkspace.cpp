@@ -22,6 +22,7 @@
 #include <QShortcut>
 #include <QSignalBlocker>
 #include <QSplitter>
+#include <QStackedLayout>
 #include <QStyle>
 #include <QStyleHints>
 #include <QTimer>
@@ -150,7 +151,20 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     };
     peers_ = new ChatRows(ChatRows::Kind::Conversations, this);
     conversations_->setModel(peers_);
-    detail_ = new QWidget(split_);
+    detailContainer_ = new QWidget(split_);
+    detailPages_ = new QStackedLayout(detailContainer_);
+    detailPages_->setContentsMargins(0, 0, 0, 0);
+    emptyChat_ = new QLabel(detailContainer_);
+    emptyChat_->setTextFormat(Qt::PlainText);
+    emptyChat_->setAlignment(Qt::AlignCenter);
+    emptyChat_->setWordWrap(true);
+    emptyChat_->setContentsMargins(20, 20, 20, 20);
+    emptyChat_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Ignored);
+    installChatPalette(emptyChat_, ChatSurface::Timeline);
+    emptyChat_->setAutoFillBackground(true);
+    detailPages_->addWidget(emptyChat_);
+    detail_ = new QWidget(detailContainer_);
+    detailPages_->addWidget(detail_);
     auto *column = new QVBoxLayout(detail_);
     column->setContentsMargins(0, 0, 0, 0);
     column->setSpacing(0);
@@ -440,7 +454,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         if (!locked_ && !selected_.isEmpty()) emit draftChanged(selected_, editTarget_, draft);
     });
     split_->addWidget(sidebar);
-    split_->addWidget(detail_);
+    split_->addWidget(detailContainer_);
     split_->setStretchFactor(0, 0);
     split_->setStretchFactor(1, 1);
     split_->setSizes({288, 720});
@@ -676,6 +690,7 @@ void ChatWorkspace::present(const QByteArray &frame) {
     retry_->setVisible(failed);
     back_->setAccessibleName(state.value("backLabel").toString());
     conversations_->setAccessibleName(state.value("listLabel").toString());
+    emptyChat_->setText(state.value("selectChatLabel").toString());
     peers_->replace(state.value("conversations").toArray());
     const auto selectedIndex = peers_->byId(peer);
     if (conversations_->currentIndex() != selectedIndex) conversations_->setCurrentIndex(selectedIndex);
@@ -928,8 +943,10 @@ void ChatWorkspace::layoutPanes() {
     if (locked_) return;
     const bool narrow = width() < 640;
     conversations_->parentWidget()->setVisible(!narrow || showingList_);
-    detail_->setVisible(!selected_.isEmpty() && (!narrow || !showingList_));
-    const bool twoPanes = !narrow && !selected_.isEmpty();
+    detailContainer_->setVisible(!narrow || (!selected_.isEmpty() && !showingList_));
+    auto *page = selected_.isEmpty() ? static_cast<QWidget *>(emptyChat_) : detail_;
+    if (detailPages_->currentWidget() != page) detailPages_->setCurrentWidget(page);
+    const bool twoPanes = !narrow;
     if (twoPanes && !twoPanes_) {
         const auto restored = qBound(1, sidebarWidth_, width() - 1);
         split_->setSizes({restored, width() - restored});

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +43,7 @@ def versions():
 def filename(component, package_versions=None):
     v = versions() if package_versions is None else package_versions
     return {'android': f'MsgAT-Android-{v["android"]}.apk',
-            'windows': f'MsgAT-Windows-{v["windows"].removesuffix(".0")}-x64.exe',
+            'windows': f'MsgAT-Windows-{v["windows"].removesuffix(".0")}-x64.zip',
             'macos': f'MsgAT-macOS-{v["macos"]}-arm64.dmg',
             'relay': f'MsgAT-Console-{v["relay"]}.jar'}[component]
 
@@ -162,7 +163,14 @@ def android():
 
 
 def windows():
-    copy(Path(os.environ['RUNNER_TEMP']) / 'msgat-windows-release/MsgAT.exe', filename('windows'))
+    archive = Path(os.environ['RUNNER_TEMP']) / 'MsgAT-Windows-Qt-release.zip'
+    with zipfile.ZipFile(archive) as package:
+        required = {'MsgAT.exe', 'qt.conf', 'qt/msgat_desktop_ui.dll', 'qt/Qt6Core.dll',
+                    'qt/Qt6Gui.dll', 'qt/Qt6Widgets.dll', 'qt/platforms/qwindows.dll'}
+        missing = required - set(package.namelist())
+        if missing:
+            raise RuntimeError('Windows bundle is missing: ' + ', '.join(sorted(missing)))
+    copy(archive, filename('windows'))
 
 
 def prepare_macos_app(source, app, identifier=None, name=None):
@@ -292,7 +300,7 @@ def publish():
         title = f'MsgAT — Android {v["android"]} · Windows {v["windows"]} · macOS {v["macos"]} · Console {v["relay"]}'
         notes = Path(os.environ['RUNNER_TEMP']) / 'msgat-release-notes.md'
         notes.write_text(f'全部安装包由 [GitHub Actions]({manifest["workflow"]}) 从提交 `{commit}` 构建。\n\n'
-                         '包含正式签名 Android APK、Windows 自包含 EXE、macOS arm64 DMG、服务端 JAR 和 JSON 配置。\n\n'
+                         '包含正式签名 Android APK、Windows x64 Qt ZIP、macOS arm64 DMG、服务端 JAR 和 JSON 配置。\n\n'
                          'Mac 使用 ad-hoc 签名，未经过 Apple 公证。服务端默认端口 34478，可在 JAR 同目录 server-config.json 修改。\n\n'
                          '文件完整性见 SHA256SUMS.txt，版本和构建来源见 release-manifest.json。\n')
         run('gh', 'release', 'create', tag, '--repo', repo, '--target', commit, '--draft', '--title', title, '--notes-file', notes)

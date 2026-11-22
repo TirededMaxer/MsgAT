@@ -37,7 +37,9 @@ public partial class App : System.Windows.Application
             Infrastructure.WindowAppearance.StartObserving();
             _mainWindow = new MainWindow();
 #if DEBUG
-            _mainWindow.UseQtDevelopmentWorkspace = e.Args.Contains("--qt-workspace", StringComparer.Ordinal);
+            _mainWindow.UseQtWorkspace = e.Args.Contains("--qt-workspace", StringComparer.Ordinal);
+#else
+            _mainWindow.UseQtWorkspace = true;
 #endif
             MainWindow = _mainWindow;
             ConfigureTray();

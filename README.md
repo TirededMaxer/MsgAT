@@ -22,7 +22,7 @@
 | 组件 | 版本 | 下载 | 运行要求 |
 | --- | --- | --- | --- |
 | Android | 1.6（versionCode 11） | [APK](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Android-1.6.apk) | Android 10 或更新版本 |
-| Windows | 1.1 | [EXE](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Windows-1.1-x64.exe) | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
+| Windows | 1.1 | [Windows 安装包](https://github.com/TirededMaxer/MsgAT/releases/latest) | Windows 10 1809 或更新版本，x64，WebView2 Runtime |
 | macOS | 1.1（build 15） | [DMG](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-macOS-1.1-arm64.dmg) | macOS 13 或更新版本，Apple Silicon |
 | 服务端 | 1.1（增加 JSON 配置与性能优化） | [JAR](https://github.com/TirededMaxer/MsgAT/releases/latest/download/MsgAT-Console-1.1.jar) | Java 21 |
 

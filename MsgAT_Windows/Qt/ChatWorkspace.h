@@ -15,6 +15,7 @@ class QMenu;
 class QModelIndex;
 class QShortcut;
 class QSplitter;
+class QStackedLayout;
 class QTimer;
 class QToolButton;
 
@@ -104,8 +105,9 @@ private:
     QAction *sharedMediaAction_, *pinnedMessagesAction_, *chatQueueAction_;
     QJsonObject searchLabels_;
     ChatRows *peers_, *history_;
-    QWidget *detail_;
-    QLabel *title_;
+    QWidget *detailContainer_, *detail_;
+    QStackedLayout *detailPages_;
+    QLabel *title_, *emptyChat_;
     QToolButton *back_;
     ChatComposer *composer_;
     QWidget *replyBar_;

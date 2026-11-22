@@ -18,7 +18,8 @@ namespace MsgAT.Windows.Views;
 
 internal sealed class RecordingPlaybackControl : Border, IDisposable
 {
-    private readonly EncryptedCaptureFile _recording;
+    private readonly Func<Stream> _openMedia;
+    private readonly string _mime;
     private readonly Func<bool> _canPlay;
     private readonly Button _toggle = new() { Width = 36, Padding = new Thickness(0), IsEnabled = false };
     private readonly Slider _position = new()
@@ -37,11 +38,20 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
     private IRandomAccessStream? _stream;
     private Stream? _input;
     private bool _ready, _playing, _scrubbing, _updating, _ended, _disposed;
+    private bool _autoplay;
+    private double _speed = 1;
+    internal bool ShowsStatus => !_ready;
+    internal event Action? StatusChanged;
 
     internal RecordingPlaybackControl(EncryptedCaptureFile recording, Func<bool> canPlay)
+        : this(recording.Mime, recording.OpenRead, canPlay) { }
+
+    internal RecordingPlaybackControl(string mime, Func<Stream> open, Func<bool> canPlay, bool autoplay = false)
     {
-        _recording = recording;
+        _openMedia = open;
+        _mime = mime;
         _canPlay = canPlay;
+        _autoplay = autoplay;
         CornerRadius = new CornerRadius(9);
         BorderThickness = new Thickness(1);
         Margin = new Thickness(0, 8, 0, 0);
@@ -98,11 +108,12 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
         _feedback.Visibility = Visibility.Visible;
         _retry.Visibility = Visibility.Collapsed;
         _status.Text = AppStrings.Get("UiLoading");
+        StatusChanged?.Invoke();
         try
         {
-            _input = _recording.OpenRead();
+            _input = _openMedia();
             _stream = _input.AsRandomAccessStream();
-            _source = MediaSource.CreateFromStream(_stream, _recording.Mime);
+            _source = MediaSource.CreateFromStream(_stream, _mime);
             _player = new PlaybackPlayer { AutoPlay = false };
             _player.CommandManager.IsEnabled = false;
             _player.MediaOpened += MediaOpened;
@@ -126,8 +137,14 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
         _toggle.IsEnabled = true;
         _feedback.Visibility = Visibility.Collapsed;
         _controls.Visibility = Visibility.Visible;
+        StatusChanged?.Invoke();
         SetPlaying(false);
         DisplayPosition(0);
+        if (_autoplay)
+        {
+            _autoplay = false;
+            Toggle();
+        }
     });
 
     private void MediaEnded(PlaybackPlayer sender, object args) => ApplyEvent(sender, _ =>
@@ -154,6 +171,7 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
             if (_ended && player.PlaybackSession.CanSeek) player.PlaybackSession.Position = TimeSpan.Zero;
             _ended = false;
             player.Play();
+            player.PlaybackSession.PlaybackRate = _speed;
             SetPlaying(true);
             RefreshPosition();
         }
@@ -162,6 +180,7 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
 
     internal void PausePlayback()
     {
+        _autoplay = false;
         if (!_playing || _player is not { } player) return;
         try
         {
@@ -169,6 +188,14 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
             SetPlaying(false);
             RefreshPosition();
         }
+        catch (COMException) { ShowFailure(); }
+    }
+
+    internal void SetSpeed(double speed)
+    {
+        _speed = speed;
+        if (!_playing || _player is not { } player) return;
+        try { player.PlaybackSession.PlaybackRate = speed; }
         catch (COMException) { ShowFailure(); }
     }
 
@@ -218,11 +245,13 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
 
     private void ShowFailure()
     {
+        _autoplay = false;
         ReleaseMedia();
         _controls.Visibility = Visibility.Collapsed;
         _status.Text = AppStrings.Get("UiMediaPlaybackUnavailable");
         _retry.Visibility = Visibility.Visible;
         _feedback.Visibility = Visibility.Visible;
+        StatusChanged?.Invoke();
     }
 
     private void ReleaseMedia()
@@ -232,19 +261,31 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
         _toggle.IsEnabled = _position.IsEnabled = false;
         var player = _player;
         _player = null;
+        var source = _source;
+        _source = null;
+        var stream = _stream;
+        _stream = null;
+        var input = _input;
+        _input = null;
         if (player is not null)
         {
             player.MediaOpened -= MediaOpened;
             player.MediaEnded -= MediaEnded;
             player.MediaFailed -= MediaFailed;
-            player.Dispose();
         }
-        _source?.Dispose();
-        _source = null;
-        _stream?.Dispose();
-        _stream = null;
-        _input?.Dispose();
-        _input = null;
+        try { player?.Dispose(); }
+        catch (COMException) { }
+        finally
+        {
+            try { source?.Dispose(); }
+            catch (COMException) { }
+            finally
+            {
+                try { stream?.Dispose(); }
+                catch (COMException) { }
+                finally { input?.Dispose(); }
+            }
+        }
     }
 
     public void Dispose()
@@ -252,6 +293,7 @@ internal sealed class RecordingPlaybackControl : Border, IDisposable
         if (_disposed) return;
         _disposed = true;
         Loaded -= StartOnLoad;
+        StatusChanged = null;
         ReleaseMedia();
     }
 }

@@ -6,6 +6,7 @@ using System.Text;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.Wpf;
@@ -32,7 +33,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
     private readonly HashSet<Task> _resourceReads = [];
     internal Action? TogglePreviewFullScreen { get; set; }
     internal Action<bool>? ReportViewerActivity { get; set; }
-    internal bool ShowsPlaybackStatus => _status is not null;
+    internal bool ShowsPlaybackStatus => _status is not null || _nativeAudio?.ShowsStatus == true;
     internal Task ResourceReadsCompletion => Task.WhenAll(_resourceReads);
     private sealed class PlaybackSession(FrameworkElement surface)
     {
@@ -46,6 +47,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         internal bool DocumentReady { get; set; }
     }
     private PlaybackSession? _session;
+    private RecordingPlaybackControl? _nativeAudio;
     private FrameworkElement? _status;
     private bool _disposed;
     private bool _suppressAutoplay;
@@ -66,11 +68,51 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         {
             if (_disposed) return;
             ActiveViewers.Add(this);
-            await StartAsync();
+            if (_mime is "audio/mp4" or "audio/m4a" or "audio/x-m4a") ShowNativeAudio();
+            else await StartAsync();
         };
         Unloaded+=(_,_)=>Dispose();
     }
     private bool IsCurrent(PlaybackSession session) => !_disposed && ReferenceEquals(_session, session);
+
+    private void ShowNativeAudio()
+    {
+        if (_nativeAudio is not null) return;
+        Background = Brushes.Transparent;
+        var playback = new RecordingPlaybackControl(_mime, _openMedia, () => !_callActive,
+            autoplay: _autoplay && !_suppressAutoplay && !_callActive)
+        {
+            Margin = new Thickness(0), VerticalAlignment = VerticalAlignment.Center, MaxWidth = 600
+        };
+        playback.SetSpeed(_playbackSpeed);
+        _nativeAudio = playback;
+        var panel = new DockPanel { VerticalAlignment = VerticalAlignment.Center };
+        if (_showClose)
+        {
+            var closeLabel = AppStrings.Get("UiClose");
+            var close = new Button { Content = "×", ToolTip = closeLabel, Padding = new Thickness(0), Width = 36, Margin = new Thickness(6, 0, 0, 0) };
+            System.Windows.Automation.AutomationProperties.SetName(close, closeLabel);
+            close.Click += (_, _) => _dismiss();
+            DockPanel.SetDock(close, Dock.Right);
+            panel.Children.Add(close);
+        }
+        panel.Children.Add(playback);
+        Children.Add(panel);
+        void ReportActivity() => ReportViewerActivity?.Invoke(IsMouseOver || IsKeyboardFocusWithin);
+        playback.StatusChanged += ReportActivity;
+        IsMouseOverChanged += (_, _) => ReportActivity();
+        IsKeyboardFocusWithinChanged += (_, _) => ReportActivity();
+        PreviewKeyDown += (_, args) =>
+        {
+            if (args.Key == Key.Escape) { args.Handled = true; _dismiss(); }
+            else if (args.Key == Key.F11 && TogglePreviewFullScreen is { } fullscreen) { args.Handled = true; fullscreen(); }
+            else if ((args.Key is Key.Left or Key.Right) && Keyboard.FocusedElement is not Slider && _movePreview is { } move)
+            {
+                args.Handled = true;
+                move(args.Key == Key.Left ? -1 : 1);
+            }
+        };
+    }
 
     private async Task StartAsync()
     {
@@ -279,6 +321,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
 
     private void ApplyPlaybackSpeed()
     {
+        _nativeAudio?.SetSpeed(_playbackSpeed);
         if (_disposed || _session is not { DocumentReady: true } session) return;
         try { session.View.CoreWebView2?.PostWebMessageAsJson(_playbackSpeed.ToString(CultureInfo.InvariantCulture)); }
         catch (Exception error) when (error is InvalidOperationException or System.Runtime.InteropServices.COMException)
@@ -290,6 +333,7 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
     internal void PausePlayback()
     {
         _suppressAutoplay = true;
+        _nativeAudio?.PausePlayback();
         SendPlaybackCommand("pause");
     }
 
@@ -302,7 +346,11 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
 
     private void ApplyCallPlaybackState()
     {
-        if (_callActive) _suppressAutoplay = true;
+        if (_callActive)
+        {
+            _suppressAutoplay = true;
+            _nativeAudio?.PausePlayback();
+        }
         SendPlaybackCommand(_callActive ? "playback-blocked" : _suppressAutoplay ? "playback-unblocked" : "playback-allowed");
     }
 
@@ -462,6 +510,8 @@ internal sealed class EncryptedMediaView : Grid, IDisposable
         TogglePreviewFullScreen = null;
         ReportViewerActivity = null;
         PlaybackSpeedChanged = null;
+        _nativeAudio?.Dispose();
+        _nativeAudio = null;
         CloseSession();
         SetStatus(null);
         GC.SuppressFinalize(this);

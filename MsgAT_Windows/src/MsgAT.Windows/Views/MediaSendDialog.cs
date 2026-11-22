@@ -50,7 +50,7 @@ public sealed class MediaSendDialog : DialogWindow
     private bool _updatingCaptionTarget;
     private bool _albumLayout;
     private readonly StackPanel _files = new();
-    private readonly Grid _recordingPreview = new() { Height = 64, Visibility = Visibility.Collapsed };
+    private readonly Grid _recordingPreview = new() { Visibility = Visibility.Collapsed };
     private readonly EncryptedCaptureFile? _recording;
     private EncryptedMediaView? _recordingPlayback;
     private readonly Button _options;

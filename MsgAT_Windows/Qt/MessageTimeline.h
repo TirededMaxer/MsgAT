@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 #pragma once
 
+#include <QCache>
 #include <QHash>
 #include <QImage>
 #include <QListView>
@@ -57,6 +58,7 @@ public:
     void retainMedia(const QStringList &ids);
     void showMedia(const QString &id, const QImage &image);
     QImage imageFor(const QString &id) const;
+    QSize mediaSize(const QString &id) const;
     bool previewContains(const QModelIndex &index, QPoint point) const;
     using QListView::doItemsLayout;
 
@@ -64,6 +66,8 @@ protected:
     void resizeEvent(QResizeEvent *event) override;
 private:
     QHash<QString, QImage> inlineImages_;
+    QCache<QString, QSize> inlineImageSizes_{512};
+    bool mediaRelayoutPending_ = false;
 };
 
 } // namespace MsgAT

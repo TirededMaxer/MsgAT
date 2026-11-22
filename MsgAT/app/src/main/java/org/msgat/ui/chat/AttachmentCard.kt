@@ -32,6 +32,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.withContext
@@ -41,6 +42,17 @@ import org.msgat.core.media.AttachmentMetadata
 import org.msgat.core.network.AttachmentPhase
 import org.msgat.core.network.AttachmentProgress
 import org.msgat.ui.theme.uiString
+import kotlin.math.roundToInt
+
+private fun inlineMediaSize(source: IntSize?, video: Boolean): IntSize {
+    if (source == null || source.width <= 0 || source.height <= 0) {
+        return IntSize(224, if (video) 126 else 168)
+    }
+    val aspect = (source.width.toDouble() / source.height).coerceIn(0.5, 2.5)
+    val longEdge = maxOf(source.width, source.height).coerceIn(96, 224)
+    return if (aspect >= 1) IntSize(longEdge, (longEdge / aspect).roundToInt())
+    else IntSize((longEdge * aspect).roundToInt(), longEdge)
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -66,6 +78,15 @@ internal fun AttachmentCard(
     val compact = albumTile || galleryTile
     val canAnimate = media?.let { it.isImage && !it.isSticker && it.mime != "image/gif" } == true
     var thumbnail by remember(media?.reference) { mutableStateOf<Bitmap?>(null) }
+    var imageDimensions by remember(media?.reference, media?.available) { mutableStateOf<IntSize?>(null) }
+    var videoPoster by remember(media?.reference, media?.available) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(media?.reference, media?.available) {
+        if (media?.available == true && media.isVideo) {
+            videoPoster = withContext(encryptedImageWorkers) {
+                videoThumbnail(org.msgat.MsgATApp.instance.nettyClient.objects, media)
+            }
+        }
+    }
     var thumbnailBounds by remember { mutableStateOf<Rect?>(null) }
     if (onPhotoFrame != null) {
         val report by rememberUpdatedState(onPhotoFrame)
@@ -100,14 +121,20 @@ internal fun AttachmentCard(
             canSaveFile -> uiString(R.string.ui_save_attachment)
             else -> null
         }
+        val dimensions = if (media?.isVideo == true) videoPoster?.let { IntSize(it.width, it.height) } else imageDimensions
+        val singleSize = inlineMediaSize(dimensions, media?.isVideo == true)
+        val cropped = compact || dimensions?.let {
+            it.width > it.height * 2.5 || it.height > it.width * 2.0
+        } == true
         val tileSize = when {
             galleryTile -> Modifier.fillMaxWidth().aspectRatio(1f).semantics {
                 if (media != null) contentDescription = media.filename
                 if (gallerySelected != null) selected = gallerySelected
             }
             albumTile -> Modifier.fillMaxWidth().height(112.dp)
-            else -> Modifier.width(if (media?.isSticker == true) 176.dp else if (visual) 250.dp else 230.dp)
-                .heightIn(min = if (media?.isSticker == true) 176.dp else if (visual) 170.dp else 72.dp)
+            media?.isSticker == true -> Modifier.width(112.dp).aspectRatio(1f)
+            visual -> Modifier.width(singleSize.width.dp).aspectRatio(singleSize.width.toFloat() / singleSize.height)
+            else -> Modifier.width(230.dp).heightIn(min = 72.dp)
         }
         val transferText = when {
             media?.available == true && progress?.phase != AttachmentPhase.UPLOADING -> null
@@ -153,8 +180,6 @@ internal fun AttachmentCard(
                 contentAlignment = Alignment.Center
             ) {
                 if (media?.available == true && media.isImage) {
-                    val imageSize = if (galleryTile) Modifier.matchParentSize()
-                    else Modifier.fillMaxWidth().height(if (albumTile) 112.dp else if (media.isSticker) 176.dp else 190.dp)
                     val trackOrigin = if (canAnimate) Modifier.onGloballyPositioned { coordinates ->
                         val start = coordinates.positionInRoot()
                         val visible = coordinates.boundsInRoot()
@@ -162,17 +187,19 @@ internal fun AttachmentCard(
                             visible.width >= coordinates.size.width - 1f && visible.height >= coordinates.size.height - 1f
                         ) Rect(start.x, start.y, start.x + coordinates.size.width, start.y + coordinates.size.height) else null
                     } else Modifier
-                    EncryptedImage(media, imageSize.then(trackOrigin), onStillBitmap = if (canAnimate) {
-                        { thumbnail = it }
-                    } else null, pauseStickerPlayback = pauseStickerPlayback)
+                    EncryptedImage(media, Modifier.matchParentSize().then(trackOrigin),
+                        fitToViewport = media.isSticker || !cropped,
+                        onImageSize = if (!compact && !media.isSticker) ({ imageDimensions = it }) else null,
+                        onStillBitmap = if (canAnimate) ({ thumbnail = it }) else null,
+                        pauseStickerPlayback = pauseStickerPlayback)
                 } else if (media?.available == true && media.isVideo) {
-                    val thumbnail by produceState<Bitmap?>(null, media.reference) {
-                        value = withContext(encryptedImageWorkers) { videoThumbnail(org.msgat.MsgATApp.instance.nettyClient.objects, media) }
+                    videoPoster?.let {
+                        Image(it.asImageBitmap(), null, Modifier.matchParentSize(),
+                            contentScale = if (cropped) ContentScale.Crop else ContentScale.Fit)
                     }
-                    val imageSize = if (galleryTile) Modifier.matchParentSize()
-                    else Modifier.fillMaxWidth().height(if (albumTile) 112.dp else 190.dp)
-                    thumbnail?.let { Image(it.asImageBitmap(), null, imageSize, contentScale = ContentScale.Crop) }
-                    Icon(Icons.Default.PlayArrow, uiString(R.string.ui_play_video), Modifier.size(if (galleryTile) 28.dp else 44.dp), tint = Color.White)
+                    Icon(Icons.Default.PlayArrow, uiString(R.string.ui_play_video),
+                        Modifier.size(if (compact) 28.dp else 40.dp)
+                            .background(Color.Black.copy(alpha = 0.64f), CircleShape).padding(5.dp), tint = Color.White)
                 } else {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                         Icon(when {

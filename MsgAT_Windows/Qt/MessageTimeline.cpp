@@ -16,6 +16,7 @@
 #include <QScrollBar>
 #include <QStyledItemDelegate>
 #include <QTextDocument>
+#include <QTimer>
 #include <QtMath>
 #include <memory>
 
@@ -100,6 +101,14 @@ struct MediaTile {
     bool available, sticker, video;
 };
 
+QSize inlineMediaSize(const QSize &source, bool video) {
+    if (source.isEmpty()) return {224, video ? 126 : 168};
+    const auto aspect = qBound(0.5, double(source.width()) / source.height(), 2.5);
+    const auto longEdge = qBound(96, qMax(source.width(), source.height()), 224);
+    return aspect >= 1 ? QSize(longEdge, qRound(longEdge / aspect))
+                       : QSize(qRound(longEdge * aspect), longEdge);
+}
+
 struct MessageLayout {
     QTextDocument body;
     std::unique_ptr<QTextDocument> preview;
@@ -111,7 +120,7 @@ struct MessageLayout {
     int labelHeight = 0, height = 0;
     bool right, revoked, stickerOnly = false;
 
-    MessageLayout(int width, const QStyleOptionViewItem &option, const QModelIndex &index)
+    MessageLayout(int width, const QStyleOptionViewItem &option, const QModelIndex &index, const MessageTimeline &view)
         : smallFont(option.font),
           right(index.data(MessageTimeline::Outgoing).toBool() != (option.direction == Qt::RightToLeft)),
           revoked(index.data(MessageTimeline::Revoked).toBool()) {
@@ -160,11 +169,23 @@ struct MessageLayout {
             previewWidth = qBound(1, qCeil(preview->idealWidth()), maxText);
         }
         const auto images = index.data(MessageTimeline::InlineMedia).value<QJsonArray>();
-        const bool singleSticker = images.size() == 1 && images[0].toObject().value("sticker").toBool();
-        const int mediaWidth = images.isEmpty() ? 0 : qMin(maxText, singleSticker ? 144 : (images.size() > 1 ? 348 : 312));
+        const auto single = images.size() == 1 ? images[0].toObject() : QJsonObject{};
+        const bool singleSticker = single.value("sticker").toBool();
         const int columns = images.size() > 1 ? 2 : 1;
-        const int tileWidth = mediaWidth == 0 ? 0 : qMax(1, (mediaWidth - (columns - 1) * 4) / columns);
-        const int tileHeight = singleSticker ? tileWidth : qRound(tileWidth * (columns > 1 ? 0.77 : 0.63));
+        int mediaWidth = 0;
+        QSize tile;
+        if (columns == 2) {
+            mediaWidth = qMin(maxText, 348);
+            const auto tileWidth = qMax(1, (mediaWidth - 4) / columns);
+            tile = {tileWidth, qRound(tileWidth * 0.77)};
+        } else if (!images.isEmpty()) {
+            const auto preferred = singleSticker ? QSize(112, 112) :
+                inlineMediaSize(view.mediaSize(single.value("id").toString()), single.value("video").toBool());
+            tile = preferred.scaled(QSize(maxText, preferred.height()), Qt::KeepAspectRatio).expandedTo({1, 1});
+            mediaWidth = tile.width();
+        }
+        const int tileWidth = tile.width();
+        const int tileHeight = tile.height();
         const int mediaRows = (int(images.size()) + columns - 1) / columns;
         const int mediaHeight = mediaRows ? mediaRows * tileHeight + (mediaRows - 1) * 4 : 0;
         const bool hasText = !body.isEmpty();
@@ -290,7 +311,9 @@ public:
             p->setClipPath(clip, Qt::IntersectClip);
             if (!tile.sticker || photo.isNull()) p->fillPath(clip, colors.brush(QPalette::Button));
             if (!photo.isNull()) {
-                const auto sizing = row.media.size() > 1 ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio;
+                const auto aspect = double(photo.width()) / photo.height();
+                const bool crop = row.media.size() > 1 || (!tile.sticker && (aspect < 0.5 || aspect > 2.5));
+                const auto sizing = crop ? Qt::KeepAspectRatioByExpanding : Qt::KeepAspectRatio;
                 const auto base = photo.size().scaled(tile.bounds.size().toSize(), sizing);
                 QRectF target(QPointF(), base);
                 target.moveCenter(tile.bounds.center());
@@ -358,8 +381,8 @@ private:
         qint64 paletteKey;
         MessageLayout row;
 
-        CachedLayout(int width, const QStyleOptionViewItem &option, qreal scale, const QModelIndex &index)
-            : width(width), font(option.font), direction(option.direction), scale(scale), paletteKey(option.palette.cacheKey()), row(width, option, index) {}
+        CachedLayout(int width, const QStyleOptionViewItem &option, qreal scale, const QModelIndex &index, const MessageTimeline &view)
+            : width(width), font(option.font), direction(option.direction), scale(scale), paletteKey(option.palette.cacheKey()), row(width, option, index, view) {}
     };
 
     const MessageLayout &layout(int width, const QStyleOptionViewItem &option, const QModelIndex &index) const {
@@ -368,7 +391,7 @@ private:
         if (const auto *cached = layouts_.object(key); cached && cached->width == width &&
             cached->font == option.font && cached->direction == option.direction && cached->scale == scale && cached->paletteKey == option.palette.cacheKey())
             return cached->row;
-        auto *entry = new CachedLayout(width, option, scale, index);
+        auto *entry = new CachedLayout(width, option, scale, index, *view_);
         const auto previewLength = entry->row.preview ? entry->row.preview->characterCount() : 0;
         const auto cost = 1 + int((entry->row.body.characterCount() + previewLength) / 1024);
         layouts_.insert(key, entry, qMin<qsizetype>(cost, layouts_.maxCost()));
@@ -464,9 +487,46 @@ void MessageTimeline::showMedia(const QString &id, const QImage &image) {
     if (existing != inlineImages_.end()) existing.value().fill(0);
     inlineImages_.insert(id, image);
     viewport()->update();
+
+    const auto previous = mediaSize(id);
+    if (!model() || image.isNull() || previous == image.size()) return;
+    inlineImageSizes_.insert(id, new QSize(image.size()));
+    const auto first = indexAt(QPoint(1, 1));
+    if (!first.isValid()) return;
+    for (int row = first.row(); row < model()->rowCount(); ++row) {
+        const auto index = model()->index(row, 0);
+        if (visualRect(index).top() >= viewport()->height()) break;
+        const auto items = index.data(InlineMedia).value<QJsonArray>();
+        if (items.size() != 1) continue;
+        const auto item = items[0].toObject();
+        if (item.value("id").toString() != id || item.value("sticker").toBool()) continue;
+        const auto video = item.value("video").toBool();
+        if (inlineMediaSize(previous, video) == inlineMediaSize(image.size(), video)) break;
+        static_cast<MessageDelegate *>(itemDelegate())->invalidateRows(index, index);
+        if (!mediaRelayoutPending_) {
+            mediaRelayoutPending_ = true;
+            QTimer::singleShot(0, this, [this] {
+                mediaRelayoutPending_ = false;
+                const bool atLatest = verticalScrollBar()->value() == verticalScrollBar()->maximum();
+                const QPersistentModelIndex anchor(indexAt(QPoint(1, 1)));
+                const int top = anchor.isValid() ? visualRect(anchor).top() : 0;
+                doItemsLayout();
+                if (atLatest) scrollToBottom();
+                else if (anchor.isValid()) {
+                    scrollTo(anchor, QAbstractItemView::PositionAtTop);
+                    verticalScrollBar()->setValue(verticalScrollBar()->value() + visualRect(anchor).top() - top);
+                }
+            });
+        }
+        break;
+    }
 }
 
 QImage MessageTimeline::imageFor(const QString &id) const { return inlineImages_.value(id); }
+QSize MessageTimeline::mediaSize(const QString &id) const {
+    const auto *size = inlineImageSizes_.object(id);
+    return size ? *size : QSize{};
+}
 
 QList<QModelIndex> MessageTimeline::readableRows() const {
     QList<QModelIndex> rows;

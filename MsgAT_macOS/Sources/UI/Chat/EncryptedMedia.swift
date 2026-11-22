@@ -227,6 +227,17 @@ struct EncryptedAttachmentCard: View {
     @State private var thumbnailFrame: CGRect = .zero
     @State private var openRequest: Task<Void, Never>?
 
+    private var inlineSize: CGSize {
+        if media?.isSticker == true { return CGSize(width: 112, height: 112) }
+        guard let source = image?.size, source.width > 0, source.height > 0 else {
+            return CGSize(width: 224, height: media?.isVideo == true ? 126 : 168)
+        }
+        let aspect = min(2.5, max(0.5, source.width / source.height))
+        let longEdge = min(224, max(96, max(source.width, source.height)))
+        return aspect >= 1 ? CGSize(width: longEdge, height: (longEdge / aspect).rounded())
+            : CGSize(width: (longEdge * aspect).rounded(), height: longEdge)
+    }
+
     static func usesVisualFooter(_ media: AttachmentMetadata?, albumTile: Bool) -> Bool {
         guard !albumTile, let media, media.available, !media.isSticker, media.album == nil, media.caption.isEmpty else {
             return false
@@ -281,7 +292,7 @@ struct EncryptedAttachmentCard: View {
                         let pending: (() -> Void)? = !media.isSticker && (media.isImage || media.isVideo) ? { onOpen(nil) } : nil
                         openLocalCopy(media, onPending: pending) {
                             if media.isImage || media.isVideo || media.isAudio {
-                                let origin = (media.mime == "image/gif" ? nil : image).flatMap { thumbnail in
+                                let origin = (media.isVideo || media.mime == "image/gif" ? nil : image).flatMap { thumbnail in
                                     thumbnailFrame.isEmpty ? nil : MediaPreviewOrigin(frame: thumbnailFrame, thumbnail: thumbnail)
                                 }
                                 onOpen(origin)
@@ -297,11 +308,23 @@ struct EncryptedAttachmentCard: View {
                     }
                 } label: {
                     if let media,media.isSticker,media.available {
-                        EncryptedStickerView(reference:media.reference).frame(width:176,height:176)
+                        EncryptedStickerView(reference: media.reference)
+                            .frame(width: albumTile ? nil : inlineSize.width, height: albumTile ? 112 : inlineSize.height)
+                            .frame(maxWidth: albumTile ? .infinity : nil)
                     } else if let image {
-                        Image(nsImage: image).resizable().aspectRatio(contentMode: .fill)
-                            .frame(width: albumTile ? nil : 250, height: albumTile ? 112 : 190)
+                        let cropped = albumTile || image.size.width > image.size.height * 2.5 || image.size.height > image.size.width * 2
+                        Image(nsImage: image).resizable().aspectRatio(contentMode: cropped ? .fill : .fit)
+                            .frame(width: albumTile ? nil : inlineSize.width, height: albumTile ? 112 : inlineSize.height)
                             .frame(maxWidth: albumTile ? .infinity : nil).clipped()
+                            .overlay {
+                                if media?.isVideo == true {
+                                    Image(systemName: "play.fill").foregroundStyle(.white)
+                                        .font(.system(size: albumTile ? 12 : 16, weight: .semibold))
+                                        .frame(width: albumTile ? 28 : 40, height: albumTile ? 28 : 40)
+                                        .background(.black.opacity(0.64), in: Circle())
+                                        .accessibilityHidden(true)
+                                }
+                            }
                     } else {
                         HStack(spacing: 10) {
                             Image(systemName: opensPendingPreview && canPauseDownload ? "clock" :
@@ -325,8 +348,11 @@ struct EncryptedAttachmentCard: View {
                                     }
                                 }
                             }
-                        }.padding(12).frame(width: albumTile ? nil : 226, alignment: .leading)
-                            .frame(maxWidth: albumTile ? .infinity : nil, minHeight: albumTile ? 112 : nil, alignment: .leading)
+                        }.padding(12)
+                            .frame(width: albumTile ? nil : (media?.isImage == true || media?.isVideo == true) ? inlineSize.width : 226,
+                                   height: albumTile ? 112 : (media?.isImage == true || media?.isVideo == true) ? inlineSize.height : nil,
+                                   alignment: .leading)
+                            .frame(maxWidth: albumTile ? .infinity : nil, alignment: .leading)
                     }
                 }.buttonStyle(.plain)
                     .background(media?.isSticker==true ? Color.clear:Color.secondary.opacity(0.12)).clipShape(RoundedRectangle(cornerRadius: 12))
@@ -483,9 +509,12 @@ struct EncryptedAttachmentCard: View {
                 try EncryptedObjectStore.shared.metadata(message.content, messageID: message.messageId)
             }
             guard !Task.isCancelled else { return }
+            if value?.available != true || value?.reference != media?.reference { image = nil }
             media = value; progress = SecureMessaging.shared.attachmentProgress(message.messageId)
-            if value?.available != true { image = nil }
-            if let value, value.available, value.isImage, !value.isSticker {
+            if let value, value.available, value.isVideo {
+                let decoded = try? await EncryptedMediaWork.runWhileVisible { try encryptedMediaThumbnail(value, edge: 640) }
+                guard !Task.isCancelled else { return }; image = decoded
+            } else if let value, value.available, value.isImage, !value.isSticker {
                 let decoded = try await EncryptedMediaWork.runWhileVisible { try encryptedMediaThumbnail(value, edge: 640) }
                 guard !Task.isCancelled else { return }; image = decoded
             }

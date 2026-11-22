@@ -22,6 +22,9 @@ public sealed class SavedMessagesDialog : DialogWindow
     internal Func<string, bool>? ConfirmOpenChat { get; set; }
     private readonly ListBox _list=new() {SelectionMode=SelectionMode.Extended,HorizontalContentAlignment=HorizontalAlignment.Stretch};
     private readonly TextBlock _status = new() { TextWrapping = TextWrapping.Wrap, Margin = new Thickness(2, 8, 2, 0), Visibility = Visibility.Collapsed };
+    private readonly TextBlock _empty = new() { HorizontalAlignment = HorizontalAlignment.Center,
+        VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(16), TextAlignment = TextAlignment.Center,
+        TextWrapping = TextWrapping.Wrap, IsHitTestVisible = false, Visibility = Visibility.Collapsed };
     private readonly TextBlock _heading;
     private readonly System.Windows.Controls.TextBox _search = IdentitySetupDialog.Field();
     private readonly TextBlock _searchHint;
@@ -72,6 +75,8 @@ public sealed class SavedMessagesDialog : DialogWindow
         AutomationProperties.SetName(_list, Title);
         AutomationProperties.SetLiveSetting(_status, AutomationLiveSetting.Polite);
         _status.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
+        AutomationProperties.SetLiveSetting(_empty, AutomationLiveSetting.Polite);
+        _empty.SetResourceReference(TextBlock.ForegroundProperty, "MutedBrush");
         var panel = new DockPanel { Margin = new Thickness(18, 16, 18, 14) };
         var top = new StackPanel { Margin = new Thickness(0, 0, 0, 12) };
         var heading = new DockPanel { Margin = new Thickness(0, 0, 0, 12) };
@@ -160,7 +165,10 @@ public sealed class SavedMessagesDialog : DialogWindow
         footerFrame.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
         DockPanel.SetDock(footerFrame, Dock.Bottom);
         panel.Children.Add(footerFrame);
-        var listFrame = new Border { Child = _list, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1) };
+        var results = new Grid();
+        results.Children.Add(_list);
+        results.Children.Add(_empty);
+        var listFrame = new Border { Child = results, CornerRadius = new CornerRadius(9), BorderThickness = new Thickness(1) };
         listFrame.SetResourceReference(Border.BackgroundProperty, "MessagingSidebarBrush");
         listFrame.SetResourceReference(Border.BorderBrushProperty, "MessagingDividerBrush");
         panel.Children.Add(listFrame);
@@ -247,6 +255,15 @@ public sealed class SavedMessagesDialog : DialogWindow
     {
         _status.Text = value;
         _status.Visibility = value.Length == 0 ? Visibility.Collapsed : Visibility.Visible;
+        _empty.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowResults(bool hasQuery)
+    {
+        SetStatus("");
+        if (_list.Items.Count != 0 || _cursor is not null) return;
+        _empty.Text = AppStrings.Get(hasQuery ? "UiSavedNoMatches" : "UiSavedEmpty");
+        _empty.Visibility = Visibility.Visible;
     }
     private Row[] Selected()=>_list.SelectedItems.OfType<ListBoxItem>().Select(item => item.Tag).OfType<Row>().ToArray();
     private void UpdateActions()
@@ -344,7 +361,7 @@ public sealed class SavedMessagesDialog : DialogWindow
                     row.Children.Add(text);
                     _list.Items.Add(new ListBoxItem { Content = row, Tag = entry });
                 }
-                SetStatus(entries.Count == 0 ? AppStrings.Get("UiSavedEmpty") : "");
+                ShowResults(hasQuery: false);
                 return;
             }
             var page=await _services.Messaging.Actions.ListAsync(reset ? null : _cursor, cancellation.Token, peer, query);
@@ -389,7 +406,7 @@ public sealed class SavedMessagesDialog : DialogWindow
                 if (selectedIds?.Contains(row.Item.Id) == true) _list.SelectedItems.Add(item);
             }
             _cursor=page.Count>50 && data.Length>0?new(data[^1].Item.SavedAt,data[^1].Item.Id):null;
-            SetStatus(_list.Items.Count == 0 ? AppStrings.Get(query.Length == 0 ? "UiSavedEmpty" : "UiSavedNoMatches") : "");
+            ShowResults(query.Length > 0);
         }
         catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
         catch (Exception error) when (error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException or ArgumentException or OperationCanceledException)
@@ -520,8 +537,7 @@ public sealed class SavedMessagesDialog : DialogWindow
                 var removed = ids.ToHashSet(StringComparer.Ordinal);
                 for (var i = _list.Items.Count - 1; i >= 0; i--)
                     if (_list.Items[i] is ListBoxItem { Tag: Row row } && removed.Contains(row.Item.Id)) _list.Items.RemoveAt(i);
-                SetStatus(_list.Items.Count == 0 && _cursor is null ? AppStrings.Get(
-                    string.IsNullOrWhiteSpace(_search.Text) ? "UiSavedEmpty" : "UiSavedNoMatches") : "");
+                ShowResults(!string.IsNullOrWhiteSpace(_search.Text));
             }
         }
         catch(Exception error) when(error is IOException or InvalidOperationException or Microsoft.Data.Sqlite.SqliteException)

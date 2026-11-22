@@ -19,6 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -223,54 +224,62 @@ internal fun SavedMessagesDialog(client: NettyClient, myUuid: String, onOpenCont
                         }, modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp))
                     if(loading || busy || jumping) LinearProgressIndicator(Modifier.fillMaxWidth())
                     error?.let {Text(it,color=MaterialTheme.colorScheme.error)}
-                    LazyColumn(Modifier.weight(1f).fillMaxWidth(), state = listState) {
-                        if (showingSources) {
-                            items(sources, key = { it.peer }) { entry ->
-                                val label = sourceName(entry)
-                                ListItem(colors = ListItemDefaults.colors(containerColor = colors.chrome),
-                                    headlineContent = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
-                                    supportingContent = { Text(uiString(R.string.ui_saved_source_count, entry.count)) },
-                                    leadingContent = {
-                                        if (!entry.avatar.isNullOrEmpty()) androidx.compose.foundation.Image(
-                                            rememberAvatarPainter(entry.avatar), null, Modifier.size(40.dp)
-                                                .clip(androidx.compose.foundation.shape.CircleShape),
-                                            contentScale = androidx.compose.ui.layout.ContentScale.Crop)
-                                        else Icon(Icons.Default.Forum, null, Modifier.size(38.dp))
-                                    }, modifier = Modifier.clickable(enabled = !busy && !loading, onClick = { changeScope(entry, true) }))
-                                HorizontalDivider(color = colors.divider)
-                            }
-                        } else items(rows,key={it.item.id}) {row ->
-                            val item=row.item
-                            Row(Modifier.fillMaxWidth().combinedClickable(enabled=!busy && !jumping && !loading,onLongClick={toggle(item.id)},onClick={
-                                if(selected.isNotEmpty())toggle(item.id)
-                                else if(item.contactAccount != null) openedCard=item
-                                else if(item.kind=="location") openedLocation=item
-                                else if(item.kind=="txt")detail=item
-                                else if(row.media?.let {it.available && (it.isImage || it.isVideo || it.isAudio)}==true && item.reference!=null) {
-                                    preview = row
-                                } else if(row.media?.available==true) exportRow(row)
-                                else error=unavailable
-                            }).padding(vertical=10.dp)) {
-                                if(selected.isNotEmpty()) Checkbox(item.id in selected,{toggle(item.id)},enabled=!busy && !jumping && !loading)
-                                Column(Modifier.weight(1f)) {
-                                    Text(item.author,style=MaterialTheme.typography.labelLarge)
-                                    if(row.media!=null) Text(row.media.filename,style=MaterialTheme.typography.titleSmall)
-                                    if(item.contactAccount!=null) Text(uiString(R.string.ui_contact_card),style=MaterialTheme.typography.labelSmall)
-                                    if(item.kind=="location" && item.text!="Location") Text(uiString(R.string.ui_location),style=MaterialTheme.typography.labelSmall)
-                                    if (item.kind == "txt") {
-                                        org.msgat.ui.chat.LinkPreviewMessage(item.id,item.text,saved=true,canOpen=!busy && selected.isEmpty()) {
-                                            org.msgat.ui.chat.MessageSummaryText(item.text,maxLines=4)
+                    Box(Modifier.weight(1f).fillMaxWidth()) {
+                        LazyColumn(Modifier.fillMaxSize(), state = listState) {
+                            if (showingSources) {
+                                items(sources, key = { it.peer }) { entry ->
+                                    val label = sourceName(entry)
+                                    ListItem(colors = ListItemDefaults.colors(containerColor = colors.chrome),
+                                        headlineContent = { Text(label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                        supportingContent = { Text(uiString(R.string.ui_saved_source_count, entry.count)) },
+                                        leadingContent = {
+                                            if (!entry.avatar.isNullOrEmpty()) androidx.compose.foundation.Image(
+                                                rememberAvatarPainter(entry.avatar), null, Modifier.size(40.dp)
+                                                    .clip(androidx.compose.foundation.shape.CircleShape),
+                                                contentScale = androidx.compose.ui.layout.ContentScale.Crop)
+                                            else Icon(Icons.Default.Forum, null, Modifier.size(38.dp))
+                                        }, modifier = Modifier.clickable(enabled = !busy && !loading, onClick = { changeScope(entry, true) }))
+                                    HorizontalDivider(color = colors.divider)
+                                }
+                            } else items(rows,key={it.item.id}) {row ->
+                                val item=row.item
+                                Row(Modifier.fillMaxWidth().combinedClickable(enabled=!busy && !jumping && !loading,onLongClick={toggle(item.id)},onClick={
+                                    if(selected.isNotEmpty())toggle(item.id)
+                                    else if(item.contactAccount != null) openedCard=item
+                                    else if(item.kind=="location") openedLocation=item
+                                    else if(item.kind=="txt")detail=item
+                                    else if(row.media?.let {it.available && (it.isImage || it.isVideo || it.isAudio)}==true && item.reference!=null) {
+                                        preview = row
+                                    } else if(row.media?.available==true) exportRow(row)
+                                    else error=unavailable
+                                }).padding(vertical=10.dp)) {
+                                    if(selected.isNotEmpty()) Checkbox(item.id in selected,{toggle(item.id)},enabled=!busy && !jumping && !loading)
+                                    Column(Modifier.weight(1f)) {
+                                        Text(item.author,style=MaterialTheme.typography.labelLarge)
+                                        if(row.media!=null) Text(row.media.filename,style=MaterialTheme.typography.titleSmall)
+                                        if(item.contactAccount!=null) Text(uiString(R.string.ui_contact_card),style=MaterialTheme.typography.labelSmall)
+                                        if(item.kind=="location" && item.text!="Location") Text(uiString(R.string.ui_location),style=MaterialTheme.typography.labelSmall)
+                                        if (item.kind == "txt") {
+                                            org.msgat.ui.chat.LinkPreviewMessage(item.id,item.text,saved=true,canOpen=!busy && selected.isEmpty()) {
+                                                org.msgat.ui.chat.MessageSummaryText(item.text,maxLines=4)
+                                            }
+                                        } else {
+                                            org.msgat.ui.chat.MessageSummaryText(item.text.ifBlank {if(item.kind=="attachment") attachmentLabel else ""},maxLines=4)
                                         }
-                                    } else {
-                                        org.msgat.ui.chat.MessageSummaryText(item.text.ifBlank {if(item.kind=="attachment") attachmentLabel else ""},maxLines=4)
                                     }
                                 }
+                                HorizontalDivider(color = colors.divider)
                             }
-                            HorizontalDivider(color = colors.divider)
                         }
-                    }
-                    if (!loading && !pageFailed && (if (showingSources) sources.isEmpty() else rows.isEmpty() && next == null)) {
-                        Text(uiString(if (search.isEmpty()) R.string.ui_saved_empty else R.string.ui_saved_no_matches))
+                        if (!loading && !pageFailed && (if (showingSources) sources.isEmpty() else rows.isEmpty() && next == null)) {
+                            Text(
+                                    uiString(if (search.isEmpty()) R.string.ui_saved_empty else R.string.ui_saved_no_matches),
+                                    modifier = Modifier.align(Alignment.Center).padding(16.dp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    textAlign = TextAlign.Center,
+                                )
+                        }
                     }
                     HorizontalDivider(color = colors.divider)
                     FlowRow(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.End) {

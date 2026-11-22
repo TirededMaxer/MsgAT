@@ -358,48 +358,53 @@ struct SavedMessagesDialog: View {
                 savedHeader
                 if model.loading || model.busy {ProgressView().controlSize(.small)}
                 if let error = model.error { Text(interfaceText(error)).foregroundStyle(.red) }
-                if model.showingSources {
-                    List(model.sources) { entry in
-                        Button { model.changeScope(entry, grouped: true) } label: {
-                            HStack(spacing: 10) {
-                                AvatarView(avatarPath: entry.avatar, fallbackText: sourceName(entry), size: 38, cornerRadius: 19, fallbackSymbol: "bubble.left")
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(sourceName(entry)).lineLimit(1)
-                                    Text(interfaceText.format("saved_source_count", entry.count)).font(.caption).foregroundStyle(.secondary)
+                Group {
+                    if model.showingSources {
+                        List(model.sources) { entry in
+                            Button { model.changeScope(entry, grouped: true) } label: {
+                                HStack(spacing: 10) {
+                                    AvatarView(avatarPath: entry.avatar, fallbackText: sourceName(entry), size: 38, cornerRadius: 19, fallbackSymbol: "bubble.left")
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(sourceName(entry)).lineLimit(1)
+                                        Text(interfaceText.format("saved_source_count", entry.count)).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Image(systemName: "chevron.right").foregroundStyle(.secondary).accessibilityHidden(true)
+                                }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3).contentShape(Rectangle())
+                            }.buttonStyle(.plain)
+                        }
+                    } else {
+                        List(model.rows,selection:$model.selected) {row in
+                            VStack(alignment:.leading,spacing:4) {
+                                HStack {Text(row.item.author).fontWeight(.semibold);Spacer();Text(Date(timeIntervalSince1970:Double(row.item.savedAt)/1000),style:.date).font(.caption).foregroundStyle(.secondary)}
+                                if row.item.reference != nil {Label(row.media?.filename ?? interfaceText("quote_attachment"),systemImage:"doc").lineLimit(2)}
+                                if row.item.contactAccount != nil { Label(interfaceText("contact_card"), systemImage: "person.crop.circle").font(.caption) }
+                                if row.item.kind == "location", row.item.text != "Location" {
+                                    Label(interfaceText("location"), systemImage: "mappin.circle").font(.caption)
                                 }
-                                Spacer()
-                                Image(systemName: "chevron.right").foregroundStyle(.secondary).accessibilityHidden(true)
-                            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 3).contentShape(Rectangle())
-                        }.buttonStyle(.plain)
-                    }
-                    .scrollContentBackground(.hidden)
-                    .background(colors.timeline, in: RoundedRectangle(cornerRadius: 8))
-                    .disabled(model.loading || model.busy)
-                } else {
-                    List(model.rows,selection:$model.selected) {row in
-                    VStack(alignment:.leading,spacing:4) {
-                        HStack {Text(row.item.author).fontWeight(.semibold);Spacer();Text(Date(timeIntervalSince1970:Double(row.item.savedAt)/1000),style:.date).font(.caption).foregroundStyle(.secondary)}
-                        if row.item.reference != nil {Label(row.media?.filename ?? interfaceText("quote_attachment"),systemImage:"doc").lineLimit(2)}
-                        if row.item.contactAccount != nil { Label(interfaceText("contact_card"), systemImage: "person.crop.circle").font(.caption) }
-                        if row.item.kind == "location", row.item.text != "Location" {
-                            Label(interfaceText("location"), systemImage: "mappin.circle").font(.caption)
+                                if row.item.kind == "txt" {
+                                    LinkPreviewMessage(id:row.item.id,text:row.item.text,saved:true,canOpen:!model.busy && model.selected.isEmpty) {
+                                        MessageSummaryText(text:row.item.text).lineLimit(4)
+                                    }
+                                } else if !row.item.text.isEmpty {
+                                    MessageSummaryText(text:row.item.text).lineLimit(4)
+                                }
+                            }.padding(.vertical,4).tag(row.id).contentShape(Rectangle()).onTapGesture(count:2) {open(row)}
                         }
-                        if row.item.kind == "txt" {
-                            LinkPreviewMessage(id:row.item.id,text:row.item.text,saved:true,canOpen:!model.busy && model.selected.isEmpty) {
-                                MessageSummaryText(text:row.item.text).lineLimit(4)
-                            }
-                        } else if !row.item.text.isEmpty {
-                            MessageSummaryText(text:row.item.text).lineLimit(4)
-                        }
-                    }.padding(.vertical,4).tag(row.id).contentShape(Rectangle()).onTapGesture(count:2) {open(row)}
                     }
-                    .scrollContentBackground(.hidden)
-                    .background(colors.timeline, in: RoundedRectangle(cornerRadius: 8))
-                    .disabled(model.busy || model.loading)
                 }
-                if !model.loading && model.error == nil &&
-                    (model.showingSources ? model.sources.isEmpty : model.rows.isEmpty && model.cursor == nil) {
-                    Text(interfaceText(model.search.isEmpty ? "saved_empty" : "saved_no_matches")).foregroundStyle(.secondary)
+                .scrollContentBackground(.hidden)
+                .background(colors.timeline, in: RoundedRectangle(cornerRadius: 8))
+                .disabled(model.loading || model.busy)
+                .overlay {
+                    if !model.loading && model.error == nil &&
+                        (model.showingSources ? model.sources.isEmpty : model.rows.isEmpty && model.cursor == nil) {
+                        Text(interfaceText(model.search.isEmpty ? "saved_empty" : "saved_no_matches"))
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                            .padding(16)
+                            .allowsHitTesting(false)
+                    }
                 }
                 if model.selected.count>100 {Text(interfaceText("saved_select_limit")).font(.caption).foregroundStyle(.secondary)}
                 Rectangle().fill(colors.divider).frame(height: 1).accessibilityHidden(true)

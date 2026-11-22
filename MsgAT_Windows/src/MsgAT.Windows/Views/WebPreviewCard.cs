@@ -8,8 +8,28 @@ using System.Windows.Media;
 using MsgAT.Windows.Core.Network;
 using MsgAT.Windows.Core.Storage;
 using MsgAT.Windows.Infrastructure;
+using MsgAT.Windows.ViewModels;
 
 namespace MsgAT.Windows.Views;
+
+internal sealed class ChatWebPreviewDialog : DialogWindow
+{
+    public ChatWebPreviewDialog(AppServices services, MessageItem message)
+    {
+        Title = AppStrings.Get("UiLinkPreviews");
+        Width = 395;
+        SizeToContent = SizeToContent.Height;
+        var card = new WebPreviewCard
+        {
+            Services = services, MessageId = message.MessageId, MessageText = message.Content,
+            DownloadPeer = message.PreviewDownloadPeer
+        };
+        var close = IdentitySetupDialog.ActionButton(AppStrings.Get("UiClose"), Close, Brushes.Gray);
+        close.IsCancel = true;
+        Content = SettingsDialog.SettingsPage("UiLinkPreviews", card,
+            new WrapPanel { HorizontalAlignment = HorizontalAlignment.Right, Children = { close } });
+    }
+}
 
 public sealed class WebPreviewCard:Border
 {

@@ -14,6 +14,7 @@
 #include <QApplication>
 #include <QBoxLayout>
 #include <QComboBox>
+#include <QCursor>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QJsonArray>
@@ -92,6 +93,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     manageFoldersAction_ = workspaceMenu->addAction(QString{});
     workspaceMenu->addSeparator();
     savedAction_ = workspaceMenu->addAction(QString{});
+    stickerLibraryAction_ = workspaceMenu->addAction(QString{});
     sendQueueAction_ = workspaceMenu->addAction(QString{});
     forwardQueueAction_ = workspaceMenu->addAction(QString{});
     callHistoryAction_ = workspaceMenu->addAction(QString{});
@@ -104,6 +106,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     connect(requestsAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("requests"); });
     connect(manageFoldersAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("manageFolders"); });
     connect(savedAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("saved"); });
+    connect(stickerLibraryAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("stickerLibrary"); });
     connect(sendQueueAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("sendQueue"); });
     connect(forwardQueueAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("forwardQueue"); });
     connect(callHistoryAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("callHistory"); });
@@ -230,9 +233,11 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     sharedMediaAction_ = chatMenu->addAction(QString{});
     pinnedMessagesAction_ = chatMenu->addAction(QString{});
     chatQueueAction_ = chatMenu->addAction(QString{});
+    historyNavigationAction_ = chatMenu->addAction(QString{});
     connect(sharedMediaAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("sharedMedia"); });
     connect(pinnedMessagesAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("pinnedMessages"); });
     connect(chatQueueAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("chatQueue"); });
+    connect(historyNavigationAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("historyNavigation"); });
     chatMenuButton_->setMenu(chatMenu);
     header->addWidget(chatMenuButton_);
     auto historyButton = [this, header](int action, const QString &glyph) {
@@ -289,11 +294,27 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
             connect(action, &QAction::triggered, this, [this, command, id] { applyMessageAction(command, id); });
         };
         const bool idle = editTarget_.isEmpty() && !selecting_;
+        addAction("quoteSelection", idle && index.data(MessageTimeline::CanCopy).toBool() && !composer_->isReadOnly());
+        addAction("jumpQuote", idle && index.data(MessageTimeline::HasReplyQuote).toBool());
+        const auto links = index.data(MessageTimeline::VisibleLinks).toStringList();
+        if (idle && !links.isEmpty()) {
+            auto *linkMenu = links.size() > 1 ? messageMenu_->addMenu(messageLabels_.value("openLink").toString()) : messageMenu_;
+            const auto peer = selected_;
+            for (const auto &link : links) {
+                auto label = links.size() == 1 ? messageLabels_.value("openLink").toString() : QString(link).replace("&", "&&");
+                auto *action = linkMenu->addAction(label);
+                connect(action, &QAction::triggered, this, [this, id, peer, link] {
+                    if (selected_ == peer) applyMessageAction(QStringLiteral("openLink"), id, false, link);
+                });
+            }
+        }
         const bool caption = index.data(MessageTimeline::HasAttachment).toBool();
         addAction(caption ? "editCaption" : "editMessage", idle && index.data(MessageTimeline::CanEdit).toBool());
         addAction("retry", !selecting_ && index.data(MessageTimeline::CanRetry).toBool(), !index.data(MessageTimeline::Retrying).toBool());
         addAction("cancelSend", idle && index.data(MessageTimeline::CanCancelSend).toBool());
         addAction("revoke", !selecting_ && index.data(MessageTimeline::CanRevoke).toBool());
+        addAction("pin", idle && index.data(MessageTimeline::CanPin).toBool());
+        addAction("openCard", idle && !index.data(MessageTimeline::LinkPreviewText).toString().isEmpty(), true, "preview");
         const auto selected = index.data(MessageTimeline::MessageSelected).toBool();
         addAction("toggleSelection", index.data(MessageTimeline::Selectable).toBool(), true, selected ? "deselect" : "select");
         addAction("save", idle && index.data(MessageTimeline::CanSaveOrForward).toBool());
@@ -325,21 +346,23 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     preview_->request = [this](int action, const QByteArray &state) {
         return !locked_ && dialogRequest && dialogRequest(action, state);
     };
-    const auto openPreview = [this](const QModelIndex &index) {
+    const auto openPreview = [this](const QModelIndex &index, bool allowLinkPreview) {
         if (locked_ || selected_.isEmpty()) return;
         const auto id = history_->idAt(index);
         if (index.data(MessageTimeline::HasAttachment).toBool()) preview_->showFor(selected_, id);
-        else if (index.data(MessageTimeline::HasCard).toBool()) applyMessageAction(QStringLiteral("openCard"), id);
+        else if (index.data(MessageTimeline::HasCard).toBool() ||
+                 (allowLinkPreview && !index.data(MessageTimeline::LinkPreviewText).toString().isEmpty()))
+            applyMessageAction(QStringLiteral("openCard"), id);
         reportHistoryViewport();
     };
     connect(messages_, &QListView::clicked, this, [this, openPreview](const QModelIndex &index) {
         if (selecting_) {
             const bool extend = QApplication::keyboardModifiers().testFlag(Qt::ShiftModifier);
             applyMessageAction(QStringLiteral("toggleSelection"), history_->idAt(index), extend);
-        } else openPreview(index);
+        } else openPreview(index, messages_->previewContains(index, messages_->viewport()->mapFromGlobal(QCursor::pos())));
     });
     connect(messages_, &QListView::activated, this, [this, openPreview](const QModelIndex &index) {
-        if (!selecting_) openPreview(index);
+        if (!selecting_) openPreview(index, true);
     });
     toggleSelectionKey_ = new QShortcut(QKeySequence(Qt::Key_Space), messages_);
     toggleSelectionKey_->setContext(Qt::WidgetShortcut);
@@ -406,6 +429,46 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         if (accepted) composer_->setFocus();
     });
     column->addWidget(replyBar_);
+    linkPreviewButton_ = new QToolButton(detail_);
+    linkPreviewButton_->setToolButtonStyle(Qt::ToolButtonTextOnly);
+    linkPreviewButton_->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Fixed);
+    linkPreviewButton_->setPopupMode(QToolButton::InstantPopup);
+    linkPreviewButton_->hide();
+    auto *linkMenu = new QMenu(linkPreviewButton_);
+    linkPreviewButton_->setMenu(linkMenu);
+    connect(linkMenu, &QMenu::aboutToShow, this, [this, linkMenu] {
+        linkMenu->clear();
+        const auto peer = selected_, text = composer_->toPlainText();
+        auto add = [this, linkMenu, peer, text](const QString &label, const QString &command, const QString &value = {}) {
+            auto *action = linkMenu->addAction(label);
+            connect(action, &QAction::triggered, this, [this, peer, text, command, value] {
+                if (locked_ || peer != selected_ || text != composer_->toPlainText() || !dialogRequest) return;
+                auto request = QJsonDocument(QJsonObject{{"peer", peer}, {"text", text}, {"command", command},
+                    {"value", value}}).toJson(QJsonDocument::Compact);
+                dialogRequest(38, request);
+                request.fill(0);
+            });
+            return action;
+        };
+        const auto &options = linkPreviewOptions_;
+        auto *toggle = add(options.value("label").toString(), QStringLiteral("toggle"));
+        toggle->setCheckable(true);
+        const bool enabled = options.value("enabled").toBool();
+        toggle->setChecked(enabled);
+        if (!enabled) return;
+        const auto target = options.value("target").toString();
+        for (const auto &choice : options.value("choices").toArray()) {
+            const auto url = choice.toString();
+            if (url != target) add(url, QStringLiteral("choose"), url);
+        }
+        if (target.isEmpty()) return;
+        linkMenu->addSeparator();
+        if (options.value("retry").toBool()) add(options.value("retryLabel").toString(), QStringLiteral("retry"));
+        add(options.value("placement").toString(), QStringLiteral("placement"));
+        if (options.value("canResize").toBool()) add(options.value("resize").toString(), QStringLiteral("resize"));
+        add(options.value("remove").toString(), QStringLiteral("remove"));
+    });
+    column->addWidget(linkPreviewButton_);
     auto *composerBar = new QHBoxLayout;
     composerBar->setContentsMargins(14, 7, 12, 7);
     composerBar->setSpacing(8);
@@ -423,6 +486,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     attachmentButton_->setPopupMode(QToolButton::InstantPopup);
     auto *addMenu = new QMenu(attachmentButton_);
     chooseFiles_ = addMenu->addAction(QString{});
+    stickersAction_ = addMenu->addAction(QString{});
     shareContact_ = addMenu->addAction(QString{});
     shareLocation_ = addMenu->addAction(QString{});
     attachmentButton_->setMenu(addMenu);
@@ -434,6 +498,7 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
         reportHistoryViewport();
     });
     connect(shareContact_, &QAction::triggered, this, [this] { openWorkspaceCommand("shareContact"); });
+    connect(stickersAction_, &QAction::triggered, this, [this] { openWorkspaceCommand("stickers"); });
     connect(shareLocation_, &QAction::triggered, this, [this] { openWorkspaceCommand("shareLocation"); });
     recordButton_ = new QToolButton(detail_);
     recordButton_->setAutoRaise(true);
@@ -469,6 +534,14 @@ ChatWorkspace::ChatWorkspace(QWidget *parent) : QWidget(parent) {
     column->addLayout(composerBar);
     composer_->copySelection = [this](const QString &value) {
         return !locked_ && !selected_.isEmpty() && copyText && copyText(selected_, value);
+    };
+    composer_->formatSelection = [this](const QString &text, int start, int end, const QString &format) {
+        if (locked_ || selected_.isEmpty() || !dialogRequest) return false;
+        auto request = QJsonDocument(QJsonObject{{"peer", selected_}, {"target", editTarget_}, {"text", text},
+            {"start", start}, {"end", end}, {"format", format}}).toJson(QJsonDocument::Compact);
+        const bool accepted = dialogRequest(37, request);
+        request.fill(0);
+        return accepted;
     };
     composer_->pasteMedia = [this](const QMimeData &mime) {
         if (!canReceiveAttachments()) return false;
@@ -568,6 +641,12 @@ void ChatWorkspace::clear() {
     for (auto *control : {older_, newer_, latest_, retry_}) control->hide();
     historyError_->hide();
     composer_->reset();
+    linkPreviewButton_->menu()->close();
+    linkPreviewButton_->menu()->clear();
+    linkPreviewButton_->setText({});
+    linkPreviewButton_->setAccessibleName({});
+    linkPreviewButton_->hide();
+    linkPreviewOptions_ = {};
     send_->setEnabled(false);
     showingList_ = true;
 }
@@ -660,6 +739,7 @@ void ChatWorkspace::present(const QByteArray &frame) {
     requestsAction_->setText(workspace.value("requests").toString());
     manageFoldersAction_->setText(workspace.value("manageFolders").toString());
     savedAction_->setText(workspace.value("saved").toString());
+    stickerLibraryAction_->setText(workspace.value("stickerLibrary").toString());
     sendQueueAction_->setText(workspace.value("sendQueue").toString());
     forwardQueueAction_->setText(workspace.value("forwardQueue").toString());
     callHistoryAction_->setText(workspace.value("callHistory").toString());
@@ -679,11 +759,13 @@ void ChatWorkspace::present(const QByteArray &frame) {
     sharedMediaAction_->setText(chatActions.value("sharedMedia").toString());
     pinnedMessagesAction_->setText(chatActions.value("pinnedMessages").toString());
     chatQueueAction_->setText(chatActions.value("sendQueue").toString());
+    historyNavigationAction_->setText(chatActions.value("history").toString());
     searchLabels_ = state.value("search").toObject();
     attachmentOptions_ = state.value("attachment").toObject();
     attachmentButton_->setAccessibleName(attachmentOptions_.value("menu").toString());
     attachmentButton_->setToolTip(attachmentButton_->accessibleName());
     chooseFiles_->setText(attachmentOptions_.value("attach").toString());
+    stickersAction_->setText(attachmentOptions_.value("stickers").toString());
     shareContact_->setText(attachmentOptions_.value("shareContact").toString());
     shareLocation_->setText(attachmentOptions_.value("shareLocation").toString());
     recordButton_->setText(attachmentOptions_.value("record").toString());
@@ -803,9 +885,10 @@ void ChatWorkspace::dropEvent(QDropEvent *event) {
     event->accept();
 }
 
-bool ChatWorkspace::applyMessageAction(const QString &command, const QString &id, bool extending) {
+bool ChatWorkspace::applyMessageAction(const QString &command, const QString &id, bool extending, const QString &value) {
     if (locked_ || selected_.isEmpty() || !dialogRequest) return false;
-    auto request = QJsonDocument(QJsonObject{{"command", command}, {"peer", selected_}, {"id", id}, {"extending", extending}})
+    auto request = QJsonDocument(QJsonObject{{"command", command}, {"peer", selected_}, {"id", id},
+        {"extending", extending}, {"value", value}})
         .toJson(QJsonDocument::Compact);
     const bool accepted = dialogRequest(33, request);
     request.fill(0);
@@ -900,6 +983,15 @@ void ChatWorkspace::presentComposer(const QJsonObject &state, bool changedPeer) 
     const bool canAttach = editTarget_.isEmpty() && state.value("canCompose").toBool();
     attachmentButton_->setEnabled(canAttach);
     recordButton_->setEnabled(canAttach);
+    linkPreviewOptions_ = state.value("linkPreview").toObject();
+    if (changedPeer || linkPreviewOptions_.isEmpty()) {
+        linkPreviewButton_->menu()->close();
+        linkPreviewButton_->menu()->clear();
+    }
+    const auto previewLabel = linkPreviewOptions_.value("label").toString();
+    linkPreviewButton_->setText(linkPreviewOptions_.value("title").toString());
+    linkPreviewButton_->setAccessibleName(previewLabel);
+    linkPreviewButton_->setVisible(!linkPreviewOptions_.isEmpty());
     const auto delivery = state.value("delivery").toObject();
     const auto optionsLabel = delivery.value("options").toString();
     const auto summary = delivery.value("summary").toString();

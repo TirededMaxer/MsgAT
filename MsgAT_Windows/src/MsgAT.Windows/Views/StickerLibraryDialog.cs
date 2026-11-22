@@ -19,7 +19,10 @@ namespace MsgAT.Windows.Views;
 
 public sealed class StickerLibraryDialog : DialogWindow
 {
-    public StickerLibraryDialog(AppServices services)
+    public StickerLibraryDialog(AppServices services) : this(services, null, null) { }
+
+    internal StickerLibraryDialog(AppServices services,
+        Func<StickerItem, CancellationToken, Task<PreparationSendResult>>? send, Func<PendingPreparation?>? preparation)
     {
         SetResourceReference(TitleProperty, "UiStickerLibrary");
         Width = 560;
@@ -27,7 +30,7 @@ public sealed class StickerLibraryDialog : DialogWindow
         MinWidth = 375;
         MinHeight = Math.Min(350, Height);
         ResizeMode = ResizeMode.CanResize;
-        var panel = new StickerLibraryPanel(services, this, Close);
+        var panel = new StickerLibraryPanel(services, this, Close, send, preparation);
         Content = panel;
         PreviewKeyDown += (_, e) =>
         {

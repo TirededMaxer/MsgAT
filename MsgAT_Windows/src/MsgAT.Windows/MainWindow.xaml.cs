@@ -1539,6 +1539,11 @@ public partial class MainWindow : Window
     {
         if (_exiting || _appLocked || _services is not { } services || _viewModel is not { IsSelecting: false } model ||
             model.SelectedConversation?.Uuid != message.Source.ConversationUuid) return;
+        if (message.LinkPreview is not null)
+        {
+            ShowWorkspaceDialog(new ChatWebPreviewDialog(services, message), owner);
+            return;
+        }
         if (message.IsLiveLocation)
         {
             var peer = message.Source.ConversationUuid;
@@ -1965,30 +1970,7 @@ public partial class MainWindow : Window
                 var peer=item.Source.ConversationUuid;
                 var pinned=_services.Database.IsMessagePinned(peer,_services.Settings.MyUuid,item.MessageId);
                 var pin = MessageMenuItem(pinned ? "UiUnpinMessage" : "UiPinMessage", pinned ? "\uE77A" : "\uE718");
-                pin.Click += async (_, _) =>
-                {
-                    if (_appLocked || _exiting || _services is not { } services) return;
-                    var notify = false;
-                    if (!pinned)
-                    {
-                        var confirm = new PinMessageDialog { Owner = this };
-                        if (confirm.ShowDialog() != true) return;
-                        notify = confirm.NotifyPeer;
-                    }
-                    else
-                    {
-                        var label = AppStrings.Get("UiUnpinMessage");
-                        var confirm = new ConfirmationDialog(AppStrings.Get("UiUnpinForBoth"), label, confirmLabel: label)
-                        {
-                            Owner = this
-                        };
-                        if (confirm.ShowDialog() != true) return;
-                    }
-                    if (_appLocked || _exiting || !ReferenceEquals(_services, services) ||
-                        _viewModel?.SelectedConversation?.Uuid != peer) return;
-                    try { await services.Messaging.SetMessagePinnedAsync(peer,item.MessageId,!pinned,notify:notify); }
-                    catch (InvalidOperationException) { TransientNotice.Show(this, AppStrings.Get("UiPinChangeFailed")); }
-                };
+                pin.Click += async (_, _) => await ChangeMessagePinAsync(item, pinned);
                 menu.Items.Add(pin);
             }
         }
@@ -2214,12 +2196,13 @@ public partial class MainWindow : Window
     private ContentControl? _replyQuotePicker;
     private MessageItem? _quotePickerMessage;
 
-    private async Task QuoteMessageTextAsync(MessageItem item)
+    private async Task QuoteMessageTextAsync(MessageItem item, nint owner = 0)
     {
         if (_exiting || _appLocked || _replyQuotePicker is not null ||
             _services is not { } services || _viewModel is not { CanCompose: true } model) return;
         var peer = item.Source.ConversationUuid;
-        bool IsCurrent() => !_exiting && !_appLocked && ReferenceEquals(_services, services) &&
+        var generation = _appLockGeneration;
+        bool IsCurrent() => !_exiting && !_appLocked && generation == _appLockGeneration && ReferenceEquals(_services, services) &&
             ReferenceEquals(_viewModel, model) && model.CanCompose && model.SelectedConversation?.Uuid == peer;
         if (!IsCurrent()) return;
         try
@@ -2233,7 +2216,28 @@ public partial class MainWindow : Window
             if (!IsCurrent() || _replyQuotePicker is not null) return;
             if (document.Text is null || document.Digest is null)
             {
-                TransientNotice.Show(this, AppStrings.Get("UiQuoteSelectionUnavailable"));
+                ShowWorkspaceNotice(AppStrings.Get("UiQuoteSelectionUnavailable"));
+                return;
+            }
+            Task<string?> ResolveExcerpt(string selection) => Task.Run(() =>
+            {
+                if (!services.Database.CanQuoteText(item.Source)) return null;
+                return MsgAT.Windows.Core.Crypto.SecurityCore.Call(new
+                {
+                    operation = "reply_quote_selection", text = item.Content, selection
+                }).GetProperty("preview").GetString();
+            });
+            if (owner != 0)
+            {
+                ReplyQuoteDialog? dialog = null;
+                dialog = new ReplyQuoteDialog(document.Text, document.Digest, async selection =>
+                {
+                    var excerpt = await ResolveExcerpt(selection);
+                    if (excerpt is null || dialog?.IsVisible != true || !IsCurrent()) return false;
+                    model.SetReplyQuote(item, selection, excerpt);
+                    return true;
+                });
+                ShowWorkspaceDialog(dialog, owner);
                 return;
             }
             if (MessageList.ItemContainerGenerator.ContainerFromItem(item) is not ListBoxItem row ||
@@ -2241,14 +2245,7 @@ public partial class MainWindow : Window
                 layout.Parent is not Grid grid || grid.Children.OfType<ContentControl>().FirstOrDefault(child => child.Name == "QuotePickerHost") is not { } host) return;
             var picker = new ReplyQuotePicker(document.Text, document.Digest, async selection =>
             {
-                var excerpt = await Task.Run(() =>
-                {
-                    if (!services.Database.CanQuoteText(item.Source)) return null;
-                    return MsgAT.Windows.Core.Crypto.SecurityCore.Call(new
-                    {
-                        operation = "reply_quote_selection", text = item.Content, selection
-                    }).GetProperty("preview").GetString();
-                });
+                var excerpt = await ResolveExcerpt(selection);
                 if (excerpt is null || !IsCurrent() || !ReferenceEquals(_replyQuotePicker, host)) return false;
                 model.SetReplyQuote(item, selection, excerpt);
                 CloseReplyQuotePicker();
@@ -2267,7 +2264,7 @@ public partial class MainWindow : Window
         catch (Exception error) when (error is CryptographicException or InvalidOperationException or IOException or
             JsonException or KeyNotFoundException or Microsoft.Data.Sqlite.SqliteException)
         {
-            if (IsCurrent()) TransientNotice.Show(this, AppStrings.Get("UiQuoteSelectionUnavailable"));
+            if (IsCurrent()) ShowWorkspaceNotice(AppStrings.Get("UiQuoteSelectionUnavailable"));
         }
     }
 
@@ -2306,7 +2303,7 @@ public partial class MainWindow : Window
         else if (button.DataContext is MessageItem item && LocalTimelineDay(item) is { } day) OpenHistoryNavigation(day);
     }
 
-    private void OpenHistoryNavigation(DateTime? selectedDate = null)
+    private void OpenHistoryNavigation(DateTime? selectedDate = null, nint owner = 0)
     {
         if (_services is not { } services || _viewModel is not { SelectedConversation: { } peer } model ||
             _exiting || _appLocked) return;
@@ -2327,26 +2324,60 @@ public partial class MainWindow : Window
                 return AppStrings.Get("UiHistoryLoadFailed");
             }
         }
-        var dialog = new ChatHistoryDialog(selectedDate, validateTarget: ResolveTarget) { Owner = this };
-        if (dialog.ShowDialog() != true || model.SelectedConversation?.Uuid != peer.Uuid || _exiting || _appLocked)
+        var dialog = new ChatHistoryDialog(selectedDate, validateTarget: ResolveTarget);
+        if (!ShowWorkspaceDialog(dialog, owner) || model.SelectedConversation?.Uuid != peer.Uuid || _exiting || _appLocked)
             return;
         if (dialog.SharedMedia)
         {
-            OpenSharedMedia(peer.Uuid);
+            OpenSharedMedia(peer.Uuid, owner: owner);
             return;
         }
-        if(dialog.PinnedMessages){OpenPinnedMessages(peer.Uuid);return;}
+        if(dialog.PinnedMessages){OpenPinnedMessages(peer.Uuid, owner);return;}
         if (dialog.ConfigureExpiration)
         {
-            new MessageExpirationDialog(services, peer.Uuid) { Owner = this }.ShowDialog();
+            ShowWorkspaceDialog(new MessageExpirationDialog(services, peer.Uuid), owner);
             return;
         }
         if (messageId is null)
         {
-            TransientNotice.Show(this, AppStrings.Get("UiSearchTargetUnavailable"));
+            ShowWorkspaceNotice(AppStrings.Get("UiSearchTargetUnavailable"));
             return;
         }
-        JumpWithinChat(messageId, unreadAnchor: dialog.UnreadOnly);
+        if (owner != 0) _qtWorkspace?.RevealConfirmedMessage(peer.Uuid, messageId, "UiSearchTargetUnavailable");
+        else JumpWithinChat(messageId, unreadAnchor: dialog.UnreadOnly);
+    }
+
+    private async Task ChangeMessagePinAsync(MessageItem item, bool? knownPin = null, nint owner = 0)
+    {
+        if (_services is not { } services || _viewModel is not { } model) return;
+        var peer = item.Source.ConversationUuid;
+        var generation = _appLockGeneration;
+        bool IsCurrent() => !_appLocked && !_exiting && generation == _appLockGeneration &&
+            ReferenceEquals(_services, services) && ReferenceEquals(_viewModel, model) && model.SelectedConversation?.Uuid == peer &&
+            model.Messages.Any(row => row.MessageId == item.MessageId && !row.IsRevoked);
+        if (!IsCurrent()) return;
+        try
+        {
+            var pinned = knownPin ?? await Task.Run(() => services.Database.IsMessagePinned(peer, services.Settings.MyUuid, item.MessageId));
+            if (!IsCurrent()) return;
+            var notify = false;
+            if (pinned)
+            {
+                var label = AppStrings.Get("UiUnpinMessage");
+                if (!ShowWorkspaceDialog(new ConfirmationDialog(AppStrings.Get("UiUnpinForBoth"), label, confirmLabel: label), owner)) return;
+            }
+            else
+            {
+                var confirm = new PinMessageDialog();
+                if (!ShowWorkspaceDialog(confirm, owner)) return;
+                notify = confirm.NotifyPeer;
+            }
+            if (IsCurrent()) await services.Messaging.SetMessagePinnedAsync(peer, item.MessageId, !pinned, notify: notify);
+        }
+        catch (Exception error) when (error is InvalidOperationException or IOException or Microsoft.Data.Sqlite.SqliteException)
+        {
+            if (IsCurrent()) ShowWorkspaceNotice(AppStrings.Get("UiPinChangeFailed"));
+        }
     }
 
     private void PinnedMessage_Click(object sender,RoutedEventArgs e)

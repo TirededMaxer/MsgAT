@@ -11,6 +11,7 @@
 #include <QStyledItemDelegate>
 #include <QTextDocument>
 #include <QtMath>
+#include <memory>
 
 namespace MsgAT {
 namespace {
@@ -35,8 +36,9 @@ QPainterPath bubbleShape(QRectF rect, bool right, bool joinsAbove, bool joinsBel
 
 struct MessageLayout {
     QTextDocument body;
+    std::unique_ptr<QTextDocument> preview;
     QFont smallFont;
-    QRectF bubble, text, footer;
+    QRectF bubble, text, previewRect, footer;
     QStringList labels;
     int labelHeight = 0, height = 0;
     bool right;
@@ -69,19 +71,36 @@ struct MessageLayout {
         const int textWidth = qBound(1, qCeil(body.idealWidth()), maxText);
         body.setTextWidth(textWidth);
         const int textHeight = qCeil(body.size().height());
+        const auto previewText = index.data(MessageTimeline::LinkPreviewText).toString();
+        int previewWidth = 0;
+        if (!previewText.isEmpty()) {
+            preview = std::make_unique<QTextDocument>();
+            preview->setDocumentMargin(0);
+            preview->setDefaultFont(smallFont);
+            preview->setDefaultTextOption(wrapping);
+            preview->setPlainText(previewText);
+            preview->setTextWidth(maxText);
+            previewWidth = qBound(1, qCeil(preview->idealWidth()), maxText);
+        }
         const auto meta = index.data(MessageTimeline::Metadata).toString();
         const int metaWidth = qMin(maxText, small.horizontalAdvance(meta));
-        const bool inlineFooter = !meta.isEmpty() && body.lineCount() == 1 &&
+        const bool inlineFooter = !preview && !meta.isEmpty() && body.lineCount() == 1 &&
                                   textWidth + 9 + metaWidth <= maxText;
-        const int inner = inlineFooter ? textWidth + 9 + metaWidth : qMax(textWidth, metaWidth);
+        const int inner = inlineFooter ? textWidth + 9 + metaWidth : qMax(qMax(textWidth, metaWidth), previewWidth);
+        if (preview) preview->setTextWidth(inner);
+        const int previewHeight = preview ? qCeil(preview->size().height()) : 0;
+        const int previewMargin = preview ? 7 : 0;
+        const bool previewAbove = index.data(MessageTimeline::LinkPreviewAbove).toBool();
         const int w = qMin(available, inner + 2 * padding);
         const int h = (inlineFooter ? qMax(textHeight, small.height()) : textHeight) +
-                      (!meta.isEmpty() && !inlineFooter ? small.height() + 2 : 0) + 14;
+                      previewHeight + previewMargin + (!meta.isEmpty() && !inlineFooter ? small.height() + 2 : 0) + 14;
         bubble = QRectF(right ? width - margin - w : margin, top, w, h);
         const int left = int(bubble.left()) + padding;
         const bool rtl = option.direction == Qt::RightToLeft;
-        text = QRectF(inlineFooter && rtl ? left + metaWidth + 9 : left, top + 7,
+        text = QRectF(inlineFooter && rtl ? left + metaWidth + 9 : left,
+                      top + 7 + (previewAbove ? previewHeight + previewMargin : 0),
                       inlineFooter ? textWidth : inner, textHeight);
+        if (preview) previewRect = QRectF(left, top + 7 + (previewAbove ? 0 : textHeight + previewMargin), inner, previewHeight);
         if (!inlineFooter) body.setTextWidth(inner);
         footer = QRectF(rtl ? left : left + inner - metaWidth, bubble.bottom() - 7 - small.height(),
                         metaWidth, small.height());
@@ -104,6 +123,10 @@ public:
 
     QRectF bubbleBounds(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row) const {
         return layout(row.width(), option, index).bubble.translated(row.topLeft());
+    }
+
+    bool previewContains(const QStyleOptionViewItem &option, const QModelIndex &index, const QRect &row, QPoint point) const {
+        return layout(row.width(), option, index).previewRect.contains(point - row.topLeft());
     }
 
     QSize sizeHint(const QStyleOptionViewItem &option, const QModelIndex &index) const override {
@@ -145,6 +168,13 @@ public:
         context.palette.setColor(QPalette::Text, ink);
         row.body.documentLayout()->draw(p, context);
         p->restore();
+        if (row.preview) {
+            p->save();
+            p->translate(row.previewRect.topLeft());
+            context.palette.setColor(QPalette::Text, selected ? ink : colors.color(QPalette::Accent));
+            row.preview->documentLayout()->draw(p, context);
+            p->restore();
+        }
         p->setPen(colors.color(selected ? QPalette::HighlightedText : QPalette::PlaceholderText));
         const auto footer = QFontMetrics(row.smallFont).elidedText(index.data(MessageTimeline::Metadata).toString(),
                                                                    Qt::ElideRight, int(row.footer.width()));
@@ -171,7 +201,8 @@ private:
             cached->font == option.font && cached->direction == option.direction && cached->scale == scale)
             return cached->row;
         auto *entry = new CachedLayout(width, option, scale, index);
-        const auto cost = 1 + int(entry->row.body.characterCount() / 1024);
+        const auto previewLength = entry->row.preview ? entry->row.preview->characterCount() : 0;
+        const auto cost = 1 + int((entry->row.body.characterCount() + previewLength) / 1024);
         layouts_.insert(key, entry, qMin<qsizetype>(cost, layouts_.maxCost()));
         return entry->row;
     }
@@ -207,6 +238,14 @@ void MessageTimeline::setModel(QAbstractItemModel *next) {
         connect(next, &QAbstractItemModel::dataChanged, delegate, &MessageDelegate::invalidateRows);
     }
     QListView::setModel(next);
+}
+
+bool MessageTimeline::previewContains(const QModelIndex &index, QPoint point) const {
+    if (!index.isValid()) return false;
+    QStyleOptionViewItem option;
+    initViewItemOption(&option);
+    const auto *delegate = static_cast<const MessageDelegate *>(itemDelegate());
+    return delegate->previewContains(option, index, visualRect(index), point);
 }
 
 QList<QModelIndex> MessageTimeline::readableRows() const {

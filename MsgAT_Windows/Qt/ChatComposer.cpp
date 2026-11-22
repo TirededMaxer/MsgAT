@@ -46,7 +46,19 @@ void ChatComposer::present(const QJsonObject &state, bool changedPeer) {
     setAccessibleName(placeholder);
     setPlaceholderText(placeholder);
     const auto draft = state.value("draft").toString();
-    if (toPlainText() != draft) {
+    const auto formatting = state.value("formatting").toObject();
+    if (!formatting.isEmpty()) {
+        auto cursor = textCursor();
+        if (toPlainText() != draft) {
+            cursor.beginEditBlock();
+            cursor.select(QTextCursor::Document);
+            cursor.insertText(draft);
+            cursor.endEditBlock();
+        }
+        cursor.setPosition(formatting.value("start").toInt());
+        cursor.setPosition(formatting.value("end").toInt(), QTextCursor::KeepAnchor);
+        setTextCursor(cursor);
+    } else if (toPlainText() != draft) {
         setPlainText(draft);
         moveCursor(QTextCursor::End);
     }
@@ -77,6 +89,29 @@ void ChatComposer::keyPressEvent(QKeyEvent *event) {
         copyOrCut(event->matches(QKeySequence::Cut));
         event->accept();
         return;
+    }
+    if (acceptsSubmit() && formatSelection) {
+        const auto modifiers = event->modifiers() & ~Qt::KeypadModifier;
+        const char *format = nullptr;
+        if (modifiers == Qt::ControlModifier) {
+            switch (event->key()) {
+            case Qt::Key_B: format = "bold"; break;
+            case Qt::Key_I: format = "italic"; break;
+            case Qt::Key_U: format = "underline"; break;
+            }
+        } else if (modifiers == (Qt::ControlModifier | Qt::ShiftModifier)) {
+            switch (event->key()) {
+            case Qt::Key_X: format = "strike"; break;
+            case Qt::Key_M: format = "code"; break;
+            case Qt::Key_P: format = "spoiler"; break;
+            case Qt::Key_9: case Qt::Key_ParenLeft: format = "quote"; break;
+            }
+        }
+        if (format) {
+            applyFormat(QString::fromLatin1(format));
+            event->accept();
+            return;
+        }
     }
     if (sendOnEnter && !isReadOnly() && !composing_ &&
         (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter) &&
@@ -111,6 +146,12 @@ void ChatComposer::copyOrCut(bool cut) {
     if (copySelection(value) && cut) selection.removeSelectedText();
 }
 
+void ChatComposer::applyFormat(const QString &format) {
+    if (!acceptsSubmit() || !formatSelection) return;
+    const auto selection = textCursor();
+    formatSelection(toPlainText(), selection.selectionStart(), selection.selectionEnd(), format);
+}
+
 void ChatComposer::contextMenuEvent(QContextMenuEvent *event) {
     QMenu menu(this);
     auto add = [&](const char *key, bool enabled, auto action) {
@@ -127,6 +168,14 @@ void ChatComposer::contextMenuEvent(QContextMenuEvent *event) {
     add("copy", selected, [this] { copyOrCut(false); });
     add("paste", writable && canPaste(), [this] { if (!isReadOnly()) paste(); });
     add("all", !document()->isEmpty(), [this] { selectAll(); });
+    if (formatSelection) {
+        auto *format = menu.addMenu(labels_.value("format").toString());
+        format->setEnabled(acceptsSubmit());
+        for (const auto *key : {"bold", "italic", "underline", "strike", "code", "spoiler", "quote", "code_block"}) {
+            auto *item = format->addAction(labels_.value(key).toString());
+            connect(item, &QAction::triggered, this, [this, key] { applyFormat(QString::fromLatin1(key)); });
+        }
+    }
     menu.exec(event->globalPos());
 }
 } // namespace MsgAT

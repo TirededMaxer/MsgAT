@@ -73,7 +73,7 @@ private:
     void startCall(bool video);
     bool openWorkspaceCommand(const char *command);
     bool canReceiveAttachments() const;
-    bool applyMessageAction(const QString &command, const QString &id = {}, bool extending = false);
+    bool applyMessageAction(const QString &command, const QString &id = {}, bool extending = false, const QString &value = {});
     void openConversationMenu(const QModelIndex &index, const QPoint &globalPosition);
     bool applyConversationAction(const QJsonObject &state);
     QSplitter *split_;
@@ -94,7 +94,7 @@ private:
     SettingsWindow *settings_ = nullptr;
     QToolButton *attachmentButton_;
     QToolButton *recordButton_;
-    QAction *chooseFiles_, *shareContact_, *shareLocation_;
+    QAction *chooseFiles_, *shareContact_, *shareLocation_, *stickersAction_;
     QToolButton *deliveryButton_;
     QAction *deliveryOptions_, *sendSilently_, *scheduleDraft_, *clearDelivery_;
     QJsonObject attachmentOptions_;
@@ -102,12 +102,12 @@ private:
     QToolButton *workspaceMenuButton_;
     QAction *contactsAction_, *addFriendAction_, *requestsAction_, *settingsAction_;
     QAction *manageFoldersAction_;
-    QAction *savedAction_, *sendQueueAction_, *forwardQueueAction_, *callHistoryAction_;
+    QAction *savedAction_, *stickerLibraryAction_, *sendQueueAction_, *forwardQueueAction_, *callHistoryAction_;
     QAction *appLockAction_, *lockNowAction_;
     QToolButton *callButton_;
     QAction *voiceCall_, *videoCall_;
     QToolButton *chatMenuButton_;
-    QAction *sharedMediaAction_, *pinnedMessagesAction_, *chatQueueAction_;
+    QAction *sharedMediaAction_, *pinnedMessagesAction_, *chatQueueAction_, *historyNavigationAction_;
     QJsonObject searchLabels_;
     ChatRows *peers_, *history_;
     QWidget *detailContainer_, *detail_;
@@ -118,6 +118,8 @@ private:
     QWidget *replyBar_;
     QLabel *replyTitle_, *replyText_;
     QToolButton *cancelReply_;
+    QToolButton *linkPreviewButton_;
+    QJsonObject linkPreviewOptions_;
     QMenu *messageMenu_;
     QJsonObject messageLabels_;
     QWidget *selectionBar_;

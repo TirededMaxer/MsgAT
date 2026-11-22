@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 using System.Text.Json.Nodes;
+using Microsoft.Data.Sqlite;
 using MsgAT.Windows.Core.Network;
 
 namespace MsgAT.Windows.Core.Storage;
@@ -13,9 +14,13 @@ public sealed class WebPreviewStore(EncryptedDatabase database)
     internal static WebPreviewSnapshot? Read(VaultTransaction db, string id, bool saved = false) => db.Query("""
         SELECT url,title,summary,site,image_object,above_text,compact_image
         FROM message_previews WHERE owner_kind=$p0 AND owner_id=$p1
-        """, row => new WebPreviewSnapshot(row.GetString(0), row.GetString(1), row.GetString(2), row.GetString(3),
-            row.IsDBNull(4) ? null : EncryptedObjectStore.Reference(row.GetString(4)), row.GetInt64(5) != 0, row.GetInt64(6) != 0),
+        """, row => ReadSnapshot(row, 0),
         saved ? "saved" : "message", id).FirstOrDefault();
+
+    internal static WebPreviewSnapshot ReadSnapshot(SqliteDataReader row, int offset) => new(
+        row.GetString(offset), row.GetString(offset + 1), row.GetString(offset + 2), row.GetString(offset + 3),
+        row.IsDBNull(offset + 4) ? null : EncryptedObjectStore.Reference(row.GetString(offset + 4)),
+        row.GetInt64(offset + 5) != 0, row.GetInt64(offset + 6) != 0);
     internal static JsonObject? Body(VaultTransaction db,string id,bool saved=false)
     {
         var row=Read(db,id,saved);if(row is null)return null;

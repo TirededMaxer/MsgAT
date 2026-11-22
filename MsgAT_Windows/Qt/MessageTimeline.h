@@ -31,12 +31,18 @@ public:
         CanSaveOrForward,
         MessageSelected,
         CanDeleteLocally,
-        CanCancelSend
+        CanCancelSend,
+        CanPin,
+        LinkPreviewText,
+        LinkPreviewAbove,
+        HasReplyQuote,
+        VisibleLinks
     };
 
     explicit MessageTimeline(QWidget *parent = nullptr);
     void setModel(QAbstractItemModel *model) override;
     QList<QModelIndex> readableRows() const;
+    bool previewContains(const QModelIndex &index, QPoint point) const;
     using QListView::doItemsLayout;
 
 protected:

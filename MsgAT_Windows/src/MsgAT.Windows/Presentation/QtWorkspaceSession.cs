@@ -203,13 +203,15 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                     session.ClearAttachmentPreview();
                     session.SetActive(false);
                     break;
-                case 3 or 4 or 5 or 10 or 11 or 12 or 13 or 14 or >= 18 and <= 34 or 36:
+                case 3 or 4 or 5 or 10 or 11 or 12 or 13 or 14 or >= 18 and <= 34 or 36 or 37 or 38:
                     if (!session.IsVisible(view) || bytes == 0 || length <= 0) return 0;
                     var reader = new Utf8JsonReader(new ReadOnlySpan<byte>((void*)bytes, length));
                     using (var payload = JsonDocument.ParseValue(ref reader))
                         return (kind switch
                         {
                             10 => session.HandleHistoryViewport(payload.RootElement),
+                            38 => session.ChangeLinkPreview(payload.RootElement),
+                            37 => session.FormatEditor(payload.RootElement),
                             36 => session.HandleSettings(payload.RootElement),
                             34 => session.QueueConversationAction(payload.RootElement),
                             33 => session.HandleMessageAction(payload.RootElement),
@@ -280,6 +282,57 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
 
     private bool IsVisible(nint view) => _view == view && _presentUpdates && !_isLocked() && _model.IsWorkspaceReady;
 
+    private bool ChangeLinkPreview(JsonElement payload)
+    {
+        if (!_model.IsChatContentVisible || !_model.CanCompose || _model.HasMessageEdit || _model.IsSelecting ||
+            !_model.HasPreviewLinks || payload.GetProperty("peer").GetString() != _model.SelectedConversation?.Uuid ||
+            payload.GetProperty("text").GetString() != _model.Draft) return false;
+        switch (payload.GetProperty("command").GetString())
+        {
+            case "toggle": _model.PreviewEnabled = !_model.PreviewEnabled; break;
+            case "choose" when payload.GetProperty("value").GetString() is { } url: _model.SelectWebPreview(url); break;
+            case "retry": _model.RetryWebPreview(); break;
+            case "remove": _model.RemoveWebPreview(); break;
+            case "placement": _model.ToggleWebPreviewPlacement(); break;
+            case "resize": _model.ToggleWebPreviewImageSize(); break;
+            default: return false;
+        }
+        QueueRefresh(editorOnly: true);
+        return true;
+    }
+
+    private unsafe bool FormatEditor(JsonElement payload)
+    {
+        var editing = _model.HasMessageEdit;
+        var text = editing ? _model.EditText : _model.Draft;
+        if (!_model.IsChatContentVisible || _model.IsSelecting ||
+            payload.GetProperty("peer").GetString() != _model.SelectedConversation?.Uuid ||
+            payload.GetProperty("target").GetString() != (_model.EditTargetId ?? "") ||
+            payload.GetProperty("text").GetString() != text || !(editing ? _model.CanEditText : _model.CanCompose)) return false;
+
+        try
+        {
+            var result = MsgAT.Windows.Core.Crypto.SecurityCore.Call(new
+            {
+                operation = "format_message_selection", text,
+                start = payload.GetProperty("start").GetInt32(), end = payload.GetProperty("end").GetInt32(),
+                kind = payload.GetProperty("format").GetString()
+            });
+            var formatted = result.GetProperty("text").GetString()!;
+            if (editing) _model.EditText = formatted;
+            else _model.Draft = formatted;
+            var frame = QtWorkspaceFrame.CaptureEditor(_model, (result.GetProperty("start").GetInt32(), result.GetProperty("end").GetInt32()));
+            try { fixed (byte* data = frame) Present(_view, data, frame.Length, 1); }
+            finally { CryptographicOperations.ZeroMemory(frame); }
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            ShowNotice(AppStrings.Get("UiFormatUnavailable"));
+            return false;
+        }
+    }
+
     private bool QueueConversationAction(JsonElement payload)
     {
         if (payload.GetProperty("command").GetString() is not { } command) return false;
@@ -302,7 +355,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         if (peer is null || _model.SelectedConversation?.Uuid != peer || !_model.IsChatContentVisible) return false;
         var command = payload.GetProperty("command").GetString();
         var id = payload.GetProperty("id").GetString();
-        if (command is "toggleSelection" or "clearSelection" or "copySelected" or "save" or "forward" or "delete" or "cancelSend")
+        if (command is "toggleSelection" or "clearSelection" or "copySelected" or "save" or "forward" or "delete" or "cancelSend" or "pin" or "quoteSelection")
             return HandleSelectionAction(command, peer, id, payload.GetProperty("extending").GetBoolean());
         if (_model.IsSelecting) return false;
         if (command == "sendSilently" && _model.CanCompose && _model.HasDraft && !_model.TextSendPending)
@@ -332,6 +385,15 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         }
         var item = _model.Messages.FirstOrDefault(row => row.MessageId == id && !row.IsRevoked && row.Source.ConversationUuid == peer);
         if (item is null || item.Source.ExpiresAt is { } expiry && expiry <= DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) return false;
+        if (command == "jumpQuote" && item.ReplyToId is { } original)
+        {
+            RevealConfirmedMessage(peer, original, "UiQuotedMessageUnavailable", includeRevoked: true);
+            return true;
+        }
+        if (command == "openLink" && payload.GetProperty("value").GetString() is { } url &&
+            _frames.MessageLinks(item, AppStrings.Get("UiHiddenMessageText")).Contains(url, StringComparer.Ordinal) &&
+            MessageLinks.Parse(url) is { } uri)
+            return MessageLinks.Open(uri, () => ShowNotice(AppStrings.Get("UiLinkOpenFailed")));
         if (command == "reply" && _model.CanCompose)
         {
             _model.SetReply(item);
@@ -352,7 +414,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
             TrackMessageAction(_model.RevokeAsync(item));
             return true;
         }
-        if (command == "openCard" && (item.IsContactCard || item.IsLocation || item.IsLiveLocation))
+        if (command == "openCard" && (item.IsContactCard || item.IsLocation || item.IsLiveLocation || item.LinkPreview is not null))
         {
             var epoch = _visibilityEpoch;
             _ownerContext.Post(_ =>
@@ -409,6 +471,8 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         }
         if (command == "delete" && item is not null && (item.IsSending || item.IsLiveLocation)) return false;
         if (command == "cancelSend" && item is not { IsSending: true }) return false;
+        if (command == "pin" && item is not { IsRevoked: false, IsSending: false }) return false;
+        if (command == "quoteSelection" && (!_model.CanCompose || item is not { IsRevoked: false, IsText: true })) return false;
         var action = new QtMessageCollectionAction(command, peer, fromSelection ? _model.SelectedMessageIds : [id!], version, fromSelection);
         _ownerContext.Post(_ =>
         {
@@ -444,10 +508,10 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
     {
         var command = payload.GetProperty("command").GetString();
         if (command is null || ReadWindowHandle(payload) is not { } owner) return false;
-        var composing = command is "record" or "sendOptions" or "scheduleDraft" or "shareContact" or "shareLocation" or "pasteImage";
-        var chatScoped = composing || command is "sharedMedia" or "pinnedMessages" or "chatQueue";
+        var composing = command is "record" or "sendOptions" or "scheduleDraft" or "shareContact" or "shareLocation" or "pasteImage" or "stickers";
+        var chatScoped = composing || command is "sharedMedia" or "pinnedMessages" or "chatQueue" or "historyNavigation";
         if (!chatScoped && command is not ("contacts" or "addFriend" or "requests" or "settings" or "manageFolders" or
-            "appLock" or "lockNow" or "saved" or "sendQueue" or "forwardQueue" or "callHistory")) return false;
+            "appLock" or "lockNow" or "saved" or "sendQueue" or "forwardQueue" or "callHistory" or "stickerLibrary")) return false;
         var peer = payload.GetProperty("peer").GetString();
         var epoch = _visibilityEpoch;
         _ownerContext.Post(async _ =>
@@ -765,7 +829,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         QueueRefresh();
     }
 
-    internal void RevealConfirmedMessage(string peer, string id, string unavailableLabel)
+    internal void RevealConfirmedMessage(string peer, string id, string unavailableLabel, bool includeRevoked = false)
     {
         var epoch = _visibilityEpoch;
         var request = ++_externalReveal;
@@ -787,7 +851,7 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
                     _model.SelectedConversation = target;
                     selected = target.Uuid;
                     navigation = _model.HistoryNavigationVersion;
-                });
+                }, includeRevoked);
                 if (opened) QueueRefresh();
                 else if (IsCurrent()) ShowNotice(AppStrings.Get(unavailableLabel));
             }
@@ -938,7 +1002,11 @@ internal sealed partial class QtWorkspaceSession(MainViewModel model, Func<bool>
         }
         QueueRefresh(editorOnly: sender == _model && args.PropertyName is
             (nameof(MainViewModel.Draft) or nameof(MainViewModel.HasDraft) or nameof(MainViewModel.TextSendPending)
-            or nameof(MainViewModel.CanCompose) or nameof(MainViewModel.EditText) or nameof(MainViewModel.CanSubmitEdit)));
+            or nameof(MainViewModel.CanCompose) or nameof(MainViewModel.EditText) or nameof(MainViewModel.CanSubmitEdit)
+            or nameof(MainViewModel.WebPreview) or nameof(MainViewModel.PreviewTarget) or nameof(MainViewModel.PreviewChoices)
+            or nameof(MainViewModel.PreviewEnabled) or nameof(MainViewModel.PreviewLoading) or nameof(MainViewModel.PreviewAboveText)
+            or nameof(MainViewModel.PreviewCompactImage) or nameof(MainViewModel.CanRetryWebPreview)
+            or nameof(MainViewModel.HasPreviewLinks) or nameof(MainViewModel.HasWebPreview) or nameof(MainViewModel.CanChooseWebPreview)));
     }
     private void RowsChanged(object? sender, NotifyCollectionChangedEventArgs args)
     {

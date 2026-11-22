@@ -12,6 +12,16 @@ public partial class MainWindow
             model.SelectionVersion != action.SelectionVersion || action.Ids.Count == 0) return;
         switch (action.Command)
         {
+            case "pin" when !action.FromSelection && action.Ids.Count == 1:
+                if (model.Messages.FirstOrDefault(item => item.MessageId == action.Ids[0] &&
+                        item.Source.ConversationUuid == action.Peer && !item.IsRevoked && !item.IsSending) is { } message)
+                    await ChangeMessagePinAsync(message, owner: workspace.HostWindow);
+                break;
+            case "quoteSelection" when !action.FromSelection && action.Ids.Count == 1:
+                if (model.Messages.FirstOrDefault(item => item.MessageId == action.Ids[0] &&
+                        item.Source.ConversationUuid == action.Peer && !item.IsRevoked && item.IsText) is { } quoted)
+                    await QuoteMessageTextAsync(quoted, workspace.HostWindow);
+                break;
             case "copySelected" when action.FromSelection:
                 await CopySelectedMessagesAsync(workspace.HostWindow);
                 break;

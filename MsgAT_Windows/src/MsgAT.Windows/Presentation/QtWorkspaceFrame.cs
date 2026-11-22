@@ -2,6 +2,7 @@
 using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using MsgAT.Windows.Core.Network;
 using MsgAT.Windows.Core.Storage;
 using MsgAT.Windows.Infrastructure;
 using MsgAT.Windows.ViewModels;
@@ -11,6 +12,7 @@ namespace MsgAT.Windows.Presentation;
 internal sealed class QtWorkspaceFrame
 {
     private readonly ConditionalWeakTable<MessageItem, RenderedBody> _bodies = new();
+    private readonly ConditionalWeakTable<MessageItem, RenderedBody> _quotes = new();
     private readonly ConditionalWeakTable<ConversationItem, RenderedBody> _summaries = new();
     private readonly RenderedBody _reply = new();
 
@@ -19,11 +21,13 @@ internal sealed class QtWorkspaceFrame
         internal string? Source;
         internal string? Hidden;
         internal string Value = "";
+        internal string[] Links = [];
     }
 
     internal void Clear()
     {
         _bodies.Clear();
+        _quotes.Clear();
         _summaries.Clear();
         _reply.Source = _reply.Hidden = null;
         _reply.Value = "";
@@ -36,10 +40,21 @@ internal sealed class QtWorkspaceFrame
         {
             cached.Source = body;
             cached.Hidden = hidden;
-            try { cached.Value = MessageTextBlock.CopyableText(body, hidden, []); }
-            catch (InvalidOperationException) { cached.Value = ""; }
+            try
+            {
+                cached.Value = MessageTextBlock.CopyableText(body, hidden, []);
+                cached.Links = body.Contains("://", StringComparison.Ordinal) ? WebPreviewFetcher.Candidates(body) : [];
+            }
+            catch (InvalidOperationException) { cached.Value = ""; cached.Links = []; }
         }
         return cached.Value;
+    }
+
+    internal string[] MessageLinks(MessageItem row, string hidden)
+    {
+        if (!row.IsText || row.IsRevoked || !row.Content.Contains("://", StringComparison.Ordinal)) return [];
+        MessageText(row, row.Content, hidden);
+        return _bodies.TryGetValue(row, out var body) ? body.Links : [];
     }
 
     private string ReplyPreview(MainViewModel model, MessageItem target, string hidden)
@@ -91,31 +106,38 @@ internal sealed class QtWorkspaceFrame
             row.Source.ConversationUuid == selected.Uuid && !row.HiddenByAlbum).Select(row =>
         {
             var hasCard = row.IsContactCard || row.IsLocation || row.IsLiveLocation;
+            var preview = row.LinkPreview;
             var body = hasCard ? row.CardTitle : row.DisplayContent;
             if (row.IsText && !row.IsRevoked)
             {
                 body = MessageText(row, body, hidden);
                 if (body.Length == 0) body = AppStrings.Get("UiNewMessage");
             }
+            var quote = row.HasReplyQuote ? Join(row.ReplyQuoteAuthor,
+                PreviewText(_quotes.GetValue(row, static _ => new RenderedBody()), row.ReplyQuoteText, hidden)) : "";
             return new
             {
-                id = row.MessageId, body, outgoing = row.IsMine, highlighted = row.IsJumpHighlighted ||
+                id = row.MessageId, body = quote.Length == 0 ? body : quote + "\n\n" + body,
+                hasQuote = row.HasReplyQuote, links = MessageLinks(row, hidden), outgoing = row.IsMine, highlighted = row.IsJumpHighlighted ||
                     row.AlbumMembers.Any(item => item.IsJumpHighlighted), joinsAbove = row.JoinsOlder,
                 joinsBelow = row.JoinsNewer, day = row.TimelineDay,
                 unread = row.StartsUnread ? AppStrings.Get("UiUnreadMessages") : "",
                 unreadIncoming = !row.IsMine && !row.IsRead && !row.IsRevoked,
                 hasAttachment = row.AttachmentInfo is not null && !row.IsRevoked,
                 hasCard,
+                preview = preview is null ? "" : Join(preview.Site, preview.Title, preview.Summary),
+                previewAbove = preview?.AboveText == true,
                 selectable = MainViewModel.CanSelectMessage(row) && model.CanChangeSelection,
                 canKeep = MainViewModel.CanSelectMessage(row) && !row.HasExpiration && model.CanChangeSelection,
                 selected = row.IsSelected || row.AlbumMembers.Any(member => member.IsSelected),
                 canDelete = !row.IsSending && !row.IsLiveLocation && model.CanChangeSelection,
+                canPin = !row.IsRevoked && !row.IsSending && model.CanChangeSelection,
                 canReply = !row.IsRevoked, canCopy = row.IsText && !row.IsRevoked && !string.IsNullOrWhiteSpace(row.Content),
                 canEdit = model.CanCompose && row.CanEditContent, canRevoke = row.CanModify,
                 canRetry = row.CanRetrySend, retrying = row.IsRetryingSend,
                 canCancelSend = row.IsSending,
                 metadata = Join(row.EditedText.Trim(), row.ShortTimeText, ConversationSummary.ReceiptMark(row.Receipt)),
-                accessible = Join(body, row.EditedText.Trim(), row.TimeText, row.StatusName)
+                accessible = Join(body, quote, preview?.Title ?? "", row.EditedText.Trim(), row.TimeText, row.StatusName)
             };
         });
         return JsonSerializer.SerializeToUtf8Bytes(new
@@ -153,6 +175,10 @@ internal sealed class QtWorkspaceFrame
                 editMessage = AppStrings.Get("UiEditMessage"), editCaption = AppStrings.Get("UiEditCaption"),
                 retry = AppStrings.Get("UiSendRetry"), revoke = AppStrings.Get("UiRevoke"),
                 cancelSend = AppStrings.Get("UiSendCancelAction"),
+                pin = AppStrings.Get("UiPinnedMessages"),
+                quoteSelection = AppStrings.Get("UiQuoteSelectedText"),
+                jumpQuote = AppStrings.Get("UiQuoteJump"), openLink = AppStrings.Get("UiOpenLink"),
+                preview = AppStrings.Get("UiLinkPreviews"),
                 select = AppStrings.Get("UiSelect"), deselect = AppStrings.Get("UiDeselectMessage"),
                 save = AppStrings.Get("UiSaveMessage"), forward = AppStrings.Get("UiForward"), delete = AppStrings.Get("UiLocalDeleteAction")
             },
@@ -167,7 +193,8 @@ internal sealed class QtWorkspaceFrame
                 label = AppStrings.Get("UiSettings"), contacts = AppStrings.Get("UiContacts"), addFriend = AppStrings.Get("UiAddFriend"),
                 requests = AppStrings.Get("UiFriendRequests"), settings = AppStrings.Get("UiSettings"),
                 manageFolders = AppStrings.Get("UiChatFolders"),
-                saved = AppStrings.Get("UiSavedMessages"), sendQueue = AppStrings.Get("UiSendingQueue"),
+                saved = AppStrings.Get("UiSavedMessages"), stickerLibrary = AppStrings.Get("UiStickerLibrary"),
+                sendQueue = AppStrings.Get("UiSendingQueue"),
                 forwardQueue = AppStrings.Get("UiForwardingQueue"), callHistory = AppStrings.Get("UiCallHistory"),
                 appLock = AppStrings.Get(appLockEnabled ? "UiDisableAppLock" : "UiEnableAppLock"),
                 lockNow = AppStrings.Get("UiLockNow"), lockEnabled = appLockEnabled
@@ -179,12 +206,14 @@ internal sealed class QtWorkspaceFrame
             chatActions = new {
                 enabled = selected is not null && model.IsChatContentVisible && !model.IsSelecting,
                 label = AppStrings.Get("UiChatMoreActions"), sharedMedia = AppStrings.Get("UiSharedMedia"),
-                pinnedMessages = AppStrings.Get("UiPinnedMessages"), sendQueue = AppStrings.Get("UiSendingQueue")
+                pinnedMessages = AppStrings.Get("UiPinnedMessages"), sendQueue = AppStrings.Get("UiSendingQueue"),
+                history = AppStrings.Get("UiHistoryNavigation")
             },
             attachment = new {
                 menu = AppStrings.Get("UiAttachments"),
                 attach = AppStrings.Get("UiAddFiles"), title = AppStrings.Get("UiSendAttachment"),
                 record = AppStrings.Get("UiVoiceMessage"),
+                stickers = AppStrings.Get("UiStickers"),
                 shareContact = AppStrings.Get("UiShareContact"), shareLocation = AppStrings.Get("UiLocationShare"),
                 recipient = selected is null ? "" : AppStrings.Format("UiRecipient", selected.Alias),
                 add = AppStrings.Get("UiAddFiles"), up = AppStrings.Get("UiMoveUp"),
@@ -231,12 +260,15 @@ internal sealed class QtWorkspaceFrame
         });
     }
 
-    internal static byte[] CaptureEditor(MainViewModel model) => JsonSerializer.SerializeToUtf8Bytes(Editor(model));
+    internal static byte[] CaptureEditor(MainViewModel model, (int Start, int End)? formatting = null) =>
+        JsonSerializer.SerializeToUtf8Bytes(Editor(model, formatting));
 
-    private static object Editor(MainViewModel model)
+    private static object Editor(MainViewModel model, (int Start, int End)? formatting = null)
     {
         var visible = model.IsChatContentVisible;
         var edit = visible ? model.EditTargetId : null;
+        var preview = model.WebPreview;
+        var label = AppStrings.Get("UiLinkPreviews");
         return new
         {
             peer = model.SelectedConversation?.Uuid,
@@ -246,6 +278,18 @@ internal sealed class QtWorkspaceFrame
             canSend = visible && (edit is null ? model.CanCompose && model.HasDraft && !model.TextSendPending : model.CanSubmitEdit),
             allowsEmpty = edit is not null && model.EditingAttachment,
             sendLabel = AppStrings.Get(edit is null ? "UiSend" : "UiSave"),
+            formatting = formatting is { } selection ? new { start = selection.Start, end = selection.End } : null,
+            linkPreview = visible && edit is null && model.CanCompose && model.HasPreviewLinks ? new
+            {
+                label, enabled = model.PreviewEnabled, target = model.PreviewTarget, choices = model.PreviewChoices,
+                title = !model.HasWebPreview ? label : preview is not null
+                    ? (string.IsNullOrWhiteSpace(preview.Title) ? preview.Url : preview.Title)
+                    : AppStrings.Get(model.PreviewLoading ? "UiLoading" : "UiLinkPreviewUnavailable"),
+                retry = model.CanRetryWebPreview, canResize = preview?.Image is not null,
+                retryLabel = AppStrings.Get("UiRetry"), remove = AppStrings.Get("UiRemoveLinkPreview"),
+                placement = AppStrings.Get(model.PreviewAboveText ? "UiMoveLinkPreviewBelow" : "UiMoveLinkPreviewAbove"),
+                resize = AppStrings.Get(model.PreviewCompactImage ? "UiLinkPreviewLargeImage" : "UiLinkPreviewSmallImage")
+            } : null,
             delivery = new {
                 options = AppStrings.Get("UiSendOptions"), silent = AppStrings.Get("UiSendWithoutSound"),
                 schedule = AppStrings.Get("UiScheduleNextMessage"), clear = AppStrings.Get("UiClearSendOptions"),
@@ -259,7 +303,11 @@ internal sealed class QtWorkspaceFrame
     {
         placeholder = AppStrings.Get(placeholder), undo = AppStrings.Get("UiUndo"),
         redo = AppStrings.Get("UiRedo"), cut = AppStrings.Get("UiCut"), copy = AppStrings.Get("UiCopy"),
-        paste = AppStrings.Get("UiPaste"), all = AppStrings.Get("UiSelectAll")
+        paste = AppStrings.Get("UiPaste"), all = AppStrings.Get("UiSelectAll"), format = AppStrings.Get("UiFormatting"),
+        bold = AppStrings.Get("UiFormatBold"), italic = AppStrings.Get("UiFormatItalic"),
+        underline = AppStrings.Get("UiFormatUnderline"), strike = AppStrings.Get("UiFormatStrike"),
+        code = AppStrings.Get("UiFormatCode"), spoiler = AppStrings.Get("UiFormatSpoiler"),
+        quote = AppStrings.Get("UiFormatQuote"), code_block = AppStrings.Get("UiFormatCodeBlock")
     };
 
     private static string Join(params string[] values) => string.Join(" · ", values.Where(value => value.Length > 0));

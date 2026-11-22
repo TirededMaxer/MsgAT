@@ -152,6 +152,20 @@ public partial class MainWindow
             case "saved":
                 OpenSavedMessages(owner);
                 break;
+            case "stickerLibrary":
+                ShowWorkspaceDialog(new StickerLibraryDialog(services), owner);
+                break;
+            case "stickers" when model.SelectedConversation is { } stickerPeer:
+                var generation = _appLockGeneration;
+                var stickers = new StickerLibraryDialog(services, async (item, token) =>
+                {
+                    if (_appLocked || _exiting || generation != _appLockGeneration || !ReferenceEquals(_viewModel, model) ||
+                        model.SelectedConversation?.Uuid != stickerPeer.Uuid || model.CaptureStickerSender() is not { } send)
+                        return MsgAT.Windows.Core.Storage.PreparationSendResult.Failed;
+                    return await send(item, token);
+                }, () => model.PendingPreparations.LastOrDefault(row => row.IsSticker));
+                ShowWorkspaceDialog(stickers, owner);
+                break;
             case "sendQueue":
                 OpenSendQueue(owner: owner);
                 break;
@@ -163,6 +177,9 @@ public partial class MainWindow
                 break;
             case "pinnedMessages" when model.SelectedConversation is { } pinnedPeer:
                 OpenPinnedMessages(pinnedPeer.Uuid, owner);
+                break;
+            case "historyNavigation":
+                OpenHistoryNavigation(owner: owner);
                 break;
             case "forwardQueue":
                 OpenForwardingQueue(owner);

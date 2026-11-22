@@ -1584,7 +1584,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             : _services.Messaging.PauseAttachmentDownloadAsync(item.Source.ConversationUuid, item.MessageId, token);
 
     internal async Task<bool> RevealWorkspaceMessageAsync(string peer, string id, Func<bool> isCurrent,
-        Action<ConversationItem> choose)
+        Action<ConversationItem> choose, bool includeRevoked = false)
     {
         if (!isCurrent() || Conversations.FirstOrDefault(row => row.Uuid == peer) is not { } conversation)
             return false;
@@ -1597,7 +1597,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             var snapshot = await Task.Run(() =>
             {
                 var window = _services.Database.GetMessageWindow(peer, id);
-                if (window is null || !window.Messages.Any(row => row.MessageId == id && !row.IsRevoked))
+                if (window is null || !window.Messages.Any(row => row.MessageId == id && (includeRevoked || !row.IsRevoked)))
                     return (Window: (MessageHistoryWindow?)null, Items: Array.Empty<MessageItem>());
                 var metadata = _services.Database.GetHistoryMetadata(window.Messages);
                 var items = window.Messages.Select(row => ReadMessageItem(row,
@@ -1665,7 +1665,8 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var info=message.Extension=="attachment"?_services.Objects.Metadata(message.Content,message.MessageId):null;
         Func<Stream>? reader=info is null?null:()=>_services.Objects.OpenRead(message.Content);
         var item = new MessageItem(message, displayAuthor, info, reader, forwardInfo: metadata.Forward,
-            readSticker: () => _services.Objects.ReadStickerBytes(message.Content), thumbnailStore: _services.Objects);
+            readSticker: () => _services.Objects.ReadStickerBytes(message.Content), thumbnailStore: _services.Objects,
+            linkPreview: metadata.Preview);
         if (item.IsLiveLocation) item.SetLiveSnapshot(_services.Messaging.LiveLocation(message.ConversationUuid, message.MessageId));
         return item;
     }
@@ -2199,9 +2200,10 @@ public sealed class ConversationItem : ObservableObject
 
 public sealed class MessageItem(ChatMessage source, string replyAuthor = "User",AttachmentMetadata? attachmentInfo=null,
     Func<Stream>? openMedia=null,AttachmentProgress? progress=null,ForwardedMessageInfo? forwardInfo=null,Func<byte[]>? readSticker=null,
-    EncryptedObjectStore? thumbnailStore=null) : ObservableObject
+    EncryptedObjectStore? thumbnailStore=null, WebPreviewSnapshot? linkPreview=null) : ObservableObject
 {
     internal EncryptedObjectStore? ThumbnailStore => thumbnailStore;
+    internal WebPreviewSnapshot? LinkPreview => source.IsRevoked ? null : linkPreview;
     internal long? ArrivalTime { private get; set; }
 
     internal bool ConsumeRecentArrival()

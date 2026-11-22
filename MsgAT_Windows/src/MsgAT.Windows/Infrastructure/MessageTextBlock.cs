@@ -368,7 +368,11 @@ internal static class MessageLinks
 
     internal static bool Open(Uri uri, FrameworkElement owner)
     {
-        if (!CanUse(owner)) return false;
+        return CanUse(owner) && Open(uri, () => Notice(owner, "UiLinkOpenFailed"));
+    }
+
+    internal static bool Open(Uri uri, Action failed)
+    {
         try
         {
             Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
@@ -376,7 +380,7 @@ internal static class MessageLinks
         }
         catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception)
         {
-            Notice(owner, "UiLinkOpenFailed");
+            failed();
             return false;
         }
     }

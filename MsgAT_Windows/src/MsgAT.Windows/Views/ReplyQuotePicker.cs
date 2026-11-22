@@ -6,6 +6,22 @@ using MsgAT.Windows.Infrastructure;
 
 namespace MsgAT.Windows.Views;
 
+internal sealed class ReplyQuoteDialog : DialogWindow
+{
+    public ReplyQuoteDialog(string text, string digest, Func<string, Task<bool>> apply)
+    {
+        Title = AppStrings.Get("UiQuoteSelectedText");
+        Width = 470;
+        SizeToContent = SizeToContent.Height;
+        Content = IdentitySetupDialog.DialogCard(new ReplyQuotePicker(text, digest, async selection =>
+        {
+            if (!await apply(selection)) return false;
+            DialogResult = true;
+            return true;
+        }, Close));
+    }
+}
+
 internal sealed class ReplyQuotePicker : StackPanel
 {
     internal ReplyQuotePicker(string visibleText, string digest, Func<string, Task<bool>> submit, Action cancel)

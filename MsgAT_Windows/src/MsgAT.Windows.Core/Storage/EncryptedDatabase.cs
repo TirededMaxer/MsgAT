@@ -7,7 +7,7 @@ namespace MsgAT.Windows.Core.Storage;
 public sealed record MessageHistoryWindow(IReadOnlyList<ChatMessage> Messages, bool HasOlder, bool HasNewer);
 public sealed record ForwardedMessageInfo(string? Name,long OriginalAt);
 
-public readonly record struct HistoryMetadata(bool? OriginalIsMine, ForwardedMessageInfo? Forward);
+public readonly record struct HistoryMetadata(bool? OriginalIsMine, ForwardedMessageInfo? Forward, WebPreviewSnapshot? Preview = null);
 
 public sealed class MessageDeliveryChangedEventArgs(string conversationUuid, string messageId) : EventArgs
 {
@@ -294,13 +294,17 @@ public sealed class EncryptedDatabase : IDisposable
                 for (var index = 0; index < page.Length; index++) parameters[index + 1] = page[index].MessageId;
                 var placeholders = string.Join(",", Enumerable.Range(1, page.Length).Select(index => $"$p{index}"));
                 var result = db.Query($"""
-                    SELECT m.messageId, source.isMine, f.name, f.original_at FROM messages m
+                    SELECT m.messageId, source.isMine, f.name, f.original_at,
+                      p.url, p.title, p.summary, p.site, p.image_object, p.above_text, p.compact_image
+                    FROM messages m
                     LEFT JOIN messages source ON source.messageId=m.replyToId AND source.conversationUuid=m.conversationUuid
                     LEFT JOIN message_forwards f ON f.message_id=m.messageId AND m.isRevoked=0
+                    LEFT JOIN message_previews p ON p.owner_id=m.messageId AND p.owner_kind='message' AND m.isRevoked=0
                     WHERE m.conversationUuid=$p0 AND m.messageId IN ({placeholders})
                     """, r => (Id: r.GetString(0), Info: new HistoryMetadata(
                         r.IsDBNull(1) ? null : r.GetBoolean(1), r.IsDBNull(3) ? null :
-                        new ForwardedMessageInfo(r.IsDBNull(2) ? null : r.GetString(2), r.GetInt64(3)))), parameters);
+                        new ForwardedMessageInfo(r.IsDBNull(2) ? null : r.GetString(2), r.GetInt64(3)),
+                        r.IsDBNull(4) ? null : WebPreviewStore.ReadSnapshot(r, 4))), parameters);
                 foreach (var entry in result) metadata[entry.Id] = entry.Info;
             }
             return metadata;

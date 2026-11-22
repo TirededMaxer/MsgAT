@@ -55,6 +55,15 @@ QVariant ChatRows::data(const QModelIndex &index, int role) const {
     case MessageTimeline::MessageSelected: return row.value("selected").toBool();
     case MessageTimeline::CanDeleteLocally: return row.value("canDelete").toBool();
     case MessageTimeline::CanCancelSend: return row.value("canCancelSend").toBool();
+    case MessageTimeline::CanPin: return row.value("canPin").toBool();
+    case MessageTimeline::LinkPreviewText: return row.value("preview").toString();
+    case MessageTimeline::LinkPreviewAbove: return row.value("previewAbove").toBool();
+    case MessageTimeline::HasReplyQuote: return row.value("hasQuote").toBool();
+    case MessageTimeline::VisibleLinks: {
+        QStringList links;
+        for (const auto &link : row.value("links").toArray()) links.append(link.toString());
+        return links;
+    }
     case MessageTimeline::Outgoing: return row.value("outgoing").toBool();
     case MessageTimeline::ContinuesFromPrevious: return row.value("joinsAbove").toBool();
     case MessageTimeline::ContinuesInNext: return row.value("joinsBelow").toBool();

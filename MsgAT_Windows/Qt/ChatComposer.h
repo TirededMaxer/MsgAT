@@ -17,6 +17,7 @@ public:
     bool allowsEmpty = false;
     std::function<bool(const QString &)> copySelection;
     std::function<bool(const QMimeData &)> pasteMedia;
+    std::function<bool(const QString &, int, int, const QString &)> formatSelection;
 signals:
     void sendRequested();
     void draftChanged(const QString &text);
@@ -30,6 +31,7 @@ protected:
     void insertFromMimeData(const QMimeData *source) override;
 private:
     void copyOrCut(bool cut);
+    void applyFormat(const QString &format);
     void updateHeight();
     QJsonObject labels_;
     bool composing_ = false, updating_ = false;
